@@ -1,0 +1,5 @@
+name: metaskill
+version: 0.1.0
+description: Generalize, personalize, evaluate, and merge Hermes skills
+provides_tools:
+  - metaskill
