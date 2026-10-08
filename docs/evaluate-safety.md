@@ -151,10 +151,67 @@ class BackendResult:
     status: str           # "ok" | "not-installed" | "llm-unavailable" | "error"
     tier: Tier
     findings: list[Finding]
+    detail: str = ""      # error message, when status is "error"
 ```
 
 - Severity uses Cisco's five levels as the common scale, since it is the only external scale we map from.
 - Two findings with the same category and overlapping location are merged into one that lists both sources. This prevents the same problem being counted twice.
+
+### Cisco adapter
+
+The adapter is the one module that knows about Cisco's scanner (`cisco.py`). It runs the scanner on a skill directory and translates what comes back into our `Finding` and `BackendResult`. Nothing else in `evaluate` imports `skill_scanner`, so the scanner can be upgraded, swapped or left uninstalled without touching scoring or ranking.
+
+It does five things:
+
+1. **Checks availability.** The import is guarded. If the package is missing, `available()` returns false and `scan()` returns `status="not-installed"` with no findings.
+2. **Picks analyzers from the tier.** `static` uses the scanner's default analyzers, which need no key. `deep` adds the LLM analyzer, given the same provider, model and key that `judge.py` uses.
+3. **Runs the scan** through the SDK on one skill directory.
+4. **Translates findings.** Field by field, as in the table below.
+5. **Handles failure.** If the `deep` scan raises because the LLM analyzer cannot start, it reruns as `static` and returns those findings with `status="llm-unavailable"`. Any other scanner error returns `status="error"` with the message; it never raises into the caller.
+
+| Cisco finding | Our `Finding` | Note |
+|---|---|---|
+| `category` | `category` | Unchanged (section 2.2) |
+| `severity` | `severity` | Same five levels |
+| `snippet` | `quoted_text` | Can be empty, for findings about the skill as a whole |
+| `file_path`, `line_number` | `location` | `line_number` can be missing |
+| `title`, `description` | `message` | |
+| `rule_id` | `rule_id` | |
+| package version | `source_version` | From `importlib.metadata` |
+
+Sketch:
+
+```python
+class CiscoBackend:
+    name = "cisco"
+
+    def available(self) -> bool:
+        return importlib.util.find_spec("skill_scanner") is not None
+
+    def scan(self, skill_dir: Path, tier: Tier) -> BackendResult:
+        if not self.available():
+            return BackendResult(self.name, "not-installed", tier, [])
+        try:
+            result = self._run(skill_dir, tier)
+            status = "ok"
+        except SkillScannerError as e:
+            if tier is not Tier.DEEP:
+                return BackendResult(self.name, "error", tier, [], detail=str(e))
+            result = self._run(skill_dir, Tier.STATIC)
+            status, tier = "llm-unavailable", Tier.STATIC
+        return BackendResult(self.name, status, tier,
+                             [self._convert(f) for f in result.findings])
+
+    def _run(self, skill_dir: Path, tier: Tier):
+        analyzers = default_analyzers()
+        if tier is Tier.DEEP:
+            analyzers.append(LLMAnalyzer(provider=..., model=..., api_key=...))
+        return SkillScanner(analyzers=analyzers).scan_skill(skill_dir)
+```
+
+Checked against version 2.2.1: `SkillScanner(analyzers=...)`, `scan_skill(path)`, `LLMAnalyzer(provider, model, api_key, base_url, ...)`, the finding fields above, and a `SkillScannerError` base exception all exist. The scan result also has an `llm_usage` field, which is where the per-scan token cost can be read from.
+
+**[VERIFY]** Which exception a `deep` scan raises when the LLM analyzer cannot start, and how to build the default analyzer list through the SDK. Neither has been run.
 
 ### Score
 
