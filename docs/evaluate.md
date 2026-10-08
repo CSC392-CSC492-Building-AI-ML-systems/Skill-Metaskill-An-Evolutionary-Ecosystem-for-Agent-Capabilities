@@ -20,7 +20,7 @@ Evaluation is based off the following critereon:
 ### Non-goals
 
 - Not a general LLM benchmark. We score skills, not the underlying model.
-- Not a security scanner. PII detection belongs to `generalize`; evaluation only consumes its output as a signal.
+- Not a new security scanner. Safety reuses an external scanner plus a few checks of our own (see [evaluate-safety.md](evaluate-safety.md)). PII detection belongs to `generalize`; evaluation only consumes its output as a signal.
 
 ## 2. Inputs and outputs
 
@@ -50,7 +50,7 @@ Each criterion from the Purpose is scored in `[0, 1]` with supporting evidence. 
 | **Clarity** | LLM judge against a rubric | low | Specific trigger, ordered and actionable steps, failure handling |
 | **Configuration Cleanliness** | Static + LLM | low | Number and necessity of config entries, documented placeholders, setup steps |
 | **Efficiency** | Measured during task runs | medium | Tokens, wall-clock time, tool calls per task |
-| **Safety** | Static scan + LLM review | low | Destructive or irreversible actions, credential handling, unconfirmed external side effects |
+| **Safety** | External scanner + own checks; optional LLM tier | none (static), low (deep) | Malicious content, destructive actions without confirmation, credentials printed or logged, untrusted sources, excess scope |
 
 Quality, Robustness and Efficiency share one set of task runs (section 4), so they cost one execution pass, not three.
 
@@ -74,6 +74,7 @@ How hard is it to get the skill working, and is that effort necessary? Signals:
 - Placeholders (`{{...}}`) that map to a documented config entry count **positively**. This is what `generalize` produces.
 - Penalties for hardcoded paths, usernames, hosts, or credentials (reuses `generalize` detection), for undocumented placeholders, and for config that the skill body never uses.
 - An LLM check for setup steps that could be simplified or removed.
+- **[OPEN]** Whether this dimension also consumes the safety scanner's `hardcoded_secrets` and `policy_violation` findings, which are cleanliness issues, not safety ones. See [evaluate-safety.md](evaluate-safety.md), section 2.
 
 ### 3.5 Efficiency
 
@@ -81,14 +82,15 @@ Measured from the task runs in section 4, not estimated from the text: tokens co
 
 ### 3.6 Safety
 
-Does the skill ask the agent to do something that could harm the user? A static scan plus an LLM review flag:
+Does the skill ask the agent to do something that could harm the user? Two layers: an external scanner (Cisco skill-scanner) for malicious skills, such as prompt injection, data exfiltration and malicious code, and our own checks for careless ones:
 
 - Destructive or irreversible commands (recursive deletes, force pushes, disk or database writes) without a confirmation step.
-- Credentials printed, logged, or sent to third parties.
-- Network calls or installs from unpinned or unknown sources.
+- Credentials printed or logged at run time.
+- Installs or downloads from unpinned or unknown sources.
 - Broad permissions, or actions with side effects outside the stated purpose.
 
-Each finding has a severity and quotes the offending text. This is not a full security scanner (see non-goals); it reports risk visible in the skill's instructions. 
+The default `static` tier needs no API key; the `deep` tier adds LLM passes. Each finding has a severity and quotes the offending text. A scan with no findings does not prove a skill is safe. Full design in [evaluate-safety.md](evaluate-safety.md).
+
 ## 4. Task Execution
 
 ### 4.1 Approach
@@ -122,7 +124,8 @@ To account for this, tests will be ran `n` times (we default to 3), and account 
 ## 5. Ranking
 
 - Rank by `overall`, with ties broken by efficacy lift, then safety, followed by quality, robustness, clarity, etc...
-- Only rank skills evaluated with the **same config and judge model**; otherwise refuse or warn, since scores are not comparable.
+- Only rank skills evaluated with the **same config, judge model, safety tier and scanner version**; otherwise refuse or warn, since scores are not comparable.
+- A critical safety finding results in a low safety score. It does not remove the skill from the ranking.
 - Output includes as well, a recommendation of which score to use based off their scores.
 
 
@@ -145,7 +148,8 @@ metaskill/evaluate/
   clarity.py         # 3.3: rubric-based LLM judging via judge.py
   config_cleanliness.py  # 3.4: config entries and placeholders; reuses generalize detectors
   efficiency.py      # 3.5: tokens/time/tool calls vs. baseline, from runner results
-  safety.py          # 3.6: static risk scan + LLM review
+  safety/            # 3.6: scanner adapter, own checks, LLM review
+                     #   (layout in evaluate-safety.md)
 
   rank.py            # Overall score, comparison and ordering
 ```
@@ -153,7 +157,8 @@ metaskill/evaluate/
 Dependencies:
 
 - `runner.py` is the only module that executes the agent. `quality.py`, `robustness.py` and `efficiency.py` are pure functions over its results, so they share one execution pass and are testable without an LLM.
-- `clarity.py`, `safety.py` and the LLM part of `config_cleanliness.py` call `judge.py`, never a model directly.
+- `clarity.py`, `safety/` and the LLM part of `config_cleanliness.py` call `judge.py`, never a model directly.
+  - Exception: the safety scanner's LLM analyzer makes its own call, configured with the judge's provider and model. See [evaluate-safety.md](evaluate-safety.md), section 4.
 - Each scoring module exposes the same shape (`score(skill, ...) -> DimensionScore` from `models.py`), so `rank.py` treats all six uniformly.
 
 
