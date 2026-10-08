@@ -19,21 +19,46 @@ Existing scanners target the malicious case and miss most of the careless one. T
 
 ## 2. What is flagged
 
-| Category | Example | Detected by |
+Every category a finding can have. A finding from our own checks or the LLM review uses one of the four categories in 2.1. A finding from the scanner keeps the scanner's own category name from 2.2.
+
+### 2.1 Our categories
+
+| Category | What is flagged | Detected by |
 |---|---|---|
-| `destructive-unconfirmed` | Recursive delete, force push, database drop with no confirmation step | Own checks |
+| `destructive-unconfirmed` | Recursive delete, force push, database drop or disk write with no confirmation step | Own checks |
 | `credential-logging` | Instructions that make the agent print or log the user's credentials at run time | Own checks |
-| `untrusted-source` | Unpinned install, `curl \| sh`, known-vulnerable dependency | Own checks + scanner |
+| `untrusted-source` | Unpinned install, `curl \| sh`, download from an unknown source | Own checks |
 | `excess-scope` | Broad permissions, or side effects outside the skill's stated purpose | LLM review |
-| `injection` | Prompt injection, jailbreak text, hidden or obfuscated instructions | Scanner |
-| `exfiltration` | Reading data and sending it out | Scanner |
-| `malicious-code` | Unsafe execution primitives, command injection, malware signatures | Scanner |
 
-`destructive-unconfirmed` is the category no existing scanner covers, so it is the part of this component that is new.
+`destructive-unconfirmed` and `credential-logging` are covered by no scanner category, so they are the part of this component that is new. `untrusted-source` overlaps with the scanner's `supply_chain_attack`, and `excess-scope` with `unauthorized_tool_use` and `autonomy_abuse`; overlapping findings at the same location are merged (section 5).
 
-Personal config, hardcoded secrets and placeholders left behind by `generalize` are not scored here. They make a skill unclean, not unsafe to run, and Configuration Cleanliness (3.4 of evaluate.md) already penalizes them. A skill that sends credentials to a third party is covered by `exfiltration`.
+### 2.2 Scanner categories
 
-**[OPEN]** The scanner reports hardcoded secrets as its own category, so its findings will include them. To discuss: the adapter can drop those findings by filtering on category, pass them to Configuration Cleanliness, or keep them in the safety evidence without letting them affect the score.
+The complete list from Cisco skill-scanner 2.2.1, read from the installed package.
+
+| Category | What is flagged | Scored under safety |
+|---|---|---|
+| `prompt_injection` | Text that overrides the agent's instructions, including jailbreak framing | Yes |
+| `transitive_trust_abuse` | Indirect injection: the skill has the agent follow instructions from external content | Yes |
+| `unicode_steganography` | Payloads hidden in invisible Unicode characters | Yes |
+| `obfuscation` | Encoded or disguised content meant to evade review | Yes |
+| `social_engineering` | Deceptive metadata or scam-like behaviour | Yes |
+| `skill_discovery_abuse` | Inflated or misleading description of what the skill does | Yes |
+| `data_exfiltration` | Reading data and sending it out, including outbound network requests | Yes |
+| `tool_chaining_abuse` | A chain that collects data in one step and uploads it in another | Yes |
+| `command_injection` | Unsafe execution primitives and injection patterns in bundled scripts | Yes |
+| `malware` | Known malware signatures | Yes |
+| `supply_chain_attack` | Malicious or unpinned packages, registry redirection, known-vulnerable dependencies | Yes |
+| `unauthorized_tool_use` | Tool or network use the skill does not declare | Yes |
+| `autonomy_abuse` | Unbounded autonomous retries or actions | Yes |
+| `resource_abuse` | Compute exhaustion, such as infinite loops | Yes |
+| `harmful_content` | Instructions to produce prohibited harmful content | Yes |
+| `hardcoded_secrets` | Credentials embedded in the skill | **[OPEN]**, see below |
+| `policy_violation` | Packaging rules: skill naming, description length, missing license, archive or binary files in the package | **[OPEN]**, see below |
+
+Personal config, hardcoded secrets and placeholders left behind by `generalize` are not scored here. They make a skill unclean, not unsafe to run, and Configuration Cleanliness (3.4 of evaluate.md) already penalizes them. A skill that sends credentials to a third party is covered by `data_exfiltration`.
+
+**[OPEN]** Two scanner categories are not about harm to the person running the skill: `hardcoded_secrets` is a cleanliness issue, and `policy_violation` is packaging hygiene. To discuss for each: the adapter can drop those findings by filtering on category, pass them to Configuration Cleanliness, or keep them in the safety evidence without letting them affect the score.
 
 ## 3. Backends
 
@@ -54,7 +79,7 @@ It is an optional dependency. If it is not installed, the backend is skipped and
 
 Hermes skills parse as-is, with no conversion and no lenient mode. Tested on 8 Oct 2026 with version 2.2.1 in static mode: all 59 skills in a local `~/.hermes/skills` were scanned without a parse error, through both the CLI (`scan-all --recursive`) and the SDK. Hermes-specific frontmatter (`platforms`, `metadata.hermes`) caused no problems. OpenClaw skills have not been tested.
 
-Each finding returned by the SDK has `rule_id`, `category`, `severity`, `file_path`, `line_number`, `snippet`, `title`, `description`, `remediation` and `analyzer`. These map onto the `Finding` in section 5: `snippet` to `quoted_text`, `file_path` and `line_number` to `location`, `rule_id` to `source_category`.
+Each finding returned by the SDK has `rule_id`, `category`, `severity`, `file_path`, `line_number`, `snippet`, `title`, `description`, `remediation` and `analyzer`. These map onto the `Finding` in section 5: `snippet` to `quoted_text`, `file_path` and `line_number` to `location`, and `category` and `rule_id` unchanged.
 
 ### 3.2 Own checks
 
@@ -117,7 +142,7 @@ class Finding:
     location: str         # file and line
     message: str
     source: str           # "cisco" | "own-checks" | "llm-review"
-    source_category: str  # the backend's own category or rule id
+    rule_id: str          # the backend's rule that fired
     source_version: str   # package version, or our rule-set version
 
 @dataclass
@@ -167,7 +192,7 @@ This is how we know the component works, and the numbers go in the final report.
 Test set, kept small:
 
 - **Benign controls**: real skills from public repos, expected to produce no findings.
-- **Risky variants**: 3 or 4 real skills, each with one deliberate flaw added. One variant per category in section 2: unconfirmed `rm -rf`, printed credential, `curl | sh`, hidden instruction, over-broad permissions.
+- **Risky variants**: 3 or 4 real skills, each with one deliberate flaw added. One variant for each of our categories in 2.1, plus one scanner category: unconfirmed `rm -rf`, printed credential, `curl | sh`, hidden instruction, over-broad permissions.
 - **Known-malicious examples**: any that ship with the scanner.
 
 Measured per category, at each tier: detection rate and false-positive rate, for Cisco alone, own checks alone, and the combination.
@@ -197,5 +222,5 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 4. Score values, and whether CRITICAL excludes a skill from ranking. (5)
 5. Per-scan token cost and the default cap. (4)
 6. Whether to add SkillSpector for `excess-scope`. (3.4)
-7. What to do with the scanner's hardcoded-secret findings: drop, hand to Configuration Cleanliness, or keep as unscored evidence. (2)
+7. What to do with the scanner's `hardcoded_secrets` and `policy_violation` findings: drop, hand to Configuration Cleanliness, or keep as unscored evidence. (2)
 8. Caching findings by content hash depends on the storage decision still open in evaluate.md.
