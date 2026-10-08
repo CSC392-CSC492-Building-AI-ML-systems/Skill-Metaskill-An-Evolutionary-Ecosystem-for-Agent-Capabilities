@@ -39,7 +39,7 @@ Personal config, hardcoded secrets and placeholders left behind by `generalize` 
 
 ### 3.1 Cisco skill-scanner (primary)
 
-`pip install cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing **[VERIFY]**). Requires Python 3.11+ **[VERIFY]**.
+`pip install cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing). Requires Python 3.11+ **[VERIFY]**; tested on 3.13.
 
 Chosen because it installs as a normal pinned dependency, has a Python SDK (no subprocess or output parsing), accepts a skill directory or a directory of skills, and publishes accuracy numbers.
 
@@ -52,7 +52,9 @@ result = SkillScanner(analyzers=[...]).scan_skill("/path/to/skill")
 
 It is an optional dependency. If it is not installed, the backend is skipped and the report says "scanner not installed"; evaluation does not fail.
 
-**[OPEN]** Do Hermes skills parse as-is? The scanner expects `SKILL.md` per the Agent Skills spec. It also has a lenient mode and a custom metadata filename option for other layouts. Test on one real Hermes skill before writing the adapter.
+Hermes skills parse as-is, with no conversion and no lenient mode. Tested on 8 Oct 2026 with version 2.2.1 in static mode: all 59 skills in a local `~/.hermes/skills` were scanned without a parse error, through both the CLI (`scan-all --recursive`) and the SDK. Hermes-specific frontmatter (`platforms`, `metadata.hermes`) caused no problems. OpenClaw skills have not been tested.
+
+Each finding returned by the SDK has `rule_id`, `category`, `severity`, `file_path`, `line_number`, `snippet`, `title`, `description`, `remediation` and `analyzer`. These map onto the `Finding` in section 5: `snippet` to `quoted_text`, `file_path` and `line_number` to `location`, `rule_id` to `source_category`.
 
 ### 3.2 Own checks
 
@@ -180,6 +182,7 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 ## 9. Limitations
 
 - No findings does not mean safe. The scanner we use says the same about itself.
+- Static false positives on ordinary skills. In the test in 3.1, 11 of the 59 installed Hermes skills had a HIGH or CRITICAL static finding. They have not been triaged, but at least one is a clear false positive: a CRITICAL "Function constructor" finding on a Playwright `page.waitForFunction('...')` call. With the worst-finding score in section 5, one such finding gives a skill the lowest score.
 - Low static recall. Without `deep`, most malicious skills pass undetected.
 - The LLM tier is not deterministic. Two runs can give different findings.
 - The confirmation check in 3.2 is a heuristic. A confirmation step written far from the command, or phrased unusually, will be missed and reported as a finding.
@@ -189,7 +192,7 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 ## 10. Open questions
 
 1. Does the malicious layer need our own implementation? (1)
-2. Do Hermes skills parse in Cisco's scanner without conversion? (3.1)
+2. Do OpenClaw skills parse in Cisco's scanner without conversion? Hermes skills do. (3.1)
 3. Cisco's LLM analyzer versus the "only `judge.py` calls a model" rule. (4)
 4. Score values, and whether CRITICAL excludes a skill from ranking. (5)
 5. Per-scan token cost and the default cap. (4)
