@@ -53,7 +53,7 @@ The example configuration must not contain the detected source values. Findings 
 
 **Input:** A generalized skill, its configuration schema, and a user-supplied configuration file.
 
-**Output:** A separate directory containing the personalized skill and a concise result report. The input skill and configuration remain unchanged. **[OPEN]** Whether the report should be a standalone file or only a Hermes tool response.
+**Output:** A separate directory containing the personalized skill and a concise result report. The input skill and configuration remain unchanged. 
 
 ## 3. Generalization design
 
@@ -61,7 +61,7 @@ The example configuration must not contain the detected source values. Findings 
 
 Resolve the input path and define a bounded scan root. Parse the skill project and inspect `SKILL.md` plus relevant supporting files, including scripts. Extract prompts, metadata, tool declarations, and dependencies where present. Start with an explicitly allowlisted set such as Markdown, text, JSON, YAML, TOML, and common script formats. Do not execute files.
 
-Ignore version-control internals, caches, generated output, and binary files by default. List unsupported files in the findings report. Reject or report symlinks and paths resolving outside the selected root. Apply file-count and size limits. **[OPEN]** Final extension allowlist and limits.
+Ignore version-control internals, caches, generated output, and binary files by default. List unsupported files in the findings report. Reject or report symlinks and paths resolving outside the selected root. Apply file-count and size limits. 
 
 ### 3.2 Detection and transformation
 
@@ -87,7 +87,7 @@ Do not classify every URL, name, or path as private by default. Public documenta
 
 ### 3.3 Configuration template format
 
-Generate a machine-readable schema and a human-editable example. **[OPEN]** Confirm JSON versus YAML for the user-edited configuration; JSON is the initial example below.
+Generate a machine-readable schema and a human-editable example.
 
 ```json
 {
@@ -145,7 +145,7 @@ Expose both operations through the existing `/metaskill` command and `metaskill`
 - `generalize ./skills/gcp-file-transfer`
 - `personalize ./output/gcp-file-transfer-template --config ./config.json`
 
-The handler should route to `generalize_skill()` or `personalize_skill()` with explicit input and output paths. The response should contain operation, status, artifact paths, finding/substitution counts, unresolved items, and warnings. Detailed findings belong in the generated report. **[OPEN]** Whether the initial Hermes schema should use one natural-language request or structured operation-specific parameters.
+The handler should route to `generalize_skill()` or `personalize_skill()` with explicit input and output paths. The response should contain operation, status, artifact paths, finding/substitution counts, unresolved items, and warnings. Detailed findings belong in the generated report.
 
 ## 8. Testing
 
