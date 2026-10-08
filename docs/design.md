@@ -1,6 +1,5 @@
 # Skill Generalization and Personalization — Design
 
-**Status:** Draft. Items marked **[OPEN]** need a decision before implementation.  
 **Code lives in:** `metaskill/generalize/` and `metaskill/personalize/` (planned; these modules are not yet present).  
 **Scope:** Part 1: Skill Generalization. The base Hermes plugin and `/metaskill` command are already set up.
 
