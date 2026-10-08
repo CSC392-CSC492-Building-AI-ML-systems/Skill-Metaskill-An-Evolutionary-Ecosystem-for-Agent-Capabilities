@@ -120,7 +120,7 @@ No cascade (escalating to the LLM only when static results look bad) in the firs
 
 - `deep` sends the full skill contents to the configured LLM provider. Before the first call, show which provider receives what. This matters most for a skill that has not been generalized yet and still contains personal config.
 - **[OPEN]** Real token cost per scan is unknown. Measure it on one skill before setting a default cap.
-- **[OPEN]** Cisco's LLM analyzer calls the model itself, with its own key and model settings. Section 6 of evaluate.md says scoring modules call `judge.py`, never a model directly. Either accept this as an exception and point Cisco at the same provider and model as `judge.py`, or skip Cisco's LLM analyzer and rely on our own review, losing its benchmarked detection.
+- Cisco's LLM analyzer calls the model itself. This is the one exception to the rule in section 6 of evaluate.md that scoring modules call `judge.py`, never a model directly. The adapter configures it with the same provider and model as `judge.py`.
 
 ## 5. Data model
 
@@ -225,13 +225,15 @@ evaluate.md needs a number in `[0, 1]` per dimension for the leaderboard. The sa
 | HIGH | 0.3 |
 | CRITICAL | 0.0 |
 
-**[OPEN]** These values are placeholders. Also open: whether a CRITICAL finding should exclude a skill from ranking instead of only lowering its score, since a weighted `overall` could otherwise rank an unsafe skill first.
+A CRITICAL finding gives the lowest safety score. It does not remove the skill from the ranking (section 5 of evaluate.md).
+
+**[OPEN]** These values are placeholders.
 
 The findings, with quotes, are always written to the evidence file alongside the score.
 
 ## 6. Module layout
 
-Replaces the single `safety.py` in section 6 of evaluate.md.
+Expands the `safety/` entry in section 6 of evaluate.md.
 
 ```
 metaskill/evaluate/safety/
@@ -275,9 +277,8 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 
 1. Does the malicious layer need our own implementation? (1)
 2. Do OpenClaw skills parse in Cisco's scanner without conversion? Hermes skills do. (3.1)
-3. Cisco's LLM analyzer versus the "only `judge.py` calls a model" rule. (4)
-4. Score values, and whether CRITICAL excludes a skill from ranking. (5)
-5. Per-scan token cost and the default cap. (4)
-6. Whether to add SkillSpector for `excess-scope`. (3.4)
-7. What to do with the scanner's `hardcoded_secrets` and `policy_violation` findings: drop, hand to Configuration Cleanliness, or keep as unscored evidence. (2)
-8. Caching findings by content hash depends on the storage decision still open in evaluate.md.
+3. Score values. (5)
+4. Per-scan token cost and the default cap. (4)
+5. Whether to add SkillSpector for `excess-scope`. (3.4)
+6. What to do with the scanner's `hardcoded_secrets` and `policy_violation` findings: drop, hand to Configuration Cleanliness, or keep as unscored evidence. (2)
+7. Caching findings by content hash depends on the storage decision still open in evaluate.md.
