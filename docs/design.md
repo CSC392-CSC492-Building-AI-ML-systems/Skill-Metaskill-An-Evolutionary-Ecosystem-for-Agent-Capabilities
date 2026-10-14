@@ -5,8 +5,7 @@
 
 ## 1. Purpose
 
-Given an existing Hermes skill, analyze its structure and contents—including `SKILL.md` and relevant supporting files—then identify user-specific configuration and PII. Separate those values from reusable skill logic, replace them with reusable configuration parameters or placeholders, and generate a reusable skill template. Given that generalized skill and a new user's configuration, perform the reverse transformation to produce a personalized skill while preserving the original behavior.
-
+Given an existing Hermes skill, analyze its structure and contents—including `SKILL.md` and relevant supporting files—then identify user-specific information, credentials, PII, and organization-specific configuration. Separate those values from reusable skill logic, replace them with reusable configuration parameters or placeholders, and generate a reusable skill template. Given that generalized skill and a new user's configuration, perform the reverse transformation to produce a personalized skill while preserving the original behavior.
 The tools should make skills easier to share without accidentally sharing the original author's credentials, personal details, or machine-specific settings.
 
 ### Non-goals
@@ -66,8 +65,8 @@ Ignore version-control internals, caches, generated output, and binary files by 
 ### 3.2 Detection and transformation
 
 1. **Inventory:** Enumerate eligible files and record relative paths and file types.
-2. **Deterministic detection:** Identify candidates using known credential patterns, API keys, emails, phone numbers, URLs, IP addresses, local/absolute paths, organization configurations, and common configuration assignments.
-3. **Contextual classification:** Optionally use an LLM for ambiguous candidates, such as distinguishing an example address from an author's real address or identifying organization-specific settings. LLM classifications are advisory and must use validated structured output.
+2. **Deterministic detection:** Identify candidates using predefined rules and patterns for recognizable information such as email addresses, API keys, tokens, phone numbers, local/absolute file paths, repository URLs, environment variables, and common configuration assignments. The detector should return structured findings rather than immediately modifying the skill.
+3. **Contextual classification:** Optionally use an LLM to classify ambiguous candidates that cannot be reliably determined through deterministic rules, such as distinguishing example values from real user-specific values or identifying organization-specific project names and settings. This layer is secondary to deterministic detection and should not be required for the initial generalization workflow.
 4. **Review:** Present candidate findings grouped by category and confidence. Leave ambiguous candidates unchanged when review is unavailable, and report them.
 5. **Placeholder assignment:** Replace approved user-specific values with standardized, reusable configuration parameters. Repeated occurrences of the same value should share a placeholder when they serve the same purpose.
 6. **Configuration generation:** Create a field for each placeholder with a name, type, required flag, description, and validation constraints where known.
