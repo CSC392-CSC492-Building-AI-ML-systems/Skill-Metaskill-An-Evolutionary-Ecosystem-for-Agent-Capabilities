@@ -24,7 +24,7 @@ Evaluation is based off the following critereon:
 
 ## 2. Inputs and outputs
 
-**Input:** a comma separated list of skills (directories containing skill.md alongside any required files).
+**Input:** a comma separated list of skills (directories containing `SKILL.md` alongside any required files).
 
 **Output:** a table in the terminal interface which resembles the following:
 
@@ -34,7 +34,7 @@ Evaluation is based off the following critereon:
 | 2 | s3-sync | 0.78 | 0.80 | 0.75 | 0.85 | 0.70 | 0.80 | 0.80 |
 | 3 | log-cleanup | 0.61 | 0.70 | 0.60 | 0.65 | 0.80 | 0.75 | 0.30 |
 
-Furthermore, calls to the skills `evaluate` and `rank` will be stored in their own files, with further details, as outlined in section 2.1.
+Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their own files, with further details, as outlined in section 2.1.
 
 *Rules:*
 - We will require evidence (output of the tests), which will be outputted to a file
@@ -55,6 +55,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 |---|---|
 | `timestamp` | Time of invocation, same format as the filename |
 | `skills` | Skills evaluated, in input order |
+| `config` | Hash of the evaluation config, so runs with different settings are not ranked together |
 | `runs_per_task` | `n` (default 3) |
 | `judge_model` | Model used by `judge.py` |
 | `safety_tier` | `static` or `deep` |
@@ -92,8 +93,10 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | Field | Description |
 |---|---|
 | `dimension` | Dimension the finding counts towards |
-| `severity` | `low`, `medium`, `high` or `critical` |
-| `rule` | Identifier of the check that fired |
+| `category` | What kind of problem it is; for safety, one of the categories in [evaluate-safety.md](evaluate-safety.md), section 2 |
+| `severity` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` or `INFO` (the scale in [evaluate-safety.md](evaluate-safety.md), section 5) |
+| `source` | Which checker reported it, e.g. `cisco`, `own-checks`, `llm-review` |
+| `rule` | Identifier of the specific check that fired |
 | `quote` | The offending text |
 | `location` | File and line, e.g. `SKILL.md:42` |
 
@@ -104,6 +107,7 @@ Example (abridged):
   "meta": {
     "timestamp": "2026-10-14-T15-30-02",
     "skills": ["gcp-file-transfer", "s3-sync"],
+    "config": "...",
     "runs_per_task": 3,
     "judge_model": "...",
     "safety_tier": "static",
@@ -135,8 +139,10 @@ Example (abridged):
     }],
     "findings": [{
       "dimension": "safety",
-      "severity": "high",
-      "rule": "destructive-without-confirm",
+      "category": "destructive-unconfirmed",
+      "severity": "HIGH",
+      "source": "own-checks",
+      "rule": "recursive-delete",
       "quote": "gsutil rm -r gs://...",
       "location": "SKILL.md:42"
     }]
@@ -189,12 +195,12 @@ Measured from the task runs in section 4, not estimated from the text: tokens co
 
 ### 3.6 Safety
 
-Does the skill ask the agent to do something that could harm the user? Two layers: an external scanner (Cisco skill-scanner) for malicious skills, such as prompt injection, data exfiltration and malicious code, and our own checks for careless ones:
+Does the skill ask the agent to do something that could harm the user? Two layers: an external scanner (Cisco skill-scanner) for malicious skills, such as prompt injection, data exfiltration and malicious code, and our own checks plus an LLM review for careless ones:
 
 - Destructive or irreversible commands (recursive deletes, force pushes, disk or database writes) without a confirmation step.
 - Credentials printed or logged at run time.
 - Installs or downloads from unpinned or unknown sources.
-- Broad permissions, or actions with side effects outside the stated purpose.
+- Broad permissions, or actions with side effects outside the stated purpose. This needs the LLM review, so it is only checked in the `deep` tier.
 
 The default `static` tier needs no API key; the `deep` tier adds LLM passes. Each finding has a severity and quotes the offending text. A scan with no findings does not prove a skill is safe. Full design in [evaluate-safety.md](evaluate-safety.md).
 
@@ -230,10 +236,10 @@ To account for this, tests will be ran `n` times (we default to 3), and account 
 
 ## 5. Ranking
 
-- Rank by `overall`, with ties broken by efficacy lift, then safety, followed by quality, robustness, clarity, etc...
+- Rank by `overall`, with ties broken by lift, then safety, followed by quality, robustness, clarity, etc...
 - Only rank skills evaluated with the **same config, judge model, safety tier and scanner version**; otherwise refuse or warn, since scores are not comparable.
 - A critical safety finding results in a low safety score. It does not remove the skill from the ranking.
-- Output includes as well, a recommendation of which score to use based off their scores.
+- Output includes as well, a recommendation of which skill to use based off their scores.
 
 
 ## 6. Module layout
@@ -248,7 +254,7 @@ metaskill/evaluate/
 
   runner.py          # Task runner: executes tasks n times, with and without
                      #   the skill; records outcomes, tokens, time, tool calls
-  tasks.py           # Test task loading (author-provided) and generation (4.3)
+  tasks.py           # Test task loading (human-written, 4.3)
 
   quality.py         # 3.1: pass rate and lift, from runner results
   robustness.py      # 3.2: agreement across the n runs, from runner results
@@ -276,7 +282,7 @@ Exposed through the existing `metaskill` tool (`request` string), e.g. "evaluate
 ## 8. Testing
 
 - Structure checks: fixture skills in `tests/` (one valid, several each broken in one specific way).
-- Judge and efficacy: fake judge returning canned output; assert report shape, null handling, and score aggregation.
+- Judge and quality: fake judge returning canned output; assert report shape, null handling, and score aggregation.
 - Ranking: property tests (ordering is stable, same-input-same-output, incomparable configs rejected).
 - Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately.
 
