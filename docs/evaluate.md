@@ -45,7 +45,7 @@ Furthermore, calls to the skills `evaluate` and `rank` will be stored in their o
 
 ### 2.1 Report format **[OPEN]**
 
-This is a temporary structure for the file format. Changes might be made to this.
+This is a temporary structure for the file format. Changes might be made to this (notably, rating needs to be changed in accordance to section 3.3 with regards to clarity.)
 
 The structures below are defined in `models.py`. The Markdown report presents the same fields.
 
@@ -60,15 +60,14 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `safety_tier` | `static` or `deep` |
 | `scanner_version` | Version of the external safety scanner |
 
-**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), and two lists: `tests` and `findings`.
+**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), and three lists: `tests`, `rubric` and `findings`.
 
-**Test results (`tests`).** One record per task, per variant, per run. Quality, Robustness and Efficiency are all computed from these.
+**Test results (`tests`).** One record per task, per variant, per run. Each record feeds Quality, Robustness and Efficiency at once, so it is not tagged with a dimension.
 
 | Field | Description |
 |---|---|
 | `task_id` | Stable task identifier, so results can be compared across reports |
 | `description` | One-line summary of the task |
-| `dimension` | Dimension the result counts towards |
 | `variant` | `with_skill` or `baseline`; needed to compute lift |
 | `run` | Run index `1..n`; needed to compute robustness |
 | `judge` | `deterministic` or `llm` (section 4.2) |
@@ -79,7 +78,16 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `metrics` | `tokens`, `seconds`, `tool_calls`; used for efficiency |
 | `output` | Agent output, truncated, with a path to the full log |
 
-**Findings (`findings`).** Safety, Clarity and the static part of Configuration Cleanliness do not run tasks; they produce findings instead.
+**Clarity ratings (`rubric`).** One record per rubric criterion (section 3.3). The Clarity score is computed from these.
+
+| Field | Description |
+|---|---|
+| `criterion` | Rubric criterion, e.g. `trigger_specificity`, `step_ordering` |
+| `rating` | Anchored level for this criterion, normalised to `[0, 1]` |
+| `reason` | Why the judge chose this level |
+| `quote` | Text from the skill supporting the rating |
+
+**Findings (`findings`).** Safety and Configuration Cleanliness do not run tasks; they report problems found in the skill's files instead.
 
 | Field | Description |
 |---|---|
@@ -109,7 +117,6 @@ Example (abridged):
     "tests": [{
       "task_id": "upload-single-file",
       "description": "Upload ./a.txt to bucket X",
-      "dimension": "quality",
       "variant": "with_skill",
       "run": 1,
       "judge": "deterministic",
@@ -119,6 +126,12 @@ Example (abridged):
       "evidence": null,
       "metrics": { "tokens": 4210, "seconds": 18.2, "tool_calls": 5 },
       "output": "... (full log: logs/upload-single-file-with_skill-r1.txt)"
+    }],
+    "rubric": [{
+      "criterion": "trigger_specificity",
+      "rating": 0.75,
+      "reason": "Names the service and action, but not when to prefer it over gsutil directly",
+      "quote": "Use this skill to transfer files to and from GCP buckets."
     }],
     "findings": [{
       "dimension": "safety",
