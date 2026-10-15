@@ -66,7 +66,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 |---|---|
 | `timestamp` | Time of invocation, same format as the filename |
 | `skills` | Skills evaluated, in input order |
-| `config` | Hash of the evaluation config, so runs with different settings are not ranked together |
+| `config` | Hash of the evaluation config, a short identifier for the exact settings this run used |
 | `runs_per_task` | `n` (default 3) |
 | `judge_model` | Model used by `judge.py` |
 | `safety_tier` | `static` or `deep` |
