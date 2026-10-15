@@ -88,6 +88,8 @@ Deterministic rules over the skill's markdown and bundled scripts, for `destruct
 - `destructive-unconfirmed`: match a list of destructive commands, then look for a confirmation step (ask, confirm, dry run, backup) in the same step or the one before it. A match with no confirmation is a finding.
 - `credential-logging`: match commands that write a secret to the terminal or a log, such as echoing a key or token variable, dumping the environment, or printing a credentials file.
 
+The rule set has a version number, bumped whenever a rule is added or changed, and recorded as `checks_version` in the report header. Changing a rule can change scores, so reports with different rule-set versions are not ranked together.
+
 ### 3.3 LLM review
 
 One call through `judge.py`, asking about the three careless categories plus `excess-scope`, which needs the skill's stated purpose and cannot be done by pattern matching. The judge must quote the text behind each finding, and the quote is checked programmatically to be a real substring of the skill; findings with a quote that is not in the skill are dropped.
@@ -110,7 +112,7 @@ Static-only is not enough to rank on. Cisco reports that its rules alone catch 7
 Rules:
 
 - Every result records its tier.
-- Ranking only compares skills scanned at the same tier, the same scanner version, and the same judge model. This extends the rule in section 5 of evaluate.md.
+- Ranking only compares skills scanned at the same tier, the same scanner version, the same own-checks version, and the same judge model. This extends the rule in section 5 of evaluate.md.
 - A `static` result is displayed as "static only", not as a clean bill of health.
 - If the LLM analyzer cannot start, Cisco's scan errors out instead of falling back. The adapter catches this, returns the static findings, and marks the result "LLM layer unavailable".
 
@@ -136,14 +138,14 @@ class SafetyBackend(Protocol):
 ```python
 @dataclass
 class Finding:
+    dimension: Dimension  # "safety", or the dimension a finding is handed to (2.2)
     category: str         # one of the categories in section 2
     severity: Severity    # CRITICAL | HIGH | MEDIUM | LOW | INFO
     quote: str            # the offending text, verbatim
     location: str         # file and line
-    message: str
+    message: str          # what is wrong, in plain words, for the report
     source: str           # "cisco" | "own-checks" | "llm-review"
     rule: str             # the backend's rule that fired
-    source_version: str   # package version, or our rule-set version
 
 @dataclass
 class BackendResult:
@@ -154,6 +156,8 @@ class BackendResult:
     detail: str = ""      # error message, when status is "error"
 ```
 
+- `Finding` has the same fields as a finding in the report (section 2.1 of evaluate.md).
+- Backend versions are not stored per finding. They are the same for every finding in a run, so the report header records them once: `scanner_version` for Cisco and `checks_version` for our own checks. The LLM review is covered by `judge_model`.
 - Severity uses Cisco's five levels as the common scale, since it is the only external scale we map from.
 - Two findings with the same category and overlapping location are merged into one that lists both sources. This prevents the same problem being counted twice.
 
@@ -171,13 +175,14 @@ It does five things:
 
 | Cisco finding | Our `Finding` | Note |
 |---|---|---|
+| — | `dimension` | `safety`, unless the category is handed to another dimension (section 2.2) |
 | `category` | `category` | Unchanged (section 2.2) |
 | `severity` | `severity` | Same five levels |
 | `snippet` | `quote` | Can be empty, for findings about the skill as a whole |
 | `file_path`, `line_number` | `location` | `line_number` can be missing |
 | `title`, `description` | `message` | |
 | `rule_id` | `rule` | |
-| package version | `source_version` | From `importlib.metadata` |
+| package version | — | Not stored per finding. Read once from `importlib.metadata` and recorded as `scanner_version` in the report header (`ReportMeta`); empty if the scanner did not run |
 
 Sketch:
 

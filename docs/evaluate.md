@@ -59,7 +59,8 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `runs_per_task` | `n` (default 3) |
 | `judge_model` | Model used by `judge.py` |
 | `safety_tier` | `static` or `deep` |
-| `scanner_version` | Version of the external safety scanner |
+| `scanner_version` | Version of the external safety scanner; empty if it did not run |
+| `checks_version` | Version of our own safety rule set ([evaluate-safety.md](evaluate-safety.md), section 3.2) |
 
 **Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), and three lists: `tests`, `rubric` and `findings`.
 
@@ -99,6 +100,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `rule` | Identifier of the specific check that fired |
 | `quote` | The offending text |
 | `location` | File and line, e.g. `SKILL.md:42` |
+| `message` | What is wrong, in plain words, for the report |
 
 Example (abridged):
 
@@ -111,7 +113,8 @@ Example (abridged):
     "runs_per_task": 3,
     "judge_model": "...",
     "safety_tier": "static",
-    "scanner_version": "..."
+    "scanner_version": "...",
+    "checks_version": "..."
   },
   "skills": [{
     "name": "gcp-file-transfer",
@@ -144,7 +147,8 @@ Example (abridged):
       "source": "own-checks",
       "rule": "recursive-delete",
       "quote": "gsutil rm -r gs://...",
-      "location": "SKILL.md:42"
+      "location": "SKILL.md:42",
+      "message": "Recursively deletes a bucket path with no confirmation step before it"
     }]
   }]
 }
@@ -237,7 +241,7 @@ To account for this, tests will be ran `n` times (we default to 3), and account 
 ## 5. Ranking
 
 - Rank by `overall`, with ties broken by lift, then safety, followed by quality, robustness, clarity, etc...
-- Only rank skills evaluated with the **same config, judge model, safety tier and scanner version**; otherwise refuse or warn, since scores are not comparable.
+- Only rank skills evaluated with the **same config, judge model, safety tier, scanner version and own-checks version**; otherwise refuse or warn, since scores are not comparable.
 - A critical safety finding results in a low safety score. It does not remove the skill from the ranking.
 - Output includes as well, a recommendation of which skill to use based off their scores.
 
