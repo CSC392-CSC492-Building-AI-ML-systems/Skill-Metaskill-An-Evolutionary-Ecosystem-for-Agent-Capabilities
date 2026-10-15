@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-# Used for both the report filename and meta.timestamp, e.g. 2026-10-14-T15-30-02.
+# Used for both the run folder name and meta.timestamp, e.g. 2026-10-14-T15-30-02.
 TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
 
 
@@ -55,6 +55,15 @@ class CheckKind(StrEnum):
     FILE_EXISTS = "file_exists"
     EXIT_CODE = "exit_code"
     OUTPUT_MATCHES = "output_matches"
+
+
+class Status(StrEnum):
+    """Whether a dimension ran as configured (section 2.1)."""
+
+    OK = "ok"
+    PARTIAL = "partial"  # ran with less than was asked for, e.g. a fallback
+    SKIPPED = "skipped"  # not run, e.g. no API key
+    ERROR = "error"
 
 
 def _check_unit(name: str, value: float) -> None:
@@ -122,12 +131,12 @@ class EvaluationConfig:
     judge_provider: str = ""
     judge_model: str = ""
     safety_tier: SafetyTier = SafetyTier.STATIC
-    # [OPEN] weighting of overall (evaluate.md, open question 2). Equal weights for now.
+    # [OPEN] weighting of overall (evaluate.md, open question 1). Equal weights for now.
     weights: dict[Dimension, float] = field(
         default_factory=lambda: {d: 1 / len(Dimension) for d in Dimension})
     # [OPEN] truncation length for TestResult.output (evaluate.md, section 2.1).
     output_max_chars: int = 2000
-    output_dir: Path = Path(".")
+    output_dir: Path = Path("evaluation-reports")  # each run writes [timestamp]/ here
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
@@ -146,7 +155,8 @@ class EvaluationConfig:
         encoded = json.dumps(settings, sort_keys=True).encode()
         return hashlib.sha256(encoded).hexdigest()[:16]
 
-    def to_meta(self, timestamp: str, skills: list[str], scanner_version: str) -> ReportMeta:
+    def to_meta(self, timestamp: str, skills: list[str], scanner_version: str,
+                checks_version: str) -> ReportMeta:
         return ReportMeta(
             timestamp=timestamp,
             skills=skills,
@@ -155,6 +165,7 @@ class EvaluationConfig:
             judge_model=self.judge_model,
             safety_tier=self.safety_tier,
             scanner_version=scanner_version,
+            checks_version=checks_version,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -177,7 +188,7 @@ class EvaluationConfig:
             safety_tier=SafetyTier(
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             output_max_chars=data.get("output_max_chars", 2000),
-            output_dir=Path(data.get("output_dir", ".")),
+            output_dir=Path(data.get("output_dir", "evaluation-reports")),
         )
         if "weights" in data:
             config.weights = {
@@ -266,7 +277,10 @@ class Task:
 
 @dataclass
 class ReportMeta:
-    """Settings a report was produced under. Ranking is only valid when these match (section 5)."""
+    """Settings a run used, so a reader can tell what produced the scores (section 2.1).
+
+    Every ranking is fresh (section 5), so these are a record, not a comparison check.
+    """
 
     timestamp: str
     skills: list[str]
@@ -274,15 +288,8 @@ class ReportMeta:
     runs_per_task: int = 3
     judge_model: str = ""
     safety_tier: SafetyTier = SafetyTier.STATIC
-    scanner_version: str = ""
-
-    def is_comparable(self, other: ReportMeta) -> bool:
-        return (
-            self.config == other.config
-            and self.judge_model == other.judge_model
-            and self.safety_tier == other.safety_tier
-            and self.scanner_version == other.scanner_version
-        )
+    scanner_version: str = ""  # empty if the scanner did not run
+    checks_version: str = ""  # version of our own safety rule set
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -293,6 +300,7 @@ class ReportMeta:
             "judge_model": self.judge_model,
             "safety_tier": self.safety_tier.value,
             "scanner_version": self.scanner_version,
+            "checks_version": self.checks_version,
         }
 
     @classmethod
@@ -306,6 +314,7 @@ class ReportMeta:
             safety_tier=SafetyTier(
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             scanner_version=data.get("scanner_version", ""),
+            checks_version=data.get("checks_version", ""),
         )
 
 
@@ -418,6 +427,7 @@ class Finding:
     rule: str
     quote: str
     location: str  # e.g. "SKILL.md:42"
+    message: str = ""  # what is wrong, in plain words, for the report
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -428,6 +438,7 @@ class Finding:
             "rule": self.rule,
             "quote": self.quote,
             "location": self.location,
+            "message": self.message,
         }
 
     @classmethod
@@ -440,24 +451,36 @@ class Finding:
             rule=data["rule"],
             quote=data["quote"],
             location=data["location"],
+            message=data.get("message", ""),
         )
 
 
 @dataclass
 class DimensionScore:
-    """Return type of every scoring module's score(skill, ...)."""
+    """Return type of every scoring module's score(skill, ...).
+
+    value is None exactly when the dimension was skipped or failed.
+    """
 
     dimension: Dimension
-    value: float
+    value: float | None
+    status: Status = Status.OK
     reason: str = ""
+    detail: str = ""  # what was missing or went wrong, when status is not OK
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+
+    def to_status(self) -> DimensionStatus:
+        """The part of this result the report keeps per dimension."""
+        return DimensionStatus(self.status, self.reason, self.detail)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "dimension": self.dimension,
             "value": self.value,
+            "status": self.status,
             "reason": self.reason,
+            "detail": self.detail,
             "rubric": [r.to_dict() for r in self.rubric],
             "findings": [f.to_dict() for f in self.findings],
         }
@@ -467,30 +490,67 @@ class DimensionScore:
         return DimensionScore(
             dimension=Dimension(data["dimension"]),
             value=data["value"],
+            status=Status(data.get("status", Status.OK.value)),
             reason=data["reason"],
+            detail=data.get("detail", ""),
             rubric=[RubricRating.from_dict(r) for r in data["rubric"]],
             findings=[Finding.from_dict(f) for f in data["findings"]],
         )
 
     def __post_init__(self) -> None:
-        _check_unit("value", self.value)
+        not_scored = self.status in (Status.SKIPPED, Status.ERROR)
+        if not_scored and self.value is not None:
+            raise ValueError(f"a {self.status} dimension must have value None")
+        if not not_scored and self.value is None:
+            raise ValueError(f"a {self.status} dimension needs a value")
+        if self.value is not None:
+            _check_unit("value", self.value)
+
+
+@dataclass
+class DimensionStatus:
+    """Whether one dimension ran as configured, and why it scored what it did."""
+
+    status: Status
+    reason: str = ""
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "reason": self.reason,
+            "detail": self.detail,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DimensionStatus:
+        return DimensionStatus(
+            status=Status(data["status"]),
+            reason=data.get("reason", ""),
+            detail=data.get("detail", ""),
+        )
 
 
 @dataclass
 class Scores:
-    """Return type of the overall scoring function."""
+    """Return type of the overall scoring function.
 
-    overall: float
-    quality: float
-    robustness: float
-    clarity: float
-    config_cleanliness: float
-    efficiency: float
-    safety: float
+    None means the dimension was skipped or failed. [OPEN] how overall treats it
+    (evaluate.md, section 2.1).
+    """
+
+    overall: float | None
+    quality: float | None
+    robustness: float | None
+    clarity: float | None
+    config_cleanliness: float | None
+    efficiency: float | None
+    safety: float | None
 
     def __post_init__(self) -> None:
         for name, value in vars(self).items():
-            _check_unit(name, value)
+            if value is not None:
+                _check_unit(name, value)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -523,6 +583,7 @@ class SkillResult:
     name: str
     scores: Scores
     lift: float  # pass_rate(with_skill) - pass_rate(baseline), in [-1, 1]
+    dimensions: dict[Dimension, DimensionStatus] = field(default_factory=dict)
     tests: list[TestResult] = field(default_factory=list)
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
@@ -532,6 +593,7 @@ class SkillResult:
             "name": self.name,
             "scores": self.scores.to_dict(),
             "lift": self.lift,
+            "dimensions": {d.value: s.to_dict() for d, s in self.dimensions.items()},
             "tests": [t.to_dict() for t in self.tests],
             "rubric": [r.to_dict() for r in self.rubric],
             "findings": [f.to_dict() for f in self.findings],
@@ -543,6 +605,9 @@ class SkillResult:
             name=data["name"],
             scores=Scores.from_dict(data["scores"]),
             lift=data["lift"],
+            dimensions={
+                Dimension(d): DimensionStatus.from_dict(s)
+                for d, s in data.get("dimensions", {}).items()},
             tests=[TestResult.from_dict(t) for t in data["tests"]],
             rubric=[RubricRating.from_dict(r) for r in data["rubric"]],
             findings=[Finding.from_dict(f) for f in data["findings"]],
@@ -551,7 +616,7 @@ class SkillResult:
 
 @dataclass
 class Report:
-    """Contents of ranked-evaluation-[timestamp].json."""
+    """Contents of evaluation-reports/[timestamp]/ranked-evaluation.json."""
 
     meta: ReportMeta
     skills: list[SkillResult] = field(default_factory=list)
