@@ -328,7 +328,7 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 - LLM judges are biased toward verbose, well-formatted text. Rubric anchors and mandatory quote-evidence mitigate but do not remove this.
 - Certain categories are dependent on the quality of the task (i.e. robustness).
 - Scores are only comparable within one config and judge model. Multiple different judges may cause noise to appear in scoring.
-- Cost scales with `tasks × runs × 2` (baseline and with-skill) in worst case, with the average being `tasks x runs`. May want to improve further using some other scoring system.
+- Task runs dominate cost. Each skill needs `tasks × runs` agent sessions with the skill and the same number without it. Skills evaluated on the same tasks in one run can share the baseline, so ranking `k` of them costs `(k + 1) × tasks × runs` sessions instead of `2k × tasks × runs`. **[OPEN]** Whether to share baselines; to be decided as the runner is built.
 
 ## 10. Open questions
 
@@ -336,3 +336,4 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 2. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
 3. Whether a skill with a CRITICAL safety finding is still executed by `runner.py`. Section 5 keeps it in the ranking, but running it means letting an agent follow instructions already flagged as harmful. Options: skip its task runs (and score Quality, Robustness and Efficiency as skipped), run it only in a sandbox, or run it as normal.
 4. How `overall` and `rank` treat a skipped (`null`) dimension (2.1).
+5. Whether skills evaluated on the same tasks share one baseline run (9).
