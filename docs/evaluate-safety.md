@@ -75,7 +75,12 @@ from skill_scanner import SkillScanner
 result = SkillScanner(analyzers=[...]).scan_skill("/path/to/skill")
 ```
 
-It is an optional dependency. If it is not installed, the backend is skipped and the report says "scanner not installed"; evaluation does not fail.
+It is an optional dependency. When it is not installed:
+
+1. **Ask before scanning.** The tool reports the missing scanner before any skill is evaluated, and the agent asks the user whether to install it, in the Python environment Hermes runs in, pinned to the tested version (`pip install cisco-ai-skill-scanner==2.2.1`). If the user agrees, it is installed and evaluation continues with Cisco. This follows how the agent asks which skills to rank (section 7 of evaluate.md).
+2. **If the user declines, or there is no one to ask** (a non-interactive run), evaluation continues without Cisco. It does not fail.
+   - In the report, safety has status `partial`, since our own checks still ran, and `detail` says the scanner is not installed and gives the install command.
+   - In the tool's output, a warning is shown at the top of the result, because without Cisco most malicious skills go undetected (section 4).
 
 Hermes skills parse as-is, with no conversion and no lenient mode. Tested on 8 Oct 2026 with version 2.2.1 in static mode: all 59 skills in a local `~/.hermes/skills` were scanned without a parse error, through both the CLI (`scan-all --recursive`) and the SDK. Hermes-specific frontmatter (`platforms`, `metadata.hermes`) caused no problems. OpenClaw skills have not been tested.
 
@@ -286,3 +291,4 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 4. Per-scan token cost and the default cap. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
 6. What to do with the scanner's `hardcoded_secrets` and `policy_violation` findings: drop, hand to Configuration Cleanliness, or keep as unscored evidence. (2)
+7. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position). (3.1)
