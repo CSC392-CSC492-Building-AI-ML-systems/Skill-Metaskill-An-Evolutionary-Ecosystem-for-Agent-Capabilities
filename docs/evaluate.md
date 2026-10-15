@@ -64,7 +64,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 
 | Field | Description |
 |---|---|
-| `timestamp` | Time of invocation, same format as the filename |
+| `timestamp` | Time of invocation, same format as the run folder name |
 | `skills` | Skills evaluated, in input order |
 | `config` | Hash of the evaluation config, a short identifier for the exact settings this run used |
 | `runs_per_task` | `n` (default 3) |
