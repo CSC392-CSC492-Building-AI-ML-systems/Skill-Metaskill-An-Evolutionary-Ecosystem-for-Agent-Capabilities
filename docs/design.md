@@ -52,22 +52,40 @@ The example configuration must not contain the detected source values. Findings 
 
 **Input:** A generalized skill, its configuration schema, and a user-supplied configuration file.
 
-**Output:** A separate directory containing the personalized skill and a concise result report. The input skill and configuration remain unchanged. 
+**Output:** A separate directory containing the personalized skill and a concise result report, `personalize-report.json`, listing the placeholders resolved, unused configuration entries, and warnings, without any configuration values. The same summary is returned in the tool response. The input skill and configuration remain unchanged.
 
 ## 3. Generalization design
 
 ### 3.1 File inspection
 
-Resolve the input path and define a bounded scan root. Parse the skill project and inspect `SKILL.md` plus relevant supporting files, including scripts. Extract prompts, metadata, tool declarations, and dependencies where present. Start with an explicitly allowlisted set such as Markdown, text, JSON, YAML, TOML, and common script formats. Do not execute files.
+Resolve the input path and define a bounded scan root. Parse the skill project and inspect `SKILL.md` plus relevant supporting files, including scripts. Do not execute files.
 
-Ignore version-control internals, caches, generated output, and binary files by default. List unsupported files in the findings report. Reject or report symlinks and paths resolving outside the selected root. Apply file-count and size limits. 
+**Extracted in v1:**
+
+- Frontmatter metadata from `SKILL.md` (name, description, version, and any other keys).
+- Prompt and instruction text from `SKILL.md`.
+- Tool declarations, such as tool names listed in frontmatter or referenced in the body.
+- Scripts and files referenced from `SKILL.md`.
+- Environment variables read or referenced by the skill or its scripts.
+- Dependencies from manifests (`requirements.txt`, `pyproject.toml`, `package.json`) and import statements in scripts.
+
+**Eligible files (allowlist):** `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.py`, `.sh`, `.js`, `.ts`.
+
+**Limits (defaults, configurable):** at most 500 files, 1 MiB per file, and 25 MiB total. A file over the size limit is skipped and listed in the findings report. A project over the file-count or total-size limit is rejected with a clear error rather than partially scanned.
+
+Ignore version-control internals, caches, generated output, and binary files by default. List unsupported files in the findings report. Reject or report symlinks and paths resolving outside the selected root.
 
 ### 3.2 Detection and transformation
 
 1. **Inventory:** Enumerate eligible files and record relative paths and file types.
 2. **Deterministic detection:** Identify candidates using predefined rules and patterns for recognizable information such as email addresses, API keys, tokens, phone numbers, local/absolute file paths, repository URLs, environment variables, and common configuration assignments. The detector should return structured findings rather than immediately modifying the skill.
-3. **Contextual classification:** Optionally use an LLM to classify ambiguous candidates that cannot be reliably determined through deterministic rules, such as distinguishing example values from real user-specific values or identifying organization-specific project names and settings. This layer is secondary to deterministic detection and should not be required for the initial generalization workflow.
-4. **Review:** Present candidate findings grouped by category and confidence. Leave ambiguous candidates unchanged when review is unavailable, and report them.
+3. **Contextual classification:** Optionally use an LLM to classify ambiguous candidates that cannot be reliably determined through deterministic rules, such as distinguishing example values from real user-specific values or identifying organization-specific project names and settings. This layer is secondary to deterministic detection and is never required for generalization.
+
+   - **Interface:** `classify.py` defines a `Classifier` protocol that takes a list of candidates and returns a label per candidate (`user_specific`, `example`, or `uncertain`). No provider is bundled in v1; a provider adapter implements the protocol.
+   - **Off by default:** enabled only by an explicit opt-in flag, and the result reports that it was used.
+   - **Privacy controls:** the classifier receives only a bounded context window around each candidate with the candidate value masked, never whole files, and never values the deterministic layer already classified as credentials.
+   - **Untrusted data:** classifier responses are validated against the allowed labels; anything else is treated as `uncertain`.
+4. **Review:** Non-interactive in v1. High-confidence findings are replaced automatically. Ambiguous findings are left unchanged and listed in `findings.json` with a stable finding ID, grouped by category and confidence. A user can re-run with an optional decisions file (finding ID to `approve` or `skip`) to resolve them; an interactive prompt is out of scope for v1.
 5. **Placeholder assignment:** Replace approved user-specific values with standardized, reusable configuration parameters. Repeated occurrences of the same value should share a placeholder when they serve the same purpose.
 6. **Configuration generation:** Create a field for each placeholder with a name, type, required flag, description, and validation constraints where known.
 7. **Output validation:** Confirm each placeholder has a configuration definition and that approved values were replaced. Run residual detection and report remaining candidates, without implying that a clean report proves complete sanitization.
@@ -86,7 +104,7 @@ Do not classify every URL, name, or path as private by default. Public documenta
 
 ### 3.3 Configuration template format
 
-Generate a machine-readable schema and a human-editable example.
+Generate a machine-readable schema and a human-editable example. Both are **JSON**: it needs no extra dependency, parses safely with the standard library, and the schema is itself JSON. YAML is not supported in v1.
 
 ```json
 {
@@ -144,11 +162,15 @@ Expose both operations through the existing `/metaskill` command and `metaskill`
 - `generalize ./skills/gcp-file-transfer`
 - `personalize ./output/gcp-file-transfer-template --config ./config.json`
 
+Generalize and personalize remain **operations on the single `metaskill` tool**, selected by an `operation` enum parameter (`generalize` | `personalize`) alongside `skill_path`, `output_path`, and (for personalize) `config_path`. One tool keeps the schema small and the token cost low for the agent, and matches the existing manifest, which provides one tool. Evaluate and merge will be added as further operations. If the schema grows too large, splitting into separate tools is a later change that does not alter the handlers.
+
 The handler should route to `generalize_skill()` or `personalize_skill()` with explicit input and output paths. The response should contain operation, status, artifact paths, finding/substitution counts, unresolved items, and warnings. Detailed findings belong in the generated report.
+
+The agent only ever sees counts, categories, file paths, and artifact paths, never the detected values. Detection and replacement run inside the tool handler, so sensitive values are not placed in the agent's context.
 
 ## 8. Testing
 
-Use deterministic fixtures for skills with no sensitive values, known credentials, emails, phone numbers, local paths, organization settings, repeated values, ambiguous examples, malformed files, symlinks, and unsupported formats. Select 3–4 real Hermes skills for end-to-end validation as called for by the milestone plan.
+Use deterministic fixtures for skills with no sensitive values, known credentials, emails, phone numbers, local paths, organization settings, repeated values, ambiguous examples, malformed files, symlinks, and unsupported formats. Select 3–4 real Hermes skills for end-to-end validation as called for by the milestone plan (selection and annotation are tracked in MET-8). Ground truth for each real skill is an `expected.json` recording the file, line, and category of each expected sensitive value, not the values themselves, so accuracy can be measured without storing secrets in the repository.
 
 - Generalization replaces expected values and creates matching schema fields.
 - Personalization restores supplied values and rejects missing or invalid required values.
@@ -172,13 +194,17 @@ Use a fake classifier in automated tests. Real LLM calls should be separately ma
 - Logs and reports must not expose detected credentials or personalized secret values.
 - A successful round trip on fixtures does not prove equivalence for all inputs or complete PII removal.
 
-## 10. Open questions
+## 10. Decisions
 
-- Which file extensions and size/count limits are supported initially? (Section 3.1)
-- Should user configuration use JSON or YAML? (Section 3.3)
-- What review flow should the Hermes CLI provide for ambiguous or high-impact findings? (Section 3.2)
-- Which optional LLM provider/classifier interface and privacy controls should be supported? (Sections 3.2 and 9)
-- Should personalization produce a report file or only a tool response? (Section 2)
-- Should generalize and personalize remain operations on the current `metaskill` tool, or become separate structured tools? (Section 7)
-- Which 3–4 real Hermes skills will form the initial validation set, and how will expected sensitive values be annotated? (Section 8)
-- Which prompts, tool declarations, metadata, and dependencies must the parser extract in the first version? (Sections 3.1 and 6)
+Questions raised during drafting and how they were resolved. Each is reflected in the section noted.
+
+| Question | Decision | Section |
+|---|---|---|
+| File extensions and size/count limits | Allowlist and limits as listed; over-limit files skipped, over-limit projects rejected | 3.1 |
+| JSON or YAML for configuration | JSON | 3.3 |
+| Review flow for ambiguous or high-impact findings | Non-interactive; ambiguous findings reported and resolved by an optional decisions file | 3.2 |
+| LLM provider, classifier interface, privacy controls | `Classifier` protocol, off by default, masked bounded context, no bundled provider | 3.2, 9 |
+| Personalization report file or tool response only | Both: `personalize-report.json` and the tool response | 2 |
+| One tool or separate tools | One `metaskill` tool with an `operation` enum | 7 |
+| Real-skill validation set and annotation | Selected under MET-8; `expected.json` with file, line, and category | 8 |
+| What the parser extracts in v1 | Frontmatter, prompts, tool declarations, referenced scripts, env vars, dependencies | 3.1 |
