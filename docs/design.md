@@ -1,7 +1,7 @@
 # Skill Generalization and Personalization — Design
 
-**Code lives in:** `metaskill/generalize/` and `metaskill/personalize/` (planned; these modules are not yet present).  
-**Scope:** Part 1: Skill Generalization. The base Hermes plugin and `/metaskill` command are already set up.
+**Code lives in:** `metaskill/generalize/` and `metaskill/personalize/`.  
+**Scope:** Part 1 of the project: generalizing a skill into a template and personalizing it from a configuration. Evaluation and merging are covered separately.
 
 ## 1. Purpose
 
@@ -18,21 +18,21 @@ The tools should make skills easier to share without accidentally sharing the or
 
 ## Part 1 milestone outcomes
 
-By the end of this milestone, a user should be able to install the Metaskill plugin through Hermes, select an existing skill, and generalize it into a reusable template while preserving its intended functionality. The milestone includes:
+When this milestone is complete, a user can install the Metaskill plugin through Hermes, select an existing skill, and generalize it into a reusable template that keeps its intended functionality. It consists of:
 
-- Designing a reusable Hermes configuration template structure.
-- Extending the existing `/metaskill` command and plugin tool schema to route generalization and personalization requests.
-- Building a skill project parser that detects PII and configuration in `SKILL.md`, scripts, and other relevant files.
-- Building the generalization pipeline and the reverse personalization transformation.
-- Providing a tool schema that helps Hermes determine which operation to run.
-- Testing generalization and personalization on real Hermes skills, including validation of functionality.
-- Documenting detection accuracy, edge cases, security risks, and limitations.
+- A reusable Hermes configuration template structure.
+- Routing of generalization and personalization requests through the `/metaskill` command and the plugin tool schema.
+- A skill project parser that detects PII and configuration in `SKILL.md`, scripts, and other relevant files.
+- The generalization pipeline and the reverse personalization transformation.
+- A tool schema that lets Hermes choose the right operation.
+- Tests of generalization and personalization on real Hermes skills, including validation of functionality.
+- Documentation of detection accuracy, edge cases, security risks, and limitations.
 
 ## 2. Inputs and outputs
 
 ### Generalize
 
-**Input:** A Hermes skill project, typically a directory containing `SKILL.md` and supporting files, or a standalone `SKILL.md` when no project files are needed.
+**Input:** A Hermes skill project, typically a directory containing `SKILL.md` and supporting files, or a standalone `SKILL.md` when no project files are needed. An optional decisions file resolves ambiguous findings from an earlier run (see 3.2).
 
 **Output:** A new output directory containing the generalized skill, a configuration schema, a blank/example configuration file, and a findings report.
 
@@ -50,7 +50,7 @@ The example configuration must not contain the detected source values. Findings 
 
 ### Personalize
 
-**Input:** A generalized skill, its configuration schema, and a user-supplied configuration file.
+**Input:** The output directory produced by generalize (the generalized skill and its `config.schema.json`) and a user-supplied configuration file.
 
 **Output:** A separate directory containing the personalized skill and a concise result report, `personalize-report.json`, listing the placeholders resolved, unused configuration entries, and warnings, without any configuration values. The same summary is returned in the tool response. The input skill and configuration remain unchanged.
 
@@ -71,9 +71,9 @@ Resolve the input path and define a bounded scan root. Parse the skill project a
 
 **Eligible files (allowlist):** `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.py`, `.sh`, `.js`, `.ts`.
 
-**Limits (defaults, configurable):** at most 500 files, 1 MiB per file, and 25 MiB total. A file over the size limit is skipped and listed in the findings report. A project over the file-count or total-size limit is rejected with a clear error rather than partially scanned.
+**Limits (v1 defaults):** at most 500 files, 1 MiB per file, and 25 MiB total. A file over the size limit is skipped and listed in the findings report. A project over the file-count or total-size limit is rejected with a clear error rather than partially scanned.
 
-Ignore version-control internals, caches, generated output, and binary files by default. List unsupported files in the findings report. Reject or report symlinks and paths resolving outside the selected root.
+Ignore version-control internals, caches, generated output, and binary files by default. List unsupported files in the findings report. Symlinks are never followed. They, and any path resolving outside the selected root, are skipped and listed in the findings report.
 
 ### 3.2 Detection and transformation
 
@@ -88,7 +88,7 @@ Ignore version-control internals, caches, generated output, and binary files by 
 4. **Review:** Non-interactive in v1. High-confidence findings are replaced automatically. Ambiguous findings are left unchanged and listed in `findings.json` with a stable finding ID, grouped by category and confidence. A user can re-run with an optional decisions file (finding ID to `approve` or `skip`) to resolve them; an interactive prompt is out of scope for v1.
 5. **Placeholder assignment:** Replace approved user-specific values with standardized, reusable configuration parameters. Repeated occurrences of the same value should share a placeholder when they serve the same purpose.
 6. **Configuration generation:** Create a field for each placeholder with a name, type, required flag, description, and validation constraints where known.
-7. **Output validation:** Confirm each placeholder has a configuration definition and that approved values were replaced. Run residual detection and report remaining candidates, without implying that a clean report proves complete sanitization.
+7. **Output validation:** Confirm each placeholder has a configuration definition and that approved values were replaced. Run residual detection and report remaining candidates. A clean report does not prove complete sanitization.
 
 Example categories and placeholder names:
 
@@ -100,11 +100,11 @@ Example categories and placeholder names:
 | Organization | Internal host, team name, tenant ID | `{{config.organization_host}}` |
 | Deployment setting | Region, project or account ID | `{{config.region}}` |
 
-Do not classify every URL, name, or path as private by default. Public documentation links, sample values, and portable relative paths may be reusable content. Preserve surrounding instructions and formatting, using exact scoped replacements rather than broad substitutions.
+Not every URL, name, or path is treated as private by default: public documentation links, sample values, and portable relative paths may be reusable content. Replacements are exact and scoped to the detected occurrence rather than broad substitutions, so surrounding instructions and formatting are preserved.
 
 ### 3.3 Configuration template format
 
-Generate a machine-readable schema and a human-editable example. Both are **JSON**: it needs no extra dependency, parses safely with the standard library, and the schema is itself JSON. YAML is not supported in v1.
+Generate a machine-readable schema and a human-editable example. Both are **JSON**, which the standard library parses safely with no extra dependency. YAML is not supported in v1. The example below shows `config.example.json`:
 
 ```json
 {
@@ -116,7 +116,7 @@ Generate a machine-readable schema and a human-editable example. Both are **JSON
 }
 ```
 
-The schema should identify sensitive fields so their values are excluded from logs and ordinary reports. Use blank or clearly fictitious values in the example. Prefer asking users to supply secrets again rather than keeping a reversible mapping to source values.
+The schema marks sensitive fields so their values are excluded from logs and ordinary reports. The example contains only blank or clearly fictitious values. Secrets are never stored: users supply them again at personalization time, and no mapping back to the source values is kept.
 
 ## 4. Personalization design
 
@@ -126,7 +126,7 @@ The schema should identify sensitive fields so their values are excluded from lo
 4. Write a new skill copy, preserving directory structure and file encoding where practical.
 5. Confirm that declared placeholders have been resolved and report unused configuration entries.
 
-Reject output paths that escape the chosen destination. Do not write secrets to logs or findings. Where the skill supports it, prefer environment-variable references for credentials over embedding values directly. Personalization does not execute the generated skill.
+Output paths that escape the chosen destination are rejected. Secrets are never written to logs or reports. Where a skill supports it, credentials can be supplied as environment-variable references instead of literal values. Personalization does not execute the generated skill.
 
 ## 5. Round-trip and correctness expectations
 
@@ -153,18 +153,18 @@ metaskill/
     validate.py       # unresolved placeholders and output checks
 ```
 
-The repository already has the base plugin, `/metaskill` command, manifest, registration, and initial tool schema. Part 1 work described here extends that setup: implement the parser and transformation modules, expose generalize and personalize through the existing Hermes interface, and ensure Hermes can use the tool schema to select the appropriate operation. These are proposed module boundaries; implementation may adjust the file split while keeping the public operations and safety guarantees clear.
+These modules plug into the base plugin (manifest, registration, `/metaskill` command, and tool schema), which exposes generalize and personalize to Hermes. The file split is a starting layout and may change, but the two public operations and the safety guarantees in this document stay fixed.
 
 ## 7. Tool surface
 
-Expose both operations through the existing `/metaskill` command and `metaskill` tool. Extend the schema and handler so the requested operation and required skill/configuration paths are clear to Hermes. Example requests:
+Both operations are exposed through the `/metaskill` command and the `metaskill` tool. The tool schema states the requested operation and the required skill and configuration paths so Hermes can pick the right one. Example requests:
 
 - `generalize ./skills/gcp-file-transfer`
 - `personalize ./output/gcp-file-transfer-template --config ./config.json`
 
 Generalize and personalize remain **operations on the single `metaskill` tool**, selected by an `operation` enum parameter (`generalize` | `personalize`) alongside `skill_path`, `output_path`, and (for personalize) `config_path`. One tool keeps the schema small and the token cost low for the agent, and matches the existing manifest, which provides one tool. Evaluate and merge will be added as further operations. If the schema grows too large, splitting into separate tools is a later change that does not alter the handlers.
 
-The handler should route to `generalize_skill()` or `personalize_skill()` with explicit input and output paths. The response should contain operation, status, artifact paths, finding/substitution counts, unresolved items, and warnings. Detailed findings belong in the generated report.
+The handler routes to `generalize_skill()` or `personalize_skill()` with explicit input and output paths. The response contains the operation, status, artifact paths, finding and substitution counts, unresolved items, and warnings. Detailed findings are in the generated report.
 
 The agent only ever sees counts, categories, file paths, and artifact paths, never the detected values. Detection and replacement run inside the tool handler, so sensitive values are not placed in the agent's context.
 
@@ -180,15 +180,15 @@ Use deterministic fixtures for skills with no sensitive values, known credential
 - Generated paths stay within the requested destination.
 - Unrelated content and directory structure survive both transformations.
 - Round-trip generalize/personalize/re-generalize produces a compatible template.
-- Record whether the real-skill runs detect expected categories, preserve structure and formatting, and leave the generalized skills usable. Review false positives, false negatives, and behavior changes.
+- Real-skill runs record whether the expected categories were detected, whether structure and formatting were preserved, and whether the generalized skills remain usable, along with any false positives, false negatives, and behavior changes.
 
-Use a fake classifier in automated tests. Real LLM calls should be separately marked and excluded from normal CI to avoid cost and nondeterministic results. Do not run arbitrary skill code as part of transformation tests. Report detection accuracy only when findings have been compared with a reviewed ground-truth set; otherwise document observed misses and false positives without claiming a measured rate.
+Automated tests use a fake classifier. Real LLM calls are marked separately and excluded from normal CI to avoid cost and nondeterministic results. Transformation tests never run arbitrary skill code. Detection accuracy is reported only when findings are compared against a reviewed ground-truth set; without one, observed misses and false positives are listed and no rate is claimed.
 
 ## 9. Limitations and security considerations
 
 - Detection can miss novel, encoded, split, or semantically represented secrets and information in unsupported or binary files.
 - False positives can include public examples, sample domains, common paths, and benign identifiers.
-- LLM processing may disclose source excerpts to a provider. Keep it optional, disclose its use, minimize submitted content, and follow applicable privacy requirements. Deterministic scanning should work without an LLM.
+- LLM classification may send source excerpts to a provider. It is optional and off by default, its use is reported in the result, and only masked context windows are sent. Deterministic scanning works without it.
 - Skill files are untrusted input and may contain prompt injection. Treat their contents and classifier responses as data, never as instructions to the tool.
 - Static checks do not determine all runtime behavior and do not certify skill safety.
 - Logs and reports must not expose detected credentials or personalized secret values.
