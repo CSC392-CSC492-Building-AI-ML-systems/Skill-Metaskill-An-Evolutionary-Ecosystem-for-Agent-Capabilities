@@ -83,7 +83,8 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `reason` | Short explanation of the score, from the scoring module |
 | `detail` | What was missing or went wrong when `status` is not `ok`; empty otherwise |
 
-- **[OPEN]** What score a `skipped` or `error` dimension gets. Options: `null` and left out of `overall`; `0`; or `null` with the skill refused by `rank`. Proposed: `null`, and `rank` refuses to compare a skill with a skipped dimension.
+- A `skipped` or `error` dimension scores `null`, not `0`, so a skill is not penalized for a missing key or backend.
+- **[OPEN]** How `overall` and `rank` treat a `null` score: leave the dimension out of `overall`, or refuse to rank the skill. To be decided during implementation.
 
 **Test results (`tests`).** One record per task, per variant, per run. Each record feeds Quality, Robustness and Efficiency at once, so it is not tagged with a dimension.
 
@@ -311,7 +312,9 @@ Dependencies:
 
 ## 7. Tool surface
 
-Exposed through the existing `metaskill` tool (`request` string), e.g. "evaluate gcp-file-transfer" or "rank my skills". Requests are routed to `evaluate_skill` / `rank_skills`. 
+Exposed through the existing `metaskill` tool (`request` string), e.g. "evaluate gcp-file-transfer" or "rank my skills". Requests are routed to `evaluate_skill` / `rank_skills`.
+
+If a request does not name the skills, such as "rank my skills", the agent asks the user which skills to rank: all installed skills, or a set they list. The answer becomes the skill list in section 2.
 
 ## 8. Testing
 
@@ -332,4 +335,4 @@ Exposed through the existing `metaskill` tool (`request` string), e.g. "evaluate
 1. Weighted-mean `overall`: Is it the best scoring system?
 2. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
 3. Whether a skill with a CRITICAL safety finding is still executed by `runner.py`. Section 5 keeps it in the ranking, but running it means letting an agent follow instructions already flagged as harmful. Options: skip its task runs (and score Quality, Robustness and Efficiency as skipped), run it only in a sandbox, or run it as normal.
-4. What score a skipped dimension gets (2.1).
+4. How `overall` and `rank` treat a skipped (`null`) dimension (2.1).
