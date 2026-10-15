@@ -79,7 +79,7 @@ It is an optional dependency. If it is not installed, the backend is skipped and
 
 Hermes skills parse as-is, with no conversion and no lenient mode. Tested on 8 Oct 2026 with version 2.2.1 in static mode: all 59 skills in a local `~/.hermes/skills` were scanned without a parse error, through both the CLI (`scan-all --recursive`) and the SDK. Hermes-specific frontmatter (`platforms`, `metadata.hermes`) caused no problems. OpenClaw skills have not been tested.
 
-Each finding returned by the SDK has `rule_id`, `category`, `severity`, `file_path`, `line_number`, `snippet`, `title`, `description`, `remediation` and `analyzer`. These map onto the `Finding` in section 5: `snippet` to `quoted_text`, `file_path` and `line_number` to `location`, and `category` and `rule_id` unchanged.
+Each finding returned by the SDK has `rule_id`, `category`, `severity`, `file_path`, `line_number`, `snippet`, `title`, `description`, `remediation` and `analyzer`. These map onto the `Finding` in section 5: `snippet` to `quote`, `rule_id` to `rule`, `file_path` and `line_number` to `location`, and `category` unchanged.
 
 ### 3.2 Own checks
 
@@ -138,11 +138,11 @@ class SafetyBackend(Protocol):
 class Finding:
     category: str         # one of the categories in section 2
     severity: Severity    # CRITICAL | HIGH | MEDIUM | LOW | INFO
-    quoted_text: str      # the offending text, verbatim
+    quote: str            # the offending text, verbatim
     location: str         # file and line
     message: str
     source: str           # "cisco" | "own-checks" | "llm-review"
-    rule_id: str          # the backend's rule that fired
+    rule: str             # the backend's rule that fired
     source_version: str   # package version, or our rule-set version
 
 @dataclass
@@ -173,10 +173,10 @@ It does five things:
 |---|---|---|
 | `category` | `category` | Unchanged (section 2.2) |
 | `severity` | `severity` | Same five levels |
-| `snippet` | `quoted_text` | Can be empty, for findings about the skill as a whole |
+| `snippet` | `quote` | Can be empty, for findings about the skill as a whole |
 | `file_path`, `line_number` | `location` | `line_number` can be missing |
 | `title`, `description` | `message` | |
-| `rule_id` | `rule_id` | |
+| `rule_id` | `rule` | |
 | package version | `source_version` | From `importlib.metadata` |
 
 Sketch:
