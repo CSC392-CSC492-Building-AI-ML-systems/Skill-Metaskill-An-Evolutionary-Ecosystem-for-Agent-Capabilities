@@ -38,10 +38,21 @@ Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their 
 
 *Rules:*
 - We will require evidence (output of the tests), which will be outputted to a file
-- Similarly, this data should be persistent. Each call writes two files:
-  - `ranked-evaluation-[timestamp].json`: the source of truth, read by `rank.py` and later comparisons.
-  - `ranked-evaluation-[timestamp].md`: a human-readable report rendered from the JSON.
+- Similarly, this data should be persistent. Each call writes one folder under `evaluation-reports/`, named by `[timestamp]`, holding the ranking and a subfolder of full logs per skill:
+
+  ```
+  evaluation-reports/
+    [timestamp]/
+      ranked-evaluation.json     # the source of truth for this run
+      ranked-evaluation.md       # human-readable report rendered from the JSON
+      [skill]/
+        logs/
+          [task_id]-[variant]-r[run].txt
+  ```
+
 - `[timestamp]` is simply the time the skill was invoked (written as YYYY-MM-DD-T(Hour)-Minute-Seconds).
+- Reports are kept. Nothing is deleted or overwritten automatically.
+- Every ranking is computed fresh. `rank` evaluates the skills it is given in one run and never reads earlier reports or reuses earlier results, so all skills in a ranking are scored under the same settings. Old reports are a record only.
 
 ### 2.1 Report format **[OPEN]**
 
@@ -49,7 +60,7 @@ This is a temporary structure for the file format. Changes might be made to this
 
 The structures below are defined in `models.py`. The Markdown report presents the same fields.
 
-**Header (`meta`).** Ranking is only valid across identical settings (section 5), so every report records them:
+**Header (`meta`).** The settings the run used, so a reader can tell what produced the scores:
 
 | Field | Description |
 |---|---|
@@ -88,7 +99,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `reason` | Why the judge gave this score |
 | `evidence` | For LLM judging, the quoted text supporting the rating; otherwise `null` |
 | `metrics` | `tokens`, `seconds`, `tool_calls`; used for efficiency |
-| `output` | Agent output, truncated, with a path to the full log |
+| `output` | Agent output, truncated, with the path to the full log relative to the run folder |
 
 **Clarity ratings (`rubric`).** One record per rubric criterion (section 3.3). The Clarity score is computed from these.
 
@@ -150,7 +161,7 @@ Example (abridged):
       "reason": "Object exists in bucket, exit code 0",
       "evidence": null,
       "metrics": { "tokens": 4210, "seconds": 18.2, "tool_calls": 5 },
-      "output": "... (full log: logs/upload-single-file-with_skill-r1.txt)"
+      "output": "... (full log: gcp-file-transfer/logs/upload-single-file-with_skill-r1.txt)"
     }],
     "rubric": [{
       "criterion": "trigger_specificity",
@@ -172,7 +183,7 @@ Example (abridged):
 }
 ```
 
-- **[OPEN]** Maximum length of `output` before truncation, and where full logs are stored.
+- **[OPEN]** Maximum length of `output` before truncation.
 
 ## 3. Scoring dimensions
 
@@ -259,8 +270,8 @@ To account for this, tests will be ran `n` times (we default to 3), and account 
 ## 5. Ranking
 
 - Rank by `overall`, with ties broken by lift, then safety, followed by quality, robustness, clarity, etc...
-- Only rank skills evaluated with the **same config, judge model, safety tier, scanner version and own-checks version**; otherwise refuse or warn, since scores are not comparable.
-- A skill whose safety status is `partial` because a `deep` scan fell back to `static` is compared as a `static` result, whatever tier the header records.
+- Every ranking is fresh (section 2): all skills are evaluated in the same run, so they share the same config, judge model, safety tier, scanner version and own-checks version. Results from earlier reports are never mixed in.
+- A skill whose safety status is `partial` because a `deep` scan fell back to `static` is still ranked, but flagged in the output, since its safety score is not comparable with skills scanned at `deep`.
 - A critical safety finding results in a low safety score. It does not remove the skill from the ranking.
 - Output includes as well, a recommendation of which skill to use based off their scores.
 
@@ -306,7 +317,7 @@ Exposed through the existing `metaskill` tool (`request` string), e.g. "evaluate
 
 - Structure checks: fixture skills in `tests/` (one valid, several each broken in one specific way).
 - Judge and quality: fake judge returning canned output; assert report shape, null handling, and score aggregation.
-- Ranking: property tests (ordering is stable, same-input-same-output, incomparable configs rejected).
+- Ranking: property tests (ordering is stable, same-input-same-output, `partial` safety results flagged).
 - Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately.
 
 ## 9. Limitations
@@ -320,6 +331,5 @@ Exposed through the existing `metaskill` tool (`request` string), e.g. "evaluate
 
 1. Weighted-mean `overall`: Is it the best scoring system?
 2. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
-3. Limitations on persistence of skill rankings.
-4. Whether a skill with a CRITICAL safety finding is still executed by `runner.py`. Section 5 keeps it in the ranking, but running it means letting an agent follow instructions already flagged as harmful. Options: skip its task runs (and score Quality, Robustness and Efficiency as skipped), run it only in a sandbox, or run it as normal.
-5. What score a skipped dimension gets (2.1).
+3. Whether a skill with a CRITICAL safety finding is still executed by `runner.py`. Section 5 keeps it in the ranking, but running it means letting an agent follow instructions already flagged as harmful. Options: skip its task runs (and score Quality, Robustness and Efficiency as skipped), run it only in a sandbox, or run it as normal.
+4. What score a skipped dimension gets (2.1).

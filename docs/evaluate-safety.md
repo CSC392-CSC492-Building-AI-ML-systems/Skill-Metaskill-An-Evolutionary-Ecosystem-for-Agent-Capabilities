@@ -112,7 +112,7 @@ Static-only is not enough to rank on. Cisco reports that its rules alone catch 7
 Rules:
 
 - Every result records its tier.
-- Ranking only compares skills scanned at the same tier, the same scanner version, the same own-checks version, and the same judge model. This extends the rule in section 5 of evaluate.md.
+- Every ranking is fresh, so all skills in it are scanned in the same run, at the same tier, with the same scanner version, own-checks version and judge model (section 5 of evaluate.md). A skill whose `deep` scan fell back to `static` is flagged in the ranking.
 - A `static` result is displayed as "static only", not as a clean bill of health.
 - If the LLM analyzer cannot start, Cisco's scan errors out instead of falling back. The adapter catches this, returns the static findings, and marks the result "LLM layer unavailable".
 
@@ -286,4 +286,3 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 4. Per-scan token cost and the default cap. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
 6. What to do with the scanner's `hardcoded_secrets` and `policy_violation` findings: drop, hand to Configuration Cleanliness, or keep as unscored evidence. (2)
-7. Caching findings by content hash depends on the storage decision still open in evaluate.md.
