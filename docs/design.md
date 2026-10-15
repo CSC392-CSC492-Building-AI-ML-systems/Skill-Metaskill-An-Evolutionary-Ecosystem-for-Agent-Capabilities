@@ -71,6 +71,10 @@ Resolve the input path and define a bounded scan root. Parse the skill project a
 
 **Eligible files (allowlist):** `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.py`, `.sh`, `.js`, `.ts`.
 
+**Eligible special filenames:** Exact filenames and patterns such as `.env`, `.env.*`, `.npmrc`, `.pypirc`, `Dockerfile`, 
+and `Makefile` are also eligible for inspection. Extensionless files are inspected when referenced by `SKILL.md` or when 
+they contain a recognized script shebang.
+
 **Limits (v1 defaults):** at most 500 files, 1 MiB per file, and 25 MiB total. A file over the size limit is skipped and listed in the findings report. A project over the file-count or total-size limit is rejected with a clear error rather than partially scanned.
 
 Ignore version-control internals, caches, generated output, and binary files by default. List unsupported files in the findings report. Symlinks are never followed. They, and any path resolving outside the selected root, are skipped and listed in the findings report.
@@ -79,6 +83,7 @@ Ignore version-control internals, caches, generated output, and binary files by 
 
 1. **Inventory:** Enumerate eligible files and record relative paths and file types.
 2. **Deterministic detection:** Identify candidates using predefined rules and patterns for recognizable information such as email addresses, API keys, tokens, phone numbers, local/absolute file paths, repository URLs, environment variables, and common configuration assignments. The detector should return structured findings rather than immediately modifying the skill.
+Environment-variable names and references, such as `os.getenv("OPENAI_API_KEY")`, are treated as existing configuration interfaces and are not replaced. The detector targets hard-coded values assigned to environment variables, such as `OPENAI_API_KEY="sk-..."`. Existing Hermes `required_environment_variables` and `metadata.hermes.config` declarations are preserved and reused where possible.
 3. **Contextual classification:** Optionally use an LLM to classify ambiguous candidates that cannot be reliably determined through deterministic rules, such as distinguishing example values from real user-specific values or identifying organization-specific project names and settings. This layer is secondary to deterministic detection and is never required for generalization.
 
    - **Interface:** `classify.py` defines a `Classifier` protocol that takes a list of candidates and returns a label per candidate (`user_specific`, `example`, or `uncertain`). No provider is bundled in v1; a provider adapter implements the protocol.
