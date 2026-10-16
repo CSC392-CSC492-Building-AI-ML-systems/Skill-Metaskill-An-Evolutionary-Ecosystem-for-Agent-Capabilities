@@ -3,5 +3,5 @@
 import json
 
 
-def metaskill(args, **kwargs):
+def metaskill(args, ctx=None, **kwargs):
     return json.dumps({"success": True, "message": "metaskill is not implemented yet"})

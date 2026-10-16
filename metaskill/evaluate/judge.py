@@ -1,9 +1,12 @@
 """General LLM judge: the one interface between the evaluate module and the judge model.
 
 clarity.py, safety/review.py and the LLM part of config_cleanliness.py call the model
-through this module, never directly (docs/evaluate.md, section 6). The one exception
-is the Cisco scanner's LLM analyzer, which is configured from Judge.provider and
-Judge.model (docs/evaluate-safety.md, section 4).
+through this module, never directly (docs/evaluate.md, section 6).
+
+The model is reached through Hermes' plugin LLM access (`ctx.llm`), so the judge runs on
+the user's own provider and credentials and the plugin never handles an API key. Calls go
+through the plugin's own auxiliary task, JUDGE_TASK: until the user pins a model for it
+in `config.yaml` (`auxiliary.metaskill_judge`), it follows their active model.
 
 Every rating, finding or checklist item must quote its supporting text. Quotes are
 checked to be real substrings of what was judged; anything with a quote that is not
@@ -12,8 +15,6 @@ there is dropped (evaluate.md 3.3, evaluate-safety.md 3.3).
 
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -27,73 +28,23 @@ from .models import (
     Task,
 )
 
-DEFAULT_PROVIDER = "anthropic"
-DEFAULT_MODEL = "claude-opus-5-5"
+# Auxiliary task registered in register(ctx); configured under auxiliary.metaskill_judge.
+JUDGE_TASK = "metaskill_judge"
 
 
 class JudgeUnavailable(Exception):
-    """The judge cannot run, e.g. no API key or SDK. The dimension is `skipped`."""
+    """The judge cannot run, e.g. no provider configured. The dimension is `skipped`."""
 
 
 class JudgeError(Exception):
     """The judge ran but its answer could not be used. The dimension is `error`."""
 
 
-# --- Backends ---------------------------------------------------------------
+class PluginLlm(Protocol):
+    """The part of Hermes' `ctx.llm` the judge uses (agent.plugin_llm.PluginLlm)."""
 
-
-class Backend(Protocol):
-    """Sends one request to a model and returns its reply as JSON text."""
-
-    def complete(self, system: str, prompt: str, schema: dict[str, Any]) -> str: ...
-
-
-class AnthropicBackend:
-    """Claude through the Anthropic SDK, with the reply constrained to `schema`."""
-
-    def __init__(self, model: str, effort: str = "high", max_tokens: int = 16000):
-        try:
-            import anthropic
-        except ImportError as e:
-            raise JudgeUnavailable(
-                "the anthropic package is not installed (`pip install anthropic`)") from e
-        if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-            raise JudgeUnavailable("no ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN set")
-        self._anthropic = anthropic
-        self._client = anthropic.Anthropic()
-        self.model = model
-        self.effort = effort
-        self.max_tokens = max_tokens
-
-    def complete(self, system: str, prompt: str, schema: dict[str, Any]) -> str:
-        try:
-            response = self._client.beta.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
-                output_config={
-                    "effort": self.effort,
-                    "format": {"type": "json_schema", "schema": schema},
-                },
-                # On a safety decline, rerun on a fallback model instead of failing.
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-            )
-        except self._anthropic.APIError as e:
-            raise JudgeError(f"judge request failed: {e}") from e
-        if response.stop_reason == "refusal":
-            raise JudgeError("judge model refused the request")
-        if response.stop_reason == "max_tokens":
-            raise JudgeError("judge reply was cut off at max_tokens")
-        return "".join(b.text for b in response.content if b.type == "text")
-
-
-def make_backend(provider: str, model: str) -> Backend:
-    """Build the backend for a provider name. Raises JudgeUnavailable if it cannot run."""
-    if provider == "anthropic":
-        return AnthropicBackend(model)
-    raise JudgeUnavailable(f"unsupported judge provider: {provider!r}")
+    def complete_structured(self, *, instructions: str, input: list[dict[str, Any]],
+                            **kwargs: Any) -> Any: ...
 
 
 # --- Evidence -----------------------------------------------------------------
@@ -133,10 +84,12 @@ def _render(sources: dict[str, str]) -> str:
         f'<file path="{path}">\n{text}\n</file>' for path, text in sources.items())
 
 
-QUOTE_RULE = (
-    "Support every answer with `quote`: text copied exactly, character for character, "
-    "from the material you were given. Use one contiguous span, with no ellipses, "
-    "paraphrase or added formatting. Answers whose quote cannot be found are discarded."
+SYSTEM_PROMPT = (
+    "You are a strict, impartial evaluator of agent skills. Judge only what the "
+    "material shows; length and polish are not quality. Support every answer with "
+    "`quote`: text copied exactly, character for character, from the material you were "
+    "given. Use one contiguous span, with no ellipses, paraphrase or added formatting. "
+    "Answers whose quote cannot be found are discarded. Reply with JSON only."
 )
 
 
@@ -170,31 +123,69 @@ class ChecklistVerdict:
 
 
 class Judge:
-    """The judge model. Scoring modules take one of these, so tests can pass a fake
-    backend instead of calling a model."""
+    """The judge model, behind Hermes' `ctx.llm`. Tests pass a fake `llm` instead.
 
-    def __init__(self, backend: Backend, provider: str, model: str):
-        self.backend = backend
+    JudgeUnavailable is only known once a call is made, so callers catch it around
+    rate, review and check, not just at construction.
+    """
+
+    def __init__(self, llm: PluginLlm, *, task: str = JUDGE_TASK,
+                 provider: str = "", model: str = ""):
+        self.llm = llm
+        self.task = task
+        # Explicit overrides from EvaluationConfig. Hermes only allows them once the
+        # user sets plugins.entries.metaskill.llm.allow_provider/model_override.
         self.provider = provider
-        self.model = model  # recorded as ReportMeta.judge_model
+        self.model = model
+        self.used: set[tuple[str, str]] = set()  # (provider, model) of every reply
 
     @classmethod
-    def from_config(cls, config: EvaluationConfig) -> Judge:
-        """Raises JudgeUnavailable when the configured provider cannot run."""
-        provider = config.judge_provider or DEFAULT_PROVIDER
-        model = config.judge_model or DEFAULT_MODEL
-        return cls(make_backend(provider, model), provider, model)
+    def from_context(cls, ctx: Any, config: EvaluationConfig) -> Judge:
+        """Build the judge from the plugin context passed to register(ctx)."""
+        llm = getattr(ctx, "llm", None)
+        if llm is None:
+            raise JudgeUnavailable("this Hermes version has no plugin LLM access (ctx.llm)")
+        return cls(llm, provider=config.judge_provider, model=config.judge_model)
 
-    def ask(self, system: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    @property
+    def judge_model(self) -> str:
+        """What ran, for ReportMeta.judge_model. More than one entry means Hermes fell
+        back to another model mid-run, so the scores are not all from one judge."""
+        return ", ".join(sorted(f"{p}/{m}" for p, m in self.used))
+
+    def ask(self, instructions: str, material: str, schema: dict[str, Any],
+            purpose: str) -> dict[str, Any]:
         """One judge call, returning the parsed JSON object."""
-        reply = self.backend.complete(system, prompt, schema)
         try:
-            data = json.loads(reply)
-        except json.JSONDecodeError as e:
-            raise JudgeError(f"judge reply is not valid JSON: {e}") from e
-        if not isinstance(data, dict):
+            result = self.llm.complete_structured(
+                instructions=instructions,
+                input=[{"type": "text", "text": material}],
+                json_schema=schema,
+                schema_name=f"metaskill.{purpose}",
+                system_prompt=SYSTEM_PROMPT,
+                provider=self.provider or None,
+                model=self.model or None,
+                purpose=f"metaskill.evaluate.{purpose}",
+                task=self.task,
+            )
+        except PermissionError as e:  # PluginLlmTrustError
+            raise JudgeUnavailable(
+                f"Hermes refused the judge's provider/model override: {e}. Either clear "
+                "judge_provider/judge_model, or allow it under "
+                "plugins.entries.metaskill.llm in config.yaml.") from e
+        except ValueError as e:  # reply did not match the schema
+            raise JudgeError(f"judge reply did not match the schema: {e}") from e
+        except Exception as e:
+            # No credentials or provider: Hermes raises AuxiliaryClientUnavailable. Matched
+            # by name, since plugins should not import Hermes internals.
+            if any(c.__name__ == "AuxiliaryClientUnavailable" for c in type(e).__mro__):
+                raise JudgeUnavailable(str(e)) from e
+            raise JudgeError(f"judge request failed: {e}") from e
+
+        self.used.add((result.provider, result.model))
+        if result.content_type != "json" or not isinstance(result.parsed, dict):
             raise JudgeError("judge reply is not a JSON object")
-        return data
+        return result.parsed
 
     def rate(self, skill: Skill, criteria: list[Criterion],
              instructions: str = "") -> list[RubricRating]:
@@ -208,20 +199,19 @@ class Judge:
             f"## {c.name}\n{c.question}\nLevels, worst to best:\n"
             + "\n".join(f"{i}. {anchor}" for i, anchor in enumerate(c.levels, 1))
             for c in criteria)
-        prompt = (
+        task = (
             f"{instructions}\n\n# Rubric\n\n{rubric}\n\n"
-            f"# Skill\n\n{_render(skill_sources(skill))}\n\n"
-            "Rate the skill on every criterion. `level` is the number of the level "
-            "that fits best.").strip()
+            "Rate the skill below on every criterion. `level` is the number of the "
+            "level that fits best. Quotes come from the skill.").strip()
         schema = _object({"ratings": _array(_object({
             "criterion": {"type": "string", "enum": list(by_name)},
             "level": {"type": "integer"},
             "reason": {"type": "string"},
             "quote": {"type": "string"},
         }))})
-        data = self.ask(_system(), prompt, schema)
-
         sources = skill_sources(skill)
+        data = self.ask(task, _render(sources), schema, "rate")
+
         ratings: dict[str, RubricRating] = {}
         for item in data.get("ratings", []):
             criterion = by_name.get(item.get("criterion"))
@@ -247,20 +237,20 @@ class Judge:
         means. Findings with an unknown category or severity, or a quote not in the
         skill, are dropped."""
         listing = "\n".join(f"- `{name}`: {meaning}" for name, meaning in categories.items())
-        prompt = (
+        task = (
             f"{instructions}\n\n# Categories\n\n{listing}\n\n"
-            f"# Skill\n\n{_render(skill_sources(skill))}\n\n"
-            "Report each problem you find as one finding. Report nothing for a "
-            "category with no problem; an empty list is a valid answer.").strip()
+            "Report each problem in the skill below as one finding. Report nothing for "
+            "a category with no problem; an empty list is a valid answer. Quotes come "
+            "from the skill.").strip()
         schema = _object({"findings": _array(_object({
             "category": {"type": "string", "enum": list(categories)},
             "severity": {"type": "string", "enum": [s.value for s in Severity]},
             "message": {"type": "string"},
             "quote": {"type": "string"},
         }))})
-        data = self.ask(_system(), prompt, schema)
-
         sources = skill_sources(skill)
+        data = self.ask(task, _render(sources), schema, "review")
+
         findings = []
         for item in data.get("findings", []):
             category = item.get("category")
@@ -290,10 +280,9 @@ class Judge:
         if not checklist:
             raise ValueError("an LLM check needs a checklist")
         items = "\n".join(f"{i}. {item}" for i, item in enumerate(checklist, 1))
-        prompt = (
-            f"# Task\n\n{task.prompt}\n\n# Checklist\n\n{items}\n\n"
-            f"# Agent output\n\n<output>\n{output}\n</output>\n\n"
-            "For every checklist item, say whether the agent output meets it. "
+        instructions = (
+            f"An agent was given this task:\n\n{task.prompt}\n\n# Checklist\n\n{items}\n\n"
+            "For every checklist item, say whether the agent output below meets it. "
             "`item` is the item's number. Quotes come from the agent output.")
         schema = _object({"items": _array(_object({
             "item": {"type": "integer"},
@@ -301,7 +290,7 @@ class Judge:
             "reason": {"type": "string"},
             "quote": {"type": "string"},
         }))})
-        data = self.ask(_system(), prompt, schema)
+        data = self.ask(instructions, f"<output>\n{output}\n</output>", schema, "check")
 
         sources = {"output": output}
         met: dict[int, str] = {}
@@ -329,12 +318,6 @@ class Judge:
             reason=reason,
             evidence="\n".join(met[n] for n in sorted(met)) or None,
         )
-
-
-def _system() -> str:
-    return (
-        "You are a strict, impartial evaluator of agent skills. Judge only what the "
-        "material shows; length and polish are not quality. " + QUOTE_RULE)
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:
