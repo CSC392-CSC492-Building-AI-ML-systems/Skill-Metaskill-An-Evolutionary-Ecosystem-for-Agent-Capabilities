@@ -1,15 +1,15 @@
-import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from metaskill.evaluate.judge import (
+    JUDGE_TASK,
     Criterion,
     Judge,
     JudgeError,
     JudgeUnavailable,
     locate,
-    make_backend,
     skill_sources,
 )
 from metaskill.evaluate.models import (
@@ -34,17 +34,26 @@ Use when the user asks to clear the build cache.
 """
 
 
-class FakeBackend:
-    """Returns canned replies in order and records each request."""
+class FakeLlm:
+    """Stands in for Hermes' ctx.llm: returns canned replies in order (an exception is
+    raised instead of returned) and records each call's arguments."""
 
     def __init__(self, *replies):
         self.replies = list(replies)
-        self.requests = []
+        self.calls = []
 
-    def complete(self, system, prompt, schema):
-        self.requests.append((system, prompt, schema))
+    def complete_structured(self, **kwargs):
+        self.calls.append(kwargs)
         reply = self.replies.pop(0)
-        return reply if isinstance(reply, str) else json.dumps(reply)
+        if isinstance(reply, Exception):
+            raise reply
+        return SimpleNamespace(
+            text=str(reply), provider="fake", model="fake-model",
+            parsed=reply, content_type="json" if isinstance(reply, dict) else "text")
+
+
+class AuxiliaryClientUnavailable(RuntimeError):
+    """Same name as the exception Hermes raises when no provider is configured."""
 
 
 @pytest.fixture
@@ -57,7 +66,7 @@ def skill(tmp_path):
 
 
 def judge(*replies):
-    return Judge(FakeBackend(*replies), "fake", "fake-model")
+    return Judge(FakeLlm(*replies))
 
 
 CRITERIA = [
@@ -92,24 +101,42 @@ def test_locate_ignores_line_ending_differences():
 # --- Construction -----------------------------------------------------------
 
 
-def test_unknown_provider_is_unavailable():
+def test_from_context_needs_plugin_llm_access():
     with pytest.raises(JudgeUnavailable):
-        make_backend("nope", "model")
+        Judge.from_context(SimpleNamespace(), EvaluationConfig())
 
 
-def test_missing_key_is_unavailable(monkeypatch):
-    pytest.importorskip("anthropic")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
-    with pytest.raises(JudgeUnavailable):
-        Judge.from_config(EvaluationConfig())
+def test_ask_routes_through_the_judge_task():
+    j = Judge.from_context(SimpleNamespace(llm=FakeLlm({"ok": 1})), EvaluationConfig())
+    assert j.ask("do it", "material", {"type": "object"}, "rate") == {"ok": 1}
+    call = j.llm.calls[0]
+    assert call["task"] == JUDGE_TASK
+    assert call["provider"] is None and call["model"] is None
+    assert call["input"] == [{"type": "text", "text": "material"}]
+    assert j.judge_model == "fake/fake-model"
 
 
-def test_ask_rejects_bad_json():
+def test_config_overrides_are_passed_to_hermes():
+    config = EvaluationConfig(judge_provider="openrouter", judge_model="vendor/model")
+    j = Judge.from_context(SimpleNamespace(llm=FakeLlm({})), config)
+    j.ask("i", "m", {}, "rate")
+    assert (j.llm.calls[0]["provider"], j.llm.calls[0]["model"]) == ("openrouter", "vendor/model")
+
+
+@pytest.mark.parametrize("error, expected", [
+    (PermissionError("override not allowed"), JudgeUnavailable),
+    (AuxiliaryClientUnavailable("no provider"), JudgeUnavailable),
+    (ValueError("schema mismatch"), JudgeError),
+    (RuntimeError("HTTP 500"), JudgeError),
+])
+def test_ask_maps_hermes_errors(error, expected):
+    with pytest.raises(expected):
+        judge(error).ask("i", "m", {}, "rate")
+
+
+def test_ask_rejects_non_json_replies():
     with pytest.raises(JudgeError):
-        judge("not json").ask("s", "p", {})
-    with pytest.raises(JudgeError):
-        judge("[1, 2]").ask("s", "p", {})
+        judge("plain text").ask("i", "m", {}, "rate")
 
 
 # --- rate -------------------------------------------------------------------
@@ -138,11 +165,11 @@ def test_rate_drops_unverified_unknown_and_out_of_range(skill):
 def test_rate_sends_rubric_and_skill(skill):
     j = judge({"ratings": []})
     j.rate(skill, CRITERIA, instructions="Judge clarity.")
-    system, prompt, schema = j.backend.requests[0]
-    assert "quote" in system
-    assert "Judge clarity." in prompt and "1. vague" in prompt
-    assert '<file path="run.sh">' in prompt
-    enum = schema["properties"]["ratings"]["items"]["properties"]["criterion"]["enum"]
+    call = j.llm.calls[0]
+    assert "quote" in call["system_prompt"]
+    assert "Judge clarity." in call["instructions"] and "1. vague" in call["instructions"]
+    assert '<file path="run.sh">' in call["input"][0]["text"]
+    enum = call["json_schema"]["properties"]["ratings"]["items"]["properties"]["criterion"]["enum"]
     assert enum == ["trigger", "failure"]
 
 
