@@ -43,7 +43,7 @@ This is per backend. The dimension-level `Status` in `models.py` (`ok`, `partial
 class SafetyBackend(Protocol):
     name: str
     def available(self) -> bool: ...
-    def scan(self, skill_dir: Path, tier: SafetyTier) -> BackendResult: ...
+    def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult: ...
 ```
 
 ### Functions
@@ -77,15 +77,9 @@ Important: 1.0 means "the backends ran and found nothing". It must never be retu
 - Locations match exactly after removing a leading `./`. Ranges are not handled: lines 40 to 45 do not merge with line 42.
 - Merged sources and rules are stored as one comma-separated string, because `Finding.source` and `Finding.rule` are strings in `models.py`.
 
-## Proposed change
+## Backends receive a loaded `Skill`
 
-**`scan()` should take a loaded `Skill`, not a directory.** Own checks and the LLM review need the file contents, and the runner already loads each skill once with `Skill.load()`. Passing the `Skill` avoids each backend reading the files again. Cisco uses `skill.path`.
-
-```python
-def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult: ...
-```
-
-This is a one-line change to the protocol and the safety design's section 5.
+`scan()` takes the `Skill` the runner loaded with `Skill.load()`, not a directory. Own checks and the LLM review need the file contents, so passing the loaded skill saves each backend reading the files again. Cisco's scanner wants a directory and uses `skill.path`.
 
 ## Tests
 

@@ -52,7 +52,7 @@ Collected from the documents below. Each is explained where it appears.
 
 | # | Decision | Where | Proposed |
 |---|---|---|---|
-| 1 | `scan()` takes a loaded `Skill` instead of a directory | [findings.md](findings.md) | Yes |
+| 1 | `scan()` takes a loaded `Skill` instead of a directory | [findings.md](findings.md) | **Decided: yes** |
 | 2 | Scanner notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET_EXCEEDED`) go in `detail`, not findings | [cisco.md](cisco.md) | Yes |
 | 3 | Cisco's `hardcoded_secrets` and `policy_violation` findings | [cisco.md](cisco.md) | Keep as evidence under Configuration Cleanliness, not scored in safety |
 | 4 | Status when only some backends ran | [score.md](score.md) | Table in score.md |

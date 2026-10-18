@@ -137,7 +137,7 @@ Each backend implements one interface and returns normalized findings.
 class SafetyBackend(Protocol):
     name: str
     def available(self) -> bool: ...
-    def scan(self, skill_dir: Path, tier: Tier) -> BackendResult: ...
+    def scan(self, skill: Skill, tier: Tier) -> BackendResult: ...
 ```
 
 ```python
@@ -198,16 +198,16 @@ class CiscoBackend:
     def available(self) -> bool:
         return importlib.util.find_spec("skill_scanner") is not None
 
-    def scan(self, skill_dir: Path, tier: Tier) -> BackendResult:
+    def scan(self, skill: Skill, tier: Tier) -> BackendResult:
         if not self.available():
             return BackendResult(self.name, "not-installed", tier, [])
         try:
-            result = self._run(skill_dir, tier)
+            result = self._run(skill.path, tier)
             status = "ok"
         except SkillScannerError as e:
             if tier is not Tier.DEEP:
                 return BackendResult(self.name, "error", tier, [], detail=str(e))
-            result = self._run(skill_dir, Tier.STATIC)
+            result = self._run(skill.path, Tier.STATIC)
             status, tier = "llm-unavailable", Tier.STATIC
         return BackendResult(self.name, status, tier,
                              [self._convert(f) for f in result.findings])

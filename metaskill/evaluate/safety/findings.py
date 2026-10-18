@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from pathlib import Path
 from typing import Protocol
 
-from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity
+from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, Skill
 
 # Most severe first. Used to pick the worst finding and to order merged output.
 SEVERITY_RANK = {
@@ -61,11 +60,13 @@ class BackendResult:
 
 
 class SafetyBackend(Protocol):
+    """One independent checker. scan() gets the skill already loaded by the runner."""
+
     name: str
 
     def available(self) -> bool: ...
 
-    def scan(self, skill_dir: Path, tier: SafetyTier) -> BackendResult: ...
+    def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult: ...
 
 
 def merge(findings: list[Finding]) -> list[Finding]:
