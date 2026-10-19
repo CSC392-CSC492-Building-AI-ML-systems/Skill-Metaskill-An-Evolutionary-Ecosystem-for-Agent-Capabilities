@@ -2,7 +2,7 @@
 
 Status: draft. Items marked **[OPEN]** need a decision before implementation. Items marked **[VERIFY]** are taken from a scanner's README or docs and have not been checked by running the tool.
 
-This expands section 3.6 of [evaluate.md](evaluate.md). Code lives in `metaskill/evaluate/safety/`.
+This expands section 3.6 of [evaluate.md](evaluate.md). Code lives in `metaskill/evaluate/safety/`; each file has its own document in [safety/](safety/README.md), which describes what was built. The `static` tier (Cisco and own checks) is implemented; the LLM review waits on `judge.py`.
 
 ## 1. Purpose
 
@@ -66,7 +66,7 @@ The scanner's own diagnostic notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET
 
 ### 3.1 Cisco skill-scanner (primary)
 
-`pip install cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing). Requires Python 3.11+ **[VERIFY]**; tested on 3.13.
+`pip install cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing). Requires Python 3.11 to 3.14 (from the package metadata); tested on 3.13.
 
 Chosen because it installs as a normal pinned dependency, has a Python SDK (no subprocess or output parsing), accepts a skill directory or a directory of skills, and publishes accuracy numbers.
 
@@ -114,7 +114,7 @@ Not included in the first version. It needs a source install with no releases or
 | Tier | Runs | Needs a key | Cost |
 |---|---|---|---|
 | `static` (default) | Cisco static analyzers + own checks | No | None |
-| `deep` | Everything in `static` + Cisco LLM analyzer + LLM review (3.3) | Yes | Two LLM passes per skill |
+| `deep` | Everything in `static` + Cisco LLM analyzer + LLM review (3.3) | Yes | Two LLM passes per skill, plus one small call when own checks skipped warnings |
 
 Static-only is not enough to rank on. Cisco reports that its rules alone catch 7.7% of malicious skills at HIGH on its benchmark, against 66.7% reaching MEDIUM or above with its LLM judge (15.4% false-positive rate) **[VERIFY]**. That benchmark covers malicious skills only and used one specific judge model, so it does not transfer directly to our setup or to the careless categories.
 
@@ -123,7 +123,7 @@ Rules:
 - Every result records its tier.
 - Every ranking is fresh, so all skills in it are scanned in the same run, at the same tier, with the same scanner version, own-checks version and judge model (section 5 of evaluate.md). A skill whose `deep` scan fell back to `static` is flagged in the ranking.
 - A `static` result is displayed as "static only", not as a clean bill of health.
-- If the LLM analyzer cannot start, Cisco's scan errors out instead of falling back. The adapter catches this, returns the static findings, and marks the result "LLM layer unavailable".
+- If the LLM layer cannot run, the result keeps its static findings and is marked `llm-unavailable`, and safety's status is `partial`. Cisco fails in two different ways here (section 5, Cisco adapter); the adapter handles both.
 
 No cascade (escalating to the LLM only when static results look bad) in the first version. With static recall that low, most risky skills would never be escalated, and at our test-set size running the LLM tier on every skill is cheap compared with the task runs in section 4 of evaluate.md. Worth revisiting only for skill breeding, where the same skills are rescanned many times.
 
@@ -159,16 +159,16 @@ class Finding:
 @dataclass
 class BackendResult:
     backend: str
-    status: str           # "ok" | "not-installed" | "llm-unavailable" | "error"
-    tier: Tier
+    status: BackendStatus # ok | not-installed | llm-unavailable | error
+    tier: Tier            # the tier that actually ran
     findings: list[Finding]
-    detail: str = ""      # error message, when status is "error"
+    detail: str = ""      # what went wrong, or notes such as skipped files
 ```
 
 - `Finding` has the same fields as a finding in the report (section 2.1 of evaluate.md).
 - Backend versions are not stored per finding. They are the same for every finding in a run, so the report header records them once: `scanner_version` for Cisco and `checks_version` for our own checks. The LLM review is covered by `judge_model`.
 - Severity uses Cisco's five levels as the common scale, since it is the only external scale we map from.
-- Two findings with the same category and overlapping location are merged into one that lists both sources. This prevents the same problem being counted twice.
+- Two findings with the same or overlapping category (2.1) at the same location are merged into one that lists both sources. This prevents the same problem being counted twice.
 
 ### Cisco adapter
 
@@ -177,10 +177,14 @@ The adapter is the one module that knows about Cisco's scanner (`cisco.py`). It 
 It does five things:
 
 1. **Checks availability.** The import is guarded. If the package is missing, `available()` returns false and `scan()` returns `status="not-installed"` with no findings.
-2. **Picks analyzers from the tier.** `static` uses the scanner's default analyzers, which need no key. `deep` adds the LLM analyzer, given the same provider, model and key that `judge.py` uses.
+2. **Picks analyzers from the tier.** `static` uses the scanner's default analyzers (`static_analyzer`, `bytecode`, `pipeline`, `correlation`), which need no key. `deep` builds them with `build_analyzers(policy, use_llm=True, ...)`, which adds `llm_analyzer`, given the same provider and model as `judge.py`.
 3. **Runs the scan** through the SDK on one skill directory.
-4. **Translates findings.** Field by field, as in the table below.
-5. **Handles failure.** If the `deep` scan raises because the LLM analyzer cannot start, it reruns as `static` and returns those findings with `status="llm-unavailable"`. Any other scanner error returns `status="error"` with the message; it never raises into the caller.
+4. **Translates findings.** Field by field, as in the table below. The scanner's diagnostic notices go into `detail` (section 2.2), and findings with the scanner's sixth severity, `SAFE`, are skipped.
+5. **Handles failure.** Verified against 2.2.1, the LLM layer fails in two ways:
+   - **Setup**, such as no API key: `build_analyzers` raises `AnalyzerConfigurationError`, a `ValueError` and not a `SkillScannerError`. The adapter reruns as `static` and returns `llm-unavailable`.
+   - **Run time**, such as the API being down: nothing is raised. The scan returns normally, with the failure in `analyzers_failed`. The adapter reads that list, keeps the static findings and returns `llm-unavailable`.
+
+   Any other error returns `error` with the message; it never raises into the caller.
 
 | Cisco finding | Our `Finding` | Note |
 |---|---|---|
@@ -193,39 +197,7 @@ It does five things:
 | `rule_id` | `rule` | |
 | package version | — | Not stored per finding. Read once from `importlib.metadata` and recorded as `scanner_version` in the report header (`ReportMeta`); empty if the scanner did not run |
 
-Sketch:
-
-```python
-class CiscoBackend:
-    name = "cisco"
-
-    def available(self) -> bool:
-        return importlib.util.find_spec("skill_scanner") is not None
-
-    def scan(self, skill: Skill, tier: Tier) -> BackendResult:
-        if not self.available():
-            return BackendResult(self.name, "not-installed", tier, [])
-        try:
-            result = self._run(skill.path, tier)
-            status = "ok"
-        except SkillScannerError as e:
-            if tier is not Tier.DEEP:
-                return BackendResult(self.name, "error", tier, [], detail=str(e))
-            result = self._run(skill.path, Tier.STATIC)
-            status, tier = "llm-unavailable", Tier.STATIC
-        return BackendResult(self.name, status, tier,
-                             [self._convert(f) for f in result.findings])
-
-    def _run(self, skill_dir: Path, tier: Tier):
-        analyzers = default_analyzers()
-        if tier is Tier.DEEP:
-            analyzers.append(LLMAnalyzer(provider=..., model=..., api_key=...))
-        return SkillScanner(analyzers=analyzers).scan_skill(skill_dir)
-```
-
-Checked against version 2.2.1: `SkillScanner(analyzers=...)`, `scan_skill(path)`, `LLMAnalyzer(provider, model, api_key, base_url, ...)`, the finding fields above, and a `SkillScannerError` base exception all exist. The scan result also has an `llm_usage` field, which is where the per-scan token cost can be read from.
-
-**[VERIFY]** Which exception a `deep` scan raises when the LLM analyzer cannot start, and how to build the default analyzer list through the SDK. Neither has been run.
+The implementation, its tests against recorded scanner output, and the verification runs are in [safety/cisco.md](safety/cisco.md). The scan result's `llm_usage` field is where the per-scan token cost can be read from (open question 4).
 
 ### Score
 
@@ -251,7 +223,8 @@ Expands the `safety/` entry in section 6 of evaluate.md.
 
 ```
 metaskill/evaluate/safety/
-  __init__.py    # score(skill, tier) -> DimensionScore
+  __init__.py    # score(skill, config) -> DimensionScore; missing_dependencies(),
+                 #   versions(), local_warnings()
   findings.py    # Finding, BackendResult, severity scale, merge
   cisco.py       # Cisco backend: SDK call, category and severity mapping
   checks.py      # own deterministic checks (3.2)
@@ -273,15 +246,20 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 
 ## 8. Testing
 
-- Own checks: fixture skills in `tests/`, one clean and one per flaw.
-- Cisco adapter: tests run against recorded scanner output, so CI does not need the package installed. One test covers the "not installed" path and one the "LLM layer unavailable" path.
+- Own checks: fixture skills in `tests/safety/fixtures/skills/` (clean, one per category, warnings-only, confirmed), plus one test case per row of each table in [safety/checks.md](safety/checks.md).
+- Cisco adapter: tests run against scanner output recorded from real Hermes skills (`tests/safety/fixtures/cisco/`), so CI does not need the package installed. They cover not installed, both LLM failure modes, notices and routing. One test runs the real scanner and is skipped when it is not installed.
+- `score()`: fake backends, one test per row of the status table.
+- Local warnings: a temporary folder as the home directory, so tests never look at the real machine.
 - LLM review: fake judge returning canned output, including a finding whose quote is not in the skill, to assert it is dropped.
 - Real scanner and LLM runs are excluded from CI, as in section 8 of evaluate.md.
 
 ## 9. Limitations
 
 - No findings does not mean safe. The scanner we use says the same about itself.
-- Static false positives on ordinary skills. In the test in 3.1, 11 of the 59 installed Hermes skills had a HIGH or CRITICAL static finding. They have not been triaged, but at least one is a clear false positive: a CRITICAL "Function constructor" finding on a Playwright `page.waitForFunction('...')` call. With the worst-finding score in section 5, one such finding gives a skill the lowest score.
+- Static false positives on ordinary skills. With the worst-finding score in section 5, one such finding sets a skill's score. Known cases on the 59 local Hermes skills:
+  - Cisco: a CRITICAL "Function constructor" finding on a Playwright `page.waitForFunction('...')` call in `p5js` (score 0.0), and MEDIUM `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv, which is its purpose (score 0.6; open question 7). In the 8 Oct run, 11 skills had a HIGH or CRITICAL Cisco finding; the rest have not been triaged.
+  - Own checks: 6 skills at HIGH after three noisy rules were narrowed, results in [safety/checks.md](safety/checks.md). Two in `github` are likely legitimate, such as a git credential helper that must print its token.
+- The `deep` tier only partly reads large skills. Cisco's LLM analyzer has a context budget: on `p5js` it read about 20,000 characters of `SKILL.md` and skipped five reference files. `detail` lists what was skipped.
 - Low static recall. Without `deep`, most malicious skills pass undetected.
 - The LLM tier is not deterministic. Two runs can give different findings.
 - The confirmation check in 3.2 is a heuristic. A confirmation step written far from the command, or phrased unusually, will be missed and reported as a finding.
@@ -296,5 +274,5 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 3. Score values. (5)
 4. Per-scan token cost and the default cap. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
-6. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position). (3.1)
+6. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position, and Cisco itself depends on PyYAML). (3.1)
 7. Whether the `deep` review may ever make a result more lenient than the deterministic layers, by downgrading or clearing a finding. Example: Cisco's `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. If yes: which findings, by how much, keeping the original, and how to stop a skill talking the reviewer into it. Re-checking skipped warnings is not covered, because it can only add findings. See [safety/review.md](safety/review.md). (3.3)
