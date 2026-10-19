@@ -1,6 +1,6 @@
 # safety/__init__.py
 
-Status: built and tested (`tests/safety/test_score.py`). Until `checks.py` and `review.py` exist, the default backend list is Cisco only, and `checks_version` is empty.
+Status: built and tested (`tests/safety/test_score.py`). The default backends are Cisco and own checks; the LLM review is added at `deep` once `review.py` exists.
 
 `score()` also takes an optional `backends` list, used by tests to pass fake backends.
 

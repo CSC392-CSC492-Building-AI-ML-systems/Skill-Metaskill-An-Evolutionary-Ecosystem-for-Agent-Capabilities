@@ -3,6 +3,7 @@ from pathlib import Path
 from metaskill.evaluate import safety
 from metaskill.evaluate.models import (
     Dimension, EvaluationConfig, Finding, SafetyTier, Severity, Skill, Status)
+from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend
 from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, CiscoBackend
 from metaskill.evaluate.safety.findings import BackendResult, BackendStatus
 
@@ -149,10 +150,11 @@ def test_detail_is_empty_when_everything_ran_cleanly():
 # --- Defaults, dependencies and versions ---------------------------------------
 
 
-def test_default_backends_use_the_judge_model_for_cisco():
+def test_default_backends_are_cisco_and_own_checks():
     config = EvaluationConfig(judge_provider="anthropic", judge_model="some-model")
-    [cisco] = safety.default_backends(config)
+    cisco, own = safety.default_backends(config)
     assert isinstance(cisco, CiscoBackend)
+    assert isinstance(own, ChecksBackend)
     assert (cisco.llm_provider, cisco.llm_model) == ("anthropic", "some-model")
 
 
@@ -169,4 +171,6 @@ def test_missing_dependencies_is_empty_when_installed(monkeypatch):
 
 
 def test_versions_has_both_header_fields():
-    assert set(safety.versions()) == {"scanner_version", "checks_version"}
+    versions = safety.versions()
+    assert set(versions) == {"scanner_version", "checks_version"}
+    assert versions["checks_version"] == CHECKS_VERSION

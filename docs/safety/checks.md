@@ -1,6 +1,6 @@
 # checks.py
 
-Status: planned.
+Status: built and tested (`tests/safety/test_checks.py`, fixture skills in `tests/safety/fixtures/skills/`). Part of the default backends in `score()`.
 
 ## Purpose
 
@@ -98,7 +98,7 @@ The check cannot see the user's machine, so it cannot know what is actually at a
 
 Rules for judging a target:
 
-- **Rebuildable only when plain.** A relative path whose parts are all in the rebuildable list, such as `build/` or `./dist`, or a path under `/tmp/`. Any `..`, glob, variable or other absolute path makes it unknown. This stops `build/../../` from passing as `build/`.
+- **Rebuildable only when plain.** A relative path whose last part is in the rebuildable list, such as `build/`, `./dist` or `frontend/node_modules`, or a path under `/tmp/`. A trailing `/*` (the folder's contents) is allowed. Any `..`, other glob, variable or other absolute path makes it unknown. A path ending in `..`, such as `build/../../`, resolves to `..` and is CRITICAL, so it never passes as `build/`.
 - **Variables set in the same script are followed once.** `DIR=build` followed by `rm -rf "$DIR"` is judged as `build`. Only one literal assignment in the same file; anything else is unknown.
 - **Empty-variable guard.** `${DIR:?}` aborts when `DIR` is empty, so a guarded variable is judged as unknown, not CRITICAL.
 - **Placeholders are unknown.** A generalized skill's `rm -rf {{OUTPUT_DIR}}` deletes whatever folder each user configures, so it is HIGH.
@@ -123,7 +123,7 @@ A symlink with a rebuildable name does not appear by itself: someone has to crea
 | `bundle-symlink` | A symlink inside the skill's own files that points outside the skill | CRITICAL if a delete in the skill targets it, otherwise MEDIUM (`excess-scope`: a skill has no reason to link outside itself) |
 | `link-then-delete` | `ln -s` creating a link whose name a delete in the same skill targets with a form that follows links | CRITICAL |
 
-When either applies, the target is no longer judged rebuildable. The bundle is inspected with `lstat`, which reads the link itself without following it, and only inside the skill's folder.
+When either applies and the delete follows links, the target is CRITICAL. A delete that does not follow links, such as `rm -rf build`, removes only the link, so the target is judged as written. The bundle is inspected with `lstat`, which reads the link itself without following it, and only inside the skill's folder.
 
 What a static check cannot see is a symlink the user created on their own machine. That is covered by the local warnings ([local.md](local.md)) for paths that can be looked up, and later by the runner: task runs happen in a sandbox that only exposes the task's workspace, and comparing its files before and after a run shows what a delete actually removed.
 
@@ -146,9 +146,11 @@ This is a heuristic (limitation in section 9 of the safety design). A confirmati
 |---|---|---|
 | `echo-secret` | `echo` or `printf` of a variable whose name contains KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL or AUTH | HIGH |
 | `print-secret` | `print(`, `console.log(`, `logger.*(` of the same kinds of names | HIGH |
-| `env-dump` | `env` or `printenv` with no arguments; `print(os.environ)`; `console.log(process.env)` | HIGH |
+| `env-dump` | `env` or `printenv` with no arguments; `print(os.environ)`; `console.log(process.env)`. Code blocks and scripts only: in prose, `env` is usually a word or a config key | HIGH |
 | `cat-credentials` | `cat` of `.env`, `~/.aws/credentials`, `~/.netrc`, `*.pem`, `id_rsa` | HIGH |
 | `shell-trace` | `set -x` in a script that also reads a secret-named variable | MEDIUM |
+
+A name counts as a secret when one of its parts is KEY, TOKEN, SECRET, PASSWORD, PASSWD, PASS, CREDENTIAL or AUTH, split at underscores and camelCase. A name ending in PATH, FILE, DIR, URL, NAME, METHOD, TYPE, ID and similar is about a secret, not the secret, so `TOKEN_PATH` and `auth_url` do not count.
 
 Not covered here: secrets written into the skill itself (that is Configuration Cleanliness), and secrets sent to a third party (Cisco's `data_exfiltration`).
 
@@ -156,7 +158,7 @@ Not covered here: secrets written into the skill itself (that is Configuration C
 
 | Rule | Matches | Severity |
 |---|---|---|
-| `curl-pipe-shell` | `curl` or `wget` piped into `sh`, `bash`, `zsh`, `python` | HIGH |
+| `curl-pipe-shell` | `curl` or `wget` piped into `sh`, `bash`, `zsh`, `python`, also `bash <(curl ...)` and `sh -c "$(curl ...)"`. Not when the interpreter gets its own script (`python3 -c '...'`, `python3 parse.py`, `-m`): then the download is only parsed as data | HIGH |
 | `insecure-download` | `curl -k`, `--insecure`, `wget --no-check-certificate`, `pip --trusted-host`, downloads over `http://` | MEDIUM |
 | `unpinned-git-install` | `pip install git+...` or `npm install` from a git URL with no commit or tag | MEDIUM |
 | `unpinned-install` | `pip install name` with no version, `npm install -g name` with no version | LOW |
@@ -164,6 +166,22 @@ Not covered here: secrets written into the skill itself (that is Configuration C
 `unpinned-install` is common in legitimate skills and caps each of them at 0.9. It stays: it is a real, minor supply-chain risk, and skills doing the same job are affected equally, so their ranking barely changes.
 
 "Unknown source" in the safety design (an allowlist of trusted hosts) is not in version 1.
+
+## Results on real skills
+
+Run on 19 Oct 2026 against the 59 skills in a local `~/.hermes/skills`, static only:
+
+| Worst finding | Skills |
+|---|---|
+| None | 43 |
+| LOW (unpinned installs) | 10 |
+| HIGH | 6 |
+
+The first run had 18 skills at HIGH or above. Three rules were then narrowed: `curl | python3 -c` (parsing JSON, not running code), `` `env` `` in prose (a config key), and names like `TOKEN_PATH` (a path, not a secret). The six left:
+
+- Three real `curl | bash` installers: `hermes-agent`, `notion`, `xurl`.
+- Two deletes of a folder held in a variable that cannot be resolved: `rm -rf "$FRAME_DIR"` in `p5js`, `shutil.rmtree(segments_dir)` in `ascii-video`.
+- `github`: `print(token)` in a git credential helper, which must print the token for git by design, and `echo "Using: $AUTH"`. Both are flagged correctly by the rule but are likely legitimate: candidates for the golden dataset's known false positives.
 
 ## Finding fields
 
@@ -182,7 +200,7 @@ One finding per matched line per rule.
 
 ## Tests
 
-Fixture skills in `tests/safety/fixtures/skills/`. These are meant to become the golden dataset's safety cases later.
+Fixture skills in `tests/safety/fixtures/skills/`: `clean`, `destructive`, `credentials`, `untrusted`, `warnings-only` and `confirmed`. These are meant to become the golden dataset's safety cases later. Other cases are built in temporary folders by the tests.
 
 - `clean/`: no findings.
 - One skill per rule that should fire.

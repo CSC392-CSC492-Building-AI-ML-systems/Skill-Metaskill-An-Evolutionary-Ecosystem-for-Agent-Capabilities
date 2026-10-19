@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from metaskill.evaluate.models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, SafetyTier, Skill, Status)
+from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend
 from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
 from metaskill.evaluate.safety.findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
@@ -58,9 +59,12 @@ def score(skill: Skill, config: EvaluationConfig,
 def default_backends(config: EvaluationConfig) -> list[SafetyBackend]:
     """The backends for a tier: Cisco and own checks, plus the LLM review at deep.
 
-    Own checks (checks.py) and the LLM review (review.py) are not built yet.
+    The LLM review (review.py) is not built yet.
     """
-    return [CiscoBackend(llm_provider=config.judge_provider, llm_model=config.judge_model)]
+    return [
+        CiscoBackend(llm_provider=config.judge_provider, llm_model=config.judge_model),
+        ChecksBackend(),
+    ]
 
 
 def missing_dependencies() -> list[Dependency]:
@@ -77,7 +81,7 @@ def versions() -> dict[str, str]:
     """Backend versions for the report header (ReportMeta)."""
     return {
         "scanner_version": CiscoBackend().version(),
-        "checks_version": "",  # own checks are not built yet
+        "checks_version": CHECKS_VERSION,
     }
 
 

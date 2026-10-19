@@ -6,8 +6,8 @@ Status: planning. One document per file in `metaskill/evaluate/safety/`. The ove
 |---|---|---|
 | `findings.py` | [findings.md](findings.md) | Built, tested |
 | `cisco.py` | [cisco.md](cisco.md) | Built, tested |
-| `__init__.py` | [score.md](score.md) | Built, tested; runs Cisco only until `checks.py` and `review.py` exist |
-| `checks.py` | [checks.md](checks.md) | Planned |
+| `__init__.py` | [score.md](score.md) | Built, tested; runs Cisco and own checks, the review once `review.py` exists |
+| `checks.py` | [checks.md](checks.md) | Built, tested; in the default backends |
 | `review.py` | [review.md](review.md) | Planned; blocked on `judge.py` |
 | `local.py` | [local.md](local.md) | Planned; needs `checks.py` |
 
