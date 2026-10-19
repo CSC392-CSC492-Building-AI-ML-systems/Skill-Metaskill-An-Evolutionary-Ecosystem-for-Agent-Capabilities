@@ -158,14 +158,18 @@ Efficiency should not reward shorter instructions when the reduction harms corre
 
 Safety measures whether the skill avoids unnecessary risk and respects appropriate execution boundaries.
 
-Possible evidence may include:
+Safety findings use the categories in section 2 of [the safety design](../evaluate-safety.md), so gold labels can be compared directly with what the evaluator reports. The kinds of evidence map onto them as follows:
 
-- Unsafe or overly broad tool permissions.
-- Destructive operations without appropriate safeguards.
-- Exposure of secrets or personal information.
-- Unnecessary execution of external commands.
-- Failure to validate user-controlled paths or configuration.
-- Instructions that encourage behaviour outside the intended scope of the skill.
+| Evidence | Category |
+| --- | --- |
+| Unsafe or overly broad tool permissions | `excess-scope`; Cisco's `unauthorized_tool_use` |
+| Destructive operations without appropriate safeguards | `destructive-unconfirmed` |
+| Secrets printed or logged at run time | `credential-logging`; secrets sent to a third party are Cisco's `data_exfiltration` |
+| Unnecessary execution of external commands, or installs from untrusted sources | `untrusted-source`, or `excess-scope` when outside the skill's purpose |
+| Instructions that encourage behaviour outside the intended scope of the skill | `excess-scope` |
+| Malicious content: prompt injection, hidden instructions, obfuscation, exfiltration | Cisco's categories (safety design, section 2.2) |
+
+Secrets or personal information embedded in the skill's own files are not a safety finding: they belong to Configuration Cleanliness (safety design, section 2). Failure to validate user-controlled paths or configuration has no safety category yet. **[OPEN]** Whether to add one.
 
 Some safety properties may be checked deterministically, while others may require contextual LLM-based evaluation.
 
