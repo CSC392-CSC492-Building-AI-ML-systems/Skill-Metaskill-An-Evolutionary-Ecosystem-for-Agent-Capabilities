@@ -78,7 +78,7 @@ class CiscoBackend:
                     analyzers = self._build_deep_analyzers()
                 except LLMSetupError as e:
                     result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)
-                    return _fell_back(result, f"LLM analyzer could not start: {e}")
+                    return _fell_back(result, str(e))  # e.g. "the LLM analyzer could not be loaded: ..."
                 return convert(self._run_scanner(skill.path, analyzers), tier)
             return convert(self._run_scanner(skill.path, None), tier)
         except Exception as e:  # never raise into the caller
