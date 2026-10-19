@@ -1,6 +1,6 @@
 # cisco.py
 
-Status: planned. Scanner behaviour below was verified by running Cisco skill-scanner 2.2.1 on 15 Oct 2026 against `~/.hermes/skills/creative/p5js`. The LLM failure case was tested against an unreachable local endpoint, so no skill content was sent anywhere.
+Status: built and tested (`tests/safety/test_cisco.py`). Scanner behaviour below was verified by running Cisco skill-scanner 2.2.1 on 15 Oct 2026 against `~/.hermes/skills/creative/p5js`. The LLM failure case was tested against an unreachable local endpoint, so no skill content was sent anywhere.
 
 ## Purpose
 
@@ -91,15 +91,17 @@ Converting from `to_dict()` rather than from the scanner's objects means the rea
 | — | `source` | `"cisco"` |
 | `rule_id` | `rule` | Unchanged |
 
+Findings with the scanner's sixth severity, `SAFE`, are skipped. In 2.2.1 the scanner only uses `SAFE` as the summary severity of a result with no findings, never on a finding; the check stops a future one from crashing the conversion, since our scale has no `SAFE`.
+
 ### Scanner notices are not findings
 
 `LLM_ANALYSIS_FAILED` and `LLM_CONTEXT_BUDGET_EXCEEDED` describe the scan, not the skill. Passed through, they would cap any large skill at 0.9 (INFO under the worst-finding table) for being large, and penalize a skill when the API is down. The adapter drops them from findings and summarizes them in `detail`, for example "LLM analysis skipped 5 files over the context budget".
 
-The list of notice rule IDs lives in one constant, so new ones are easy to add when the scanner is upgraded.
+Decided. The list of notice rule IDs lives in one constant (`SCANNER_NOTICES`), so new ones are easy to add when the scanner is upgraded.
 
 ### Routed categories
 
-Open question 6 in the safety design: Cisco's `hardcoded_secrets` and `policy_violation` are not about harm to the user. **Proposed:** keep them with `dimension = config_cleanliness`. They stay in the report as evidence, `findings.py` already ignores them for the safety score, and Configuration Cleanliness can decide later whether to use them. Changing this is one constant.
+Decided: Cisco's `hardcoded_secrets` and `policy_violation` are not about harm to the user, so they are kept with `dimension = config_cleanliness` (`ROUTED_CATEGORIES`). They stay in the report as evidence, `findings.py` already ignores them for the safety score, and Configuration Cleanliness can decide later whether to use them. Changing this is one constant.
 
 ## Configuration it needs
 

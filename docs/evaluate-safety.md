@@ -53,12 +53,14 @@ The complete list from Cisco skill-scanner 2.2.1, read from the installed packag
 | `autonomy_abuse` | Unbounded autonomous retries or actions | Yes |
 | `resource_abuse` | Compute exhaustion, such as infinite loops | Yes |
 | `harmful_content` | Instructions to produce prohibited harmful content | Yes |
-| `hardcoded_secrets` | Credentials embedded in the skill | **[OPEN]**, see below |
-| `policy_violation` | Packaging rules: skill naming, description length, missing license, archive or binary files in the package | **[OPEN]**, see below |
+| `hardcoded_secrets` | Credentials embedded in the skill | No: routed to Configuration Cleanliness, see below |
+| `policy_violation` | Packaging rules: skill naming, description length, missing license, archive or binary files in the package | No: routed to Configuration Cleanliness, see below |
 
 Personal config, hardcoded secrets and placeholders left behind by `generalize` are not scored here. They make a skill unclean, not unsafe to run, and Configuration Cleanliness (3.4 of evaluate.md) already penalizes them. A skill that sends credentials to a third party is covered by `data_exfiltration`.
 
-**[OPEN]** Two scanner categories are not about harm to the person running the skill: `hardcoded_secrets` is a cleanliness issue, and `policy_violation` is packaging hygiene. To discuss for each: the adapter can drop those findings by filtering on category, pass them to Configuration Cleanliness, or keep them in the safety evidence without letting them affect the score.
+Two scanner categories are not about harm to the person running the skill: `hardcoded_secrets` is a cleanliness issue, and `policy_violation` is packaging hygiene. The adapter keeps them but sets their `dimension` to `config_cleanliness`. They stay in the report as evidence, never affect the safety score, and Configuration Cleanliness can use them or not.
+
+The scanner's own diagnostic notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET_EXCEEDED`) also arrive as `policy_violation` findings. They describe the scan, not the skill, so they are not findings at all: the adapter moves them into the result's `detail` (see [safety/cisco.md](safety/cisco.md)).
 
 ## 3. Backends
 
@@ -290,5 +292,5 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 3. Score values. (5)
 4. Per-scan token cost and the default cap. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
-6. What to do with the scanner's `hardcoded_secrets` and `policy_violation` findings: drop, hand to Configuration Cleanliness, or keep as unscored evidence. (2)
-7. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position). (3.1)
+6. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position). (3.1)
+7. Whether the `deep` LLM review may downgrade Cisco findings it judges in scope for the skill's purpose, such as `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. See [safety/review.md](safety/review.md). (3.3)

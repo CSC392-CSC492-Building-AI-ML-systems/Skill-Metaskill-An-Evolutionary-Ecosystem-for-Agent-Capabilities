@@ -5,7 +5,7 @@ Status: planning. One document per file in `metaskill/evaluate/safety/`. The ove
 | File | Document | State |
 |---|---|---|
 | `findings.py` | [findings.md](findings.md) | Built, tested |
-| `cisco.py` | [cisco.md](cisco.md) | Planned; scanner behaviour verified |
+| `cisco.py` | [cisco.md](cisco.md) | Built, tested |
 | `__init__.py` | [score.md](score.md) | Planned |
 | `checks.py` | [checks.md](checks.md) | Planned |
 | `review.py` | [review.md](review.md) | Planned; blocked on `judge.py` |
@@ -53,8 +53,8 @@ Collected from the documents below. Each is explained where it appears.
 | # | Decision | Where | Proposed |
 |---|---|---|---|
 | 1 | `scan()` takes a loaded `Skill` instead of a directory | [findings.md](findings.md) | **Decided: yes** |
-| 2 | Scanner notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET_EXCEEDED`) go in `detail`, not findings | [cisco.md](cisco.md) | Yes |
-| 3 | Cisco's `hardcoded_secrets` and `policy_violation` findings | [cisco.md](cisco.md) | Keep as evidence under Configuration Cleanliness, not scored in safety |
+| 2 | Scanner notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET_EXCEEDED`) go in `detail`, not findings | [cisco.md](cisco.md) | **Decided: yes** |
+| 3 | Cisco's `hardcoded_secrets` and `policy_violation` findings | [cisco.md](cisco.md) | **Decided:** routed to Configuration Cleanliness as evidence, not scored in safety |
 | 4 | Status when only some backends ran | [score.md](score.md) | Table in score.md |
 | 5 | Own checks only read code blocks and scripts, not prose | [checks.md](checks.md) | Yes |
 | 6 | Severity per own-check rule | [checks.md](checks.md) | Table in checks.md |

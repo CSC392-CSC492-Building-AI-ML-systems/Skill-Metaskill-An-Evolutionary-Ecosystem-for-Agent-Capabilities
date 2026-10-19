@@ -221,7 +221,7 @@ How hard is it to get the skill working, and is that effort necessary? Signals:
 - Placeholders (`{{...}}`) that map to a documented config entry count **positively**. This is what `generalize` produces.
 - Penalties for hardcoded paths, usernames, hosts, or credentials (reuses `generalize` detection), for undocumented placeholders, and for config that the skill body never uses.
 - An LLM check for setup steps that could be simplified or removed.
-- **[OPEN]** Whether this dimension also consumes the safety scanner's `hardcoded_secrets` and `policy_violation` findings, which are cleanliness issues, not safety ones. See [evaluate-safety.md](evaluate-safety.md), section 2.
+- The safety scanner's `hardcoded_secrets` and `policy_violation` findings are routed here (`dimension: config_cleanliness`), since they are cleanliness issues, not safety ones. See [evaluate-safety.md](evaluate-safety.md), section 2.2. **[OPEN]** Whether and how they affect this dimension's score.
 
 ### 3.5 Efficiency
 
