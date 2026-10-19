@@ -1,3 +1,5 @@
+import sys
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -6,14 +8,18 @@ import pytest
 from metaskill.evaluate.judge import (
     JUDGE_TASK,
     Criterion,
+    DeterministicJudge,
     Judge,
     JudgeError,
     JudgeUnavailable,
+    RunOutput,
     locate,
+    make_judge,
     skill_sources,
 )
 from metaskill.evaluate.models import (
     Check,
+    CheckKind,
     Dimension,
     EvaluationConfig,
     JudgeType,
@@ -237,3 +243,95 @@ def test_check_counts_unverified_and_missing_items_as_unmet():
 
     verdict = judge({"items": []}).check(TASK, OUTPUT, TASK.checks[0].checklist)
     assert verdict.score == 0.0 and verdict.evidence is None
+
+
+def test_judge_runs_the_checklist_of_an_llm_check(tmp_path):
+    j = judge({"items": [
+        {"item": 1, "met": True, "reason": "", "quote": "Removed build/"},
+        {"item": 2, "met": True, "reason": "", "quote": "deleted 12 files"},
+    ]})
+    verdict = j.judge(TASK, TASK.checks[0], RunOutput(OUTPUT, tmp_path))
+    assert verdict.passed and verdict.score == 1.0
+
+
+# --- DeterministicJudge -----------------------------------------------------
+
+
+def deterministic(kind, target="", expected=""):
+    return Check(judge=JudgeType.DETERMINISTIC, kind=kind, target=target, expected=expected)
+
+
+def run_in(tmp_path, text=OUTPUT):
+    return RunOutput(text, tmp_path)
+
+
+def test_file_exists(tmp_path):
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "report.txt").write_text("x", encoding="utf-8")
+    j = DeterministicJudge()
+    hit = j.judge(TASK, deterministic(CheckKind.FILE_EXISTS, "out/report.txt"), run_in(tmp_path))
+    miss = j.judge(TASK, deterministic(CheckKind.FILE_EXISTS, "missing.txt"), run_in(tmp_path))
+    assert (hit.passed, hit.score, hit.evidence) == (True, 1.0, None)
+    assert (miss.passed, miss.score) == (False, 0.0)
+
+
+def test_file_exists_refuses_paths_outside_the_run_folder(tmp_path):
+    with pytest.raises(JudgeError):
+        DeterministicJudge().judge(
+            TASK, deterministic(CheckKind.FILE_EXISTS, "../elsewhere"), run_in(tmp_path))
+
+
+def test_exit_code(tmp_path):
+    j = DeterministicJudge()
+    ok = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "exit 0"), run_in(tmp_path))
+    three = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "exit 3", "3"), run_in(tmp_path))
+    wrong = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "exit 1"), run_in(tmp_path))
+    assert ok.passed and three.passed and not wrong.passed
+    assert "exited 1, expected 0" in wrong.reason
+
+
+def test_exit_code_runs_in_the_run_folder(tmp_path):
+    (tmp_path / "marker").write_text("", encoding="utf-8")
+    check = deterministic(
+        CheckKind.EXIT_CODE,
+        f'"{sys.executable}" -c "import os, sys; sys.exit(not os.path.exists(\'marker\'))"')
+    assert DeterministicJudge().judge(TASK, check, run_in(tmp_path)).passed
+
+
+def test_exit_code_rejects_non_integer_expected(tmp_path):
+    with pytest.raises(JudgeError):
+        DeterministicJudge().judge(
+            TASK, deterministic(CheckKind.EXIT_CODE, "exit 0", "zero"), run_in(tmp_path))
+
+
+def test_output_matches(tmp_path):
+    j = DeterministicJudge()
+    assert j.judge(TASK, deterministic(CheckKind.OUTPUT_MATCHES, expected=r"^Done: deleted \d+"),
+                   run_in(tmp_path)).passed
+    assert not j.judge(TASK, deterministic(CheckKind.OUTPUT_MATCHES, expected="error"),
+                       run_in(tmp_path)).passed
+    with pytest.raises(JudgeError):
+        j.judge(TASK, deterministic(CheckKind.OUTPUT_MATCHES, expected="("), run_in(tmp_path))
+
+
+def test_judges_refuse_the_other_kind_of_check(tmp_path):
+    with pytest.raises(ValueError):
+        DeterministicJudge().judge(TASK, TASK.checks[0], run_in(tmp_path))
+    with pytest.raises(ValueError):
+        judge().judge(TASK, deterministic(CheckKind.OUTPUT_MATCHES, expected="x"), run_in(tmp_path))
+
+
+# --- make_judge -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("judge_type", [JudgeType.DETERMINISTIC, "deterministic"])
+def test_make_judge_deterministic_needs_no_context(judge_type):
+    j = make_judge(judge_type)
+    assert isinstance(j, DeterministicJudge) and j.judge_type is JudgeType.DETERMINISTIC
+
+
+def test_make_judge_llm():
+    j = make_judge(JudgeType.LLM, ctx=SimpleNamespace(llm=FakeLlm()), config=EvaluationConfig())
+    assert isinstance(j, Judge) and j.judge_type is JudgeType.LLM
+    with pytest.raises(JudgeUnavailable):
+        make_judge("llm")

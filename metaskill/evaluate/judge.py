@@ -1,7 +1,13 @@
-"""General LLM judge: the one interface between the evaluate module and the judge model.
+"""Judges: the LLM judge, and the deterministic judge for task checks.
 
+The LLM judge is the one interface between the evaluate module and the judge model.
 clarity.py, safety/review.py and the LLM part of config_cleanliness.py call the model
 through this module, never directly (docs/evaluate.md, section 6).
+
+Task outcomes are judged in one of two ways (evaluate.md 4.2): `DeterministicJudge`
+(file exists, exit code, output matches) or `Judge` with a checklist. Both implement
+`TaskJudge`, so runner.py picks one with `make_judge(JudgeType.LLM | DETERMINISTIC, ...)`
+and calls `judge(task, check, run)` the same way on either.
 
 The model is reached through Hermes' plugin LLM access (`ctx.llm`), so the judge runs on
 the user's own provider and credentials and the plugin never handles an API key. Calls go
@@ -15,13 +21,19 @@ there is dropped (evaluate.md 3.3, evaluate-safety.md 3.3).
 
 from __future__ import annotations
 
+import re
+import subprocess
 from dataclasses import dataclass
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, ClassVar, Protocol
 
 from .models import (
+    Check,
+    CheckKind,
     Dimension,
     EvaluationConfig,
     Finding,
+    JudgeType,
     RubricRating,
     Severity,
     Skill,
@@ -110,24 +122,48 @@ class Criterion:
 
 
 @dataclass
-class ChecklistVerdict:
-    """Outcome of judging one task output against its checklist (evaluate.md 4.2).
+class Verdict:
+    """Outcome of judging one task run against one check (evaluate.md 4.2).
 
     Maps onto TestResult.passed, score, reason and evidence.
     """
 
     passed: bool
-    score: float  # fraction of checklist items met
+    score: float  # in [0, 1]; for a checklist, the fraction of items met
     reason: str
-    evidence: str | None
+    evidence: str | None  # quoted output for LLM judging, otherwise None
+
+
+@dataclass
+class RunOutput:
+    """What one agent run left behind, as the task judges see it."""
+
+    text: str  # the agent's final output
+    workdir: Path  # where the run happened; check targets resolve against it
+
+
+class TaskJudge(Protocol):
+    """Judges task runs. runner.py depends on this, not on a concrete judge."""
+
+    judge_type: ClassVar[JudgeType]
+
+    def judge(self, task: Task, check: Check, run: RunOutput) -> Verdict: ...
+
+
+def _require(judge: TaskJudge, check: Check) -> None:
+    if check.judge is not judge.judge_type:
+        raise ValueError(
+            f"{type(judge).__name__} cannot judge a {check.judge.value} check")
 
 
 class Judge:
     """The judge model, behind Hermes' `ctx.llm`. Tests pass a fake `llm` instead.
 
     JudgeUnavailable is only known once a call is made, so callers catch it around
-    rate, review and check, not just at construction.
+    rate, review, check and judge, not just at construction.
     """
+
+    judge_type: ClassVar[JudgeType] = JudgeType.LLM
 
     def __init__(self, llm: PluginLlm, *, task: str = JUDGE_TASK,
                  provider: str = "", model: str = ""):
@@ -271,7 +307,12 @@ class Judge:
             ))
         return findings
 
-    def check(self, task: Task, output: str, checklist: list[str]) -> ChecklistVerdict:
+    def judge(self, task: Task, check: Check, run: RunOutput) -> Verdict:
+        """TaskJudge entry point: judge the run's output against the check's checklist."""
+        _require(self, check)
+        return self.check(task, run.text, check.checklist)
+
+    def check(self, task: Task, output: str, checklist: list[str]) -> Verdict:
         """Judge an agent's output for a task against a checklist (evaluate.md 4.2).
 
         An item counts as met only if the judge says so and its quote is in the
@@ -312,12 +353,92 @@ class Judge:
                 for n in unmet)
         else:
             reason = "all checklist items met"
-        return ChecklistVerdict(
+        return Verdict(
             passed=not unmet,
             score=len(met) / len(checklist),
             reason=reason,
             evidence="\n".join(met[n] for n in sorted(met)) or None,
         )
+
+
+class DeterministicJudge:
+    """Judges a run with a machine-checkable condition (evaluate.md 4.2). No model call.
+
+    A check that cannot be evaluated as written (bad regex, non-integer exit code, a
+    path outside the run folder) raises JudgeError: the task is broken, not the skill.
+    """
+
+    judge_type: ClassVar[JudgeType] = JudgeType.DETERMINISTIC
+
+    def __init__(self, *, timeout: float = 60.0):
+        self.timeout = timeout  # seconds an EXIT_CODE command may run
+
+    def judge(self, task: Task, check: Check, run: RunOutput) -> Verdict:
+        _require(self, check)
+        if check.kind is CheckKind.FILE_EXISTS:
+            return self._file_exists(check, run)
+        if check.kind is CheckKind.EXIT_CODE:
+            return self._exit_code(check, run)
+        if check.kind is CheckKind.OUTPUT_MATCHES:
+            return self._output_matches(check, run)
+        raise JudgeError(f"task {task.task_id}: unknown check kind {check.kind}")
+
+    def _file_exists(self, check: Check, run: RunOutput) -> Verdict:
+        if not check.target:
+            raise JudgeError("a file_exists check needs a target path")
+        root = run.workdir.resolve()
+        path = (root / check.target).resolve()
+        if not path.is_relative_to(root):
+            raise JudgeError(f"file_exists target {check.target} is outside the run folder")
+        found = path.exists()
+        return _binary(found, f"{check.target} {'exists' if found else 'does not exist'}")
+
+    def _exit_code(self, check: Check, run: RunOutput) -> Verdict:
+        if not check.target:
+            raise JudgeError("an exit_code check needs a target command")
+        try:
+            expected = int(check.expected or "0")
+        except ValueError:
+            raise JudgeError(
+                f"exit_code expected must be an integer, got {check.expected!r}") from None
+        try:
+            # Task commands are human-written (evaluate.md 4.3), so a shell is fine here.
+            result = subprocess.run(
+                check.target, shell=True, cwd=run.workdir, capture_output=True,
+                text=True, timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            return _binary(False, f"`{check.target}` timed out after {self.timeout:g}s")
+        reason = f"`{check.target}` exited {result.returncode}, expected {expected}"
+        if result.returncode != expected and result.stderr.strip():
+            reason += f": {result.stderr.strip()[-200:]}"
+        return _binary(result.returncode == expected, reason)
+
+    def _output_matches(self, check: Check, run: RunOutput) -> Verdict:
+        try:
+            pattern = re.compile(check.expected, re.MULTILINE)
+        except re.error as e:
+            raise JudgeError(f"output_matches regex {check.expected!r} is invalid: {e}") from e
+        found = pattern.search(run.text) is not None
+        return _binary(
+            found, f"output {'matches' if found else 'does not match'} /{check.expected}/")
+
+
+def _binary(passed: bool, reason: str) -> Verdict:
+    return Verdict(passed=passed, score=1.0 if passed else 0.0, reason=reason, evidence=None)
+
+
+def make_judge(judge_type: JudgeType | str, *, ctx: Any = None,
+               config: EvaluationConfig | None = None, timeout: float = 60.0) -> TaskJudge:
+    """The task judge of the given type, e.g. `make_judge(check.judge, ctx=ctx, config=c)`.
+
+    The LLM judge needs the plugin context; without it this raises JudgeUnavailable.
+    """
+    judge_type = JudgeType(judge_type)
+    if judge_type is JudgeType.DETERMINISTIC:
+        return DeterministicJudge(timeout=timeout)
+    if ctx is None:
+        raise JudgeUnavailable("the LLM judge needs the plugin context (ctx.llm)")
+    return Judge.from_context(ctx, config or EvaluationConfig())
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:
