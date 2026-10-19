@@ -28,7 +28,7 @@ Every category a finding can have. A finding from our own checks or the LLM revi
 | `destructive-unconfirmed` | Recursive delete, force push, database drop or disk write with no confirmation step | Own checks |
 | `credential-logging` | Instructions that make the agent print or log the user's credentials at run time | Own checks |
 | `untrusted-source` | Unpinned install, `curl \| sh`, download from an unknown source | Own checks |
-| `excess-scope` | Broad permissions, or side effects outside the skill's stated purpose | LLM review |
+| `excess-scope` | Broad permissions, or side effects outside the skill's stated purpose | LLM review; own checks for symlinks in the skill pointing outside it |
 
 `destructive-unconfirmed` and `credential-logging` are covered by no scanner category, so they are the part of this component that is new. `untrusted-source` overlaps with the scanner's `supply_chain_attack`, and `excess-scope` with `unauthorized_tool_use` and `autonomy_abuse`; overlapping findings at the same location are merged (section 5).
 
@@ -90,7 +90,7 @@ Each finding returned by the SDK has `rule_id`, `category`, `severity`, `file_pa
 
 ### 3.2 Own checks
 
-Deterministic rules over the skill's markdown and bundled scripts, for `destructive-unconfirmed`, `credential-logging` and `untrusted-source`.
+Deterministic rules over the skill's markdown and bundled scripts, for `destructive-unconfirmed`, `credential-logging` and `untrusted-source`. Everything is scanned, prose included. A match in prose that the same sentence warns against ("never run `rm -rf`") is skipped and listed in `detail` rather than reported. Full rules in [safety/checks.md](safety/checks.md).
 
 - `destructive-unconfirmed`: match a list of destructive commands, then look for a confirmation step (ask, confirm, dry run, backup) in the same step or the one before it. A match with no confirmation is a finding.
 - `credential-logging`: match commands that write a secret to the terminal or a log, such as echoing a key or token variable, dumping the environment, or printing a credentials file.
@@ -100,6 +100,8 @@ The rule set has a version number, bumped whenever a rule is added or changed, a
 ### 3.3 LLM review
 
 One call through `judge.py`, asking about the three careless categories plus `excess-scope`, which needs the skill's stated purpose and cannot be done by pattern matching. The judge must quote the text behind each finding, and the quote is checked programmatically to be a real substring of the skill; findings with a quote that is not in the skill are dropped.
+
+The review also re-checks the prose matches the own checks skipped as warnings, and can restore any that is a real instruction. It can only restore, never remove, so a prompt injection cannot make a skill look safer than the static result. Details and the restrictions on the call in [safety/review.md](safety/review.md).
 
 ### 3.4 Considered: NVIDIA SkillSpector
 
@@ -254,6 +256,7 @@ metaskill/evaluate/safety/
   cisco.py       # Cisco backend: SDK call, category and severity mapping
   checks.py      # own deterministic checks (3.2)
   review.py      # LLM review via judge.py, quote verification (3.3)
+  local.py       # warnings about this machine's files; never scored (safety/local.md)
 ```
 
 ## 7. Validation
@@ -282,6 +285,7 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 - Low static recall. Without `deep`, most malicious skills pass undetected.
 - The LLM tier is not deterministic. Two runs can give different findings.
 - The confirmation check in 3.2 is a heuristic. A confirmation step written far from the command, or phrased unusually, will be missed and reported as a finding.
+- The warning check in 3.2 is also a heuristic. An unusually phrased sentence can be misread as a warning and skipped. Skipped matches are listed in `detail`, and the `deep` review re-checks them; at `static` they stay skipped.
 - We read instructions, not behaviour. A skill that fetches its real instructions at run time looks clean.
 - Cisco's published accuracy does not cover our careless categories; only our own validation set does, and it is small.
 
@@ -293,4 +297,4 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 4. Per-scan token cost and the default cap. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
 6. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position). (3.1)
-7. Whether the `deep` LLM review may downgrade Cisco findings it judges in scope for the skill's purpose, such as `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. See [safety/review.md](safety/review.md). (3.3)
+7. Whether the `deep` review may ever make a result more lenient than the deterministic layers, by downgrading or clearing a finding. Example: Cisco's `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. If yes: which findings, by how much, keeping the original, and how to stop a skill talking the reviewer into it. Re-checking skipped warnings is not covered, because it can only add findings. See [safety/review.md](safety/review.md). (3.3)

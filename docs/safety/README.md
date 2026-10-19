@@ -6,9 +6,10 @@ Status: planning. One document per file in `metaskill/evaluate/safety/`. The ove
 |---|---|---|
 | `findings.py` | [findings.md](findings.md) | Built, tested |
 | `cisco.py` | [cisco.md](cisco.md) | Built, tested |
-| `__init__.py` | [score.md](score.md) | Planned |
+| `__init__.py` | [score.md](score.md) | Built, tested; runs Cisco only until `checks.py` and `review.py` exist |
 | `checks.py` | [checks.md](checks.md) | Planned |
 | `review.py` | [review.md](review.md) | Planned; blocked on `judge.py` |
+| `local.py` | [local.md](local.md) | Planned; needs `checks.py` |
 
 ## How the files fit together
 
@@ -28,6 +29,8 @@ runner ──► safety.score(skill, config)                    __init__.py
 ```
 
 Each backend is independent: it only knows how to scan a skill and return a `BackendResult`. `__init__.py` is the only file that knows about all of them.
+
+`local.py` is not a backend and never affects the score. It looks up the skill's delete targets on the user's machine and warns if running the skill here would delete something important.
 
 ## Build order
 
@@ -56,6 +59,8 @@ Collected from the documents below. Each is explained where it appears.
 | 2 | Scanner notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET_EXCEEDED`) go in `detail`, not findings | [cisco.md](cisco.md) | **Decided: yes** |
 | 3 | Cisco's `hardcoded_secrets` and `policy_violation` findings | [cisco.md](cisco.md) | **Decided:** routed to Configuration Cleanliness as evidence, not scored in safety |
 | 4 | Status when only some backends ran | [score.md](score.md) | Table in score.md |
-| 5 | Own checks only read code blocks and scripts, not prose | [checks.md](checks.md) | Yes |
-| 6 | Severity per own-check rule | [checks.md](checks.md) | Table in checks.md |
+| 5 | What the own checks scan | [checks.md](checks.md) | **Decided:** everything; prose matches that look like warnings are skipped and listed, and re-checked at `deep` |
+| 6 | Severity per own-check rule | [checks.md](checks.md) | **Decided:** tables in checks.md; delete severity set by the target |
 | 7 | Review asks about all four of our categories, not only `excess-scope` | [review.md](review.md) | Yes |
+| 8 | Local warnings are shown and kept in the report, marked as local, but never scored | [local.md](local.md) | **Decided** |
+| 9 | Where local warnings live in the report (`models.py`, evaluate.md §2.1) | [local.md](local.md) | `local_warnings` on `SkillResult` |
