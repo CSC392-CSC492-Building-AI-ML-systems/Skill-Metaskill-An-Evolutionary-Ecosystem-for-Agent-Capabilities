@@ -1,6 +1,6 @@
 # local.py
 
-Status: planned. Needs `checks.py`, which provides the delete targets.
+Status: built and tested (`tests/safety/test_local.py`). Called through `safety.local_warnings(skill, config_values)`, which gets the targets from `checks.delete_targets()`. On the 59 local Hermes skills it raised no warnings: their only two unconfirmed delete targets are variables that cannot be resolved on this machine.
 
 ## Purpose
 
@@ -20,14 +20,16 @@ class LocalWarning:
     target: str          # the path as written in the skill, e.g. "~/Documents/drafts"
     resolved: str        # the real path on this machine
     location: str        # where the delete is in the skill, e.g. "SKILL.md:14"
-    reasons: list[str]   # e.g. ["contains 312 files", "is a git repository"]
+    reasons: list[str]   # e.g. ["contains 312 files", "is or contains a git repository"]
     message: str         # one sentence for the user
 
 def local_warnings(skill: Skill, targets: list[DeleteTarget],
-                   config: dict[str, str] | None = None) -> list[LocalWarning]: ...
+                   config: dict[str, str] | None = None, *,
+                   env: dict[str, str] | None = None,
+                   home: str | Path | None = None) -> list[LocalWarning]: ...
 ```
 
-`targets` comes from `checks.delete_targets(skill)`. `config` is the user's personalization values, when the skill is a generalized one with placeholders.
+`targets` comes from `checks.delete_targets(skill)`. `config` is the user's personalization values, when the skill is a generalized one with placeholders. `env` and `home` default to the real environment and home folder; tests pass their own. `LocalWarning` is defined in `models.py`, since it is part of the report.
 
 ## Which targets are checked
 
@@ -51,7 +53,7 @@ Each resolved target is looked up. A warning is raised if any of these hold:
 |---|---|
 | It is a symlink | "is a link to `~/thesis`; deleting through it removes `~/thesis`" (only for delete forms that follow links, see [checks.md](checks.md)) |
 | It is the home folder, or a top-level home folder: `~/Documents`, `~/Desktop`, `~/Pictures`, `~/Downloads`, `~/Music`, `~/Videos` | "is your Documents folder" |
-| It contains a git repository | "is a git repository" |
+| It is or contains a git repository (a `.git` folder or file) | "is or contains a git repository" |
 | It contains many files | "contains 312 files" (threshold: 100) |
 | It contains recently changed files | "has files changed in the last 7 days" |
 
@@ -62,7 +64,7 @@ A target that does not exist raises no warning. Thresholds are a first version.
 Looking at the user's files must be harmless:
 
 - **Metadata only.** It uses `lstat`, `readlink` and directory listings. It never opens or reads a file's contents.
-- **Never follows links while counting**, so a link cannot send it walking the whole disk.
+- **Never follows links while counting**, so a link cannot send it walking the whole disk. Links inside a folder are not counted at all: deleting the folder removes the link, not what it points to.
 - **Bounded:** counting stops at 10,000 entries and after one second per target, and reports "at least 10,000 files".
 - **Never changes anything.** No file is created, moved or deleted.
 
@@ -72,10 +74,7 @@ Looking at the user's files must be harmless:
 - **Report:** a `local_warnings` list on each skill, separate from `findings`, marked as specific to this machine. It never enters the scores or the ranking.
 - **Privacy:** warnings contain real paths and file counts from the user's machine. If a report is shared, for example as a golden dataset case, `local_warnings` should be removed first.
 
-This needs two small changes outside safety:
-
-1. `models.py`: a `LocalWarning` type and a `local_warnings` field on `SkillResult`, with `to_dict` and `from_dict`.
-2. evaluate.md §2.1: the new field in the report format.
+Two changes outside safety were made for this: a `LocalWarning` type and a `local_warnings` field on `SkillResult` in `models.py`, and the new field in evaluate.md §2.1. Filling it in is the runner's job, which does not exist yet.
 
 ## Tests
 

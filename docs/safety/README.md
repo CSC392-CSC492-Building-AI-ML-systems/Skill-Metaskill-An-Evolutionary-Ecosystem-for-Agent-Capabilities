@@ -9,7 +9,7 @@ Status: planning. One document per file in `metaskill/evaluate/safety/`. The ove
 | `__init__.py` | [score.md](score.md) | Built, tested; runs Cisco and own checks, the review once `review.py` exists |
 | `checks.py` | [checks.md](checks.md) | Built, tested; in the default backends |
 | `review.py` | [review.md](review.md) | Planned; blocked on `judge.py` |
-| `local.py` | [local.md](local.md) | Planned; needs `checks.py` |
+| `local.py` | [local.md](local.md) | Built, tested; called by the runner once it exists |
 
 ## How the files fit together
 
@@ -63,4 +63,4 @@ Collected from the documents below. Each is explained where it appears.
 | 6 | Severity per own-check rule | [checks.md](checks.md) | **Decided:** tables in checks.md; delete severity set by the target |
 | 7 | Review asks about all four of our categories, not only `excess-scope` | [review.md](review.md) | Yes |
 | 8 | Local warnings are shown and kept in the report, marked as local, but never scored | [local.md](local.md) | **Decided** |
-| 9 | Where local warnings live in the report (`models.py`, evaluate.md §2.1) | [local.md](local.md) | `local_warnings` on `SkillResult` |
+| 9 | Where local warnings live in the report (`models.py`, evaluate.md §2.1) | [local.md](local.md) | **Decided:** `local_warnings` on `SkillResult` |

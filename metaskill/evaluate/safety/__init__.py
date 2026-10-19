@@ -10,8 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from metaskill.evaluate.models import (
-    Dimension, DimensionScore, EvaluationConfig, Finding, SafetyTier, Skill, Status)
-from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend
+    Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
+from metaskill.evaluate.safety import local
+from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend, delete_targets
 from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
 from metaskill.evaluate.safety.findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
@@ -54,6 +55,15 @@ def score(skill: Skill, config: EvaluationConfig,
         detail="\n".join(f"{r.backend}: {r.detail}" for r in results if r.detail),
         findings=findings,
     )
+
+
+def local_warnings(skill: Skill, config_values: dict[str, str] | None = None) -> list[LocalWarning]:
+    """Unscored warnings about what the skill would delete on this machine.
+
+    config_values are the user's personalization values, for placeholders.
+    See docs/safety/local.md.
+    """
+    return local.local_warnings(skill, delete_targets(skill), config_values)
 
 
 def default_backends(config: EvaluationConfig) -> list[SafetyBackend]:
