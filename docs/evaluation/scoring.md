@@ -8,7 +8,7 @@ Intended location: `docs/evaluation/scoring.md`.
 
 This document specifies how observed evidence becomes task scores, six dimension scores, and an overall ranking. It complements [the evaluation design](../evaluate.md), [the safety design](../evaluate-safety.md), and [the golden dataset design](golden_dataset.md).
 
-The `evaluate-design-docs` branch is authoritative for evaluation. The `generalize-design-docs` branch defines transformation behaviour. This draft fills scoring gaps without claiming that its proposals have been adopted.
+The evaluation designs on `main`, [evaluate.md](../evaluate.md) and [evaluate-safety.md](../evaluate-safety.md), are authoritative for evaluation. [design.md](../design.md) defines transformation behaviour. This draft fills scoring gaps without claiming that its proposals have been adopted.
 
 Existing design choices include:
 
