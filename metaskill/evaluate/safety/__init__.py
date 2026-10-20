@@ -16,6 +16,7 @@ from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend, dele
 from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
 from metaskill.evaluate.safety.findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
+from metaskill.evaluate.safety.hermes_bridge import PluginLlm
 
 # Statuses that still produced findings the score can rely on. A deep scan that
 # fell back to static is usable: its static findings are real.
@@ -32,14 +33,16 @@ class Dependency:
 
 
 def score(skill: Skill, config: EvaluationConfig,
-          backends: list[SafetyBackend] | None = None) -> DimensionScore:
+          backends: list[SafetyBackend] | None = None,
+          llm: PluginLlm | None = None) -> DimensionScore:
     """Safety score for one skill.
 
-    backends defaults to the ones for config.safety_tier; tests pass fakes.
+    llm is Hermes's ctx.llm, needed for the deep tier's model calls. backends
+    defaults to the ones for config.safety_tier; tests pass fakes.
     """
     tier = config.safety_tier
     if backends is None:
-        backends = default_backends(config)
+        backends = default_backends(config, llm)
     results = [backend.scan(skill, tier) for backend in backends]
 
     usable = [r for r in results if r.status in _USABLE]
@@ -66,15 +69,12 @@ def local_warnings(skill: Skill, config_values: dict[str, str] | None = None) ->
     return local.local_warnings(skill, delete_targets(skill), config_values)
 
 
-def default_backends(config: EvaluationConfig) -> list[SafetyBackend]:
+def default_backends(config: EvaluationConfig, llm: PluginLlm | None = None) -> list[SafetyBackend]:
     """The backends for a tier: Cisco and own checks, plus the LLM review at deep.
 
     The LLM review (review.py) is not built yet.
     """
-    return [
-        CiscoBackend(llm_provider=config.judge_provider, llm_model=config.judge_model),
-        ChecksBackend(),
-    ]
+    return [CiscoBackend(llm), ChecksBackend()]
 
 
 def missing_dependencies() -> list[Dependency]:

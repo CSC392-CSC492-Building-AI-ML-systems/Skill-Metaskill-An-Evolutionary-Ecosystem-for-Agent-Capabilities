@@ -3,17 +3,22 @@
 The only module that imports skill_scanner (docs/safety/cisco.md). It runs the
 scanner on one skill and translates the result into our BackendResult. Behaviour
 was verified against version 2.2.1.
+
+At the deep tier, Cisco's LLM analyzer reaches the model through Hermes's
+`ctx.llm` (hermes_bridge.py), never with a key of its own.
 """
 
 from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
 from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, Skill
 from metaskill.evaluate.safety.findings import BackendResult, BackendStatus
+from metaskill.evaluate.safety.hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
 TESTED_VERSION = "2.2.1"
@@ -37,25 +42,15 @@ ROUTED_CATEGORIES = {
 
 
 class LLMSetupError(Exception):
-    """The scanner's LLM analyzer could not be configured, e.g. no API key."""
+    """The scanner's LLM analyzer could not be configured."""
 
 
 class CiscoBackend:
     name = "cisco"
 
-    def __init__(
-        self,
-        llm_provider: str = "",
-        llm_model: str = "",
-        llm_api_key: str | None = None,
-        llm_base_url: str | None = None,
-    ) -> None:
-        # Used only at the deep tier. Empty values fall back to the scanner's
-        # SKILL_SCANNER_LLM_* environment variables.
-        self.llm_provider = llm_provider
-        self.llm_model = llm_model
-        self.llm_api_key = llm_api_key
-        self.llm_base_url = llm_base_url
+    def __init__(self, llm: PluginLlm | None = None) -> None:
+        # Hermes's ctx.llm, used only at the deep tier. Without it, Cisco runs static.
+        self.llm = llm
 
     def available(self) -> bool:
         return importlib.util.find_spec("skill_scanner") is not None
@@ -74,34 +69,38 @@ class CiscoBackend:
                 detail=f"Cisco skill-scanner not installed; install with `{INSTALL_COMMAND}`")
         try:
             if tier is SafetyTier.DEEP:
-                try:
-                    analyzers = self._build_deep_analyzers()
-                except LLMSetupError as e:
+                if self.llm is None:
                     result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)
-                    return _fell_back(result, str(e))  # e.g. "the LLM analyzer could not be loaded: ..."
-                return convert(self._run_scanner(skill.path, analyzers), tier)
+                    return _fell_back(result, "no Hermes LLM access (ctx.llm), so Cisco ran static only")
+                with self._route() as model:
+                    try:
+                        analyzers = self._build_deep_analyzers(model)
+                    except LLMSetupError as e:
+                        result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)
+                        return _fell_back(result, str(e))
+                    return convert(self._run_scanner(skill.path, analyzers), tier)
             return convert(self._run_scanner(skill.path, None), tier)
         except Exception as e:  # never raise into the caller
             return BackendResult(
                 self.name, BackendStatus.ERROR, tier,
                 detail=f"{type(e).__name__}: {e}")
 
-    # --- The only two methods that touch skill_scanner. Tests replace them. ---
+    # --- The only methods that touch skill_scanner or LiteLLM. Tests replace them. ---
 
-    def _build_deep_analyzers(self) -> list[Any]:
+    def _route(self) -> AbstractContextManager[str]:
+        """Make self.llm reachable by Cisco; yields the model name to give it."""
+        return routed(self.llm)
+
+    def _build_deep_analyzers(self, model: str) -> list[Any]:
         from skill_scanner.core.analyzer_factory import (
             AnalyzerConfigurationError, build_analyzers)
         from skill_scanner.core.scan_policy import ScanPolicy
 
         try:
+            # The model name routes every request to ctx.llm. The key is a placeholder
+            # Cisco requires; no real key is ever given to Cisco or read from the environment.
             return build_analyzers(
-                ScanPolicy.default(),
-                use_llm=True,
-                llm_provider=self.llm_provider or None,
-                llm_model=self.llm_model or None,
-                llm_api_key=self.llm_api_key,
-                llm_base_url=self.llm_base_url,
-            )
+                ScanPolicy.default(), use_llm=True, llm_model=model, llm_api_key=PLACEHOLDER_KEY)
         except AnalyzerConfigurationError as e:
             raise LLMSetupError(str(e)) from e
 

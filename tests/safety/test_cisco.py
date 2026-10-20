@@ -1,5 +1,6 @@
 import copy
 import json
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -20,8 +21,9 @@ def fixture(name):
 class FakeCisco(CiscoBackend):
     """CiscoBackend with the scanner calls replaced, so tests need no scanner."""
 
-    def __init__(self, scan_output=None, installed=True, setup_error=None, scan_error=None):
-        super().__init__()
+    def __init__(self, scan_output=None, installed=True, setup_error=None, scan_error=None,
+                 llm="fake ctx.llm"):
+        super().__init__(llm)
         self.scan_output = scan_output
         self.installed = installed
         self.setup_error = setup_error
@@ -31,10 +33,13 @@ class FakeCisco(CiscoBackend):
     def available(self):
         return self.installed
 
-    def _build_deep_analyzers(self):
+    def _route(self):
+        return nullcontext("metaskill_hermes/test")
+
+    def _build_deep_analyzers(self, model):
         if self.setup_error:
             raise LLMSetupError(self.setup_error)
-        return ["deep analyzers"]
+        return [f"deep analyzers for {model}"]
 
     def _run_scanner(self, path, analyzers):
         self.analyzers_used = analyzers
@@ -156,7 +161,7 @@ def test_deep_scan_uses_llm_analyzers():
     scan["analyzers_used"].append("llm_analyzer")
     backend = FakeCisco(scan)
     result = backend.scan(SKILL, SafetyTier.DEEP)
-    assert backend.analyzers_used == ["deep analyzers"]
+    assert backend.analyzers_used == ["deep analyzers for metaskill_hermes/test"]
     assert result.tier is SafetyTier.DEEP
 
 
@@ -168,6 +173,15 @@ def test_llm_setup_failure_falls_back_to_static():
     assert result.tier is SafetyTier.STATIC
     assert "API key required" in result.detail
     assert len(result.findings) == 1
+
+
+def test_deep_without_hermes_llm_runs_static():
+    backend = FakeCisco(fixture("p5js-static"), llm=None)
+    result = backend.scan(SKILL, SafetyTier.DEEP)
+    assert backend.analyzers_used is None
+    assert result.status is BackendStatus.LLM_UNAVAILABLE
+    assert result.tier is SafetyTier.STATIC
+    assert "ctx.llm" in result.detail
 
 
 def test_unexpected_error_is_returned_not_raised():

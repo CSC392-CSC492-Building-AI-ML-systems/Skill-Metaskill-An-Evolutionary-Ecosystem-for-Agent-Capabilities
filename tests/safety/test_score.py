@@ -151,11 +151,11 @@ def test_detail_is_empty_when_everything_ran_cleanly():
 
 
 def test_default_backends_are_cisco_and_own_checks():
-    config = EvaluationConfig(judge_provider="anthropic", judge_model="some-model")
-    cisco, own = safety.default_backends(config)
+    llm = object()  # stands in for Hermes's ctx.llm
+    cisco, own = safety.default_backends(EvaluationConfig(), llm)
     assert isinstance(cisco, CiscoBackend)
     assert isinstance(own, ChecksBackend)
-    assert (cisco.llm_provider, cisco.llm_model) == ("anthropic", "some-model")
+    assert cisco.llm is llm
 
 
 def test_missing_dependencies_lists_cisco_when_not_installed(monkeypatch):
