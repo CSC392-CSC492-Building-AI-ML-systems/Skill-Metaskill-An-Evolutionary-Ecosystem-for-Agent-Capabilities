@@ -116,6 +116,8 @@ Hermes never gives plugins API keys: a plugin asks Hermes for a completion throu
 
 So Cisco's LLM layer runs on whichever model the user has configured in Hermes, with Hermes's auth and permission settings. Without `ctx.llm`, Cisco runs static only.
 
+For now the adapter uses the user's active model. Ryan's `judge.py` (not merged yet) registers its own model setting, `metaskill_judge`, so a user can pin a judge model; once it merges, the adapter should pass that task too, so Cisco and our review always use the same model.
+
 ### The schema gap, and the retry
 
 Called directly, Cisco asks the provider to enforce its JSON schema while the model writes (`"strict": true`), so a required field cannot be left out. `ctx.llm` cannot do this: it always sends `"strict": false`, hard-coded in Hermes's `agent/plugin_llm.py`, and when given a schema it validates the reply afterwards and fails the whole call on any mismatch. A small model often misses a required field, such as `aitech` or `evidence_ids`, in Cisco's large schema.

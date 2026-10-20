@@ -1,6 +1,6 @@
 # review.py
 
-Status: planned. Blocked on `judge.py`, the shared LLM interface in section 6 of evaluate.md, which does not exist yet.
+Status: planned. Builds on `judge.py`, the shared LLM interface in section 6 of evaluate.md. It exists on Ryan's branch `MET-19-evaluation-implement-judge-py` (not merged yet), and its `Judge.review()` already does most of what this document describes; see "Using `judge.py`" below.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ At `static` tier `__init__.py` never calls it. If it is called with `static`, it
 
 ## What the model is asked
 
-One call per skill, through `judge.py`.
+One review call per skill, through `judge.py`. The re-check of skipped warnings (below) is a second, smaller call, made only when the own checks skipped something.
 
 **Input:**
 
@@ -114,7 +114,7 @@ Large skills are cut to a character budget, `SKILL.md` first, then scripts, then
 
 ## Cost and privacy
 
-- One call per skill. Token use is recorded so the real cost per scan can be measured (open question 4 in the safety design).
+- One review call per skill, plus one batched re-check call when the own checks skipped warnings. Either may be asked once more when its reply does not fit the schema (as the Cisco adapter does), so a skill costs two to four calls at worst. Token use is recorded so the real cost can be measured (open question 4 in the safety design).
 - The full skill is sent to the configured provider. The tool states which provider receives what before the first call (section 4 of the safety design). This matters most for skills that have not been generalized yet.
 
 ## Tests
@@ -134,7 +134,9 @@ A fake judge returns fixed responses, so no tests call a real model.
 
 ## Open
 
-- `judge.py`'s interface. This document assumes it can send one prompt and return a parsed JSON object, plus token usage.
+- **Using `judge.py`.** Ryan's `Judge` (branch `MET-19-evaluation-implement-judge-py`) provides `review(skill, categories, *, dimension, source, instructions)`. It sends the skill's files with their paths, drops findings whose category or severity is unknown or whose quote is not in the skill (`locate()`), and computes the location from the quote. So `review.py` reduces to: the four category definitions, calling `review()`, and the warning re-check, which needs its own small call through `Judge.ask()` with the restore-only schema. Its system prompt already treats the skill as material to judge.
+- **Strict schema in `judge.py`.** `Judge.ask()` passes `json_schema=` to `ctx.llm`, which validates the reply strictly and fails the call on any mismatch. That is what made 10 of 25 Cisco scans fail on `gpt-5.4-nano` before the adapter sent the schema as guidance and retried once ([cisco.md](cisco.md), "How Cisco reaches the model"). The judge will likely hit the same failures on small models; the same fix would apply there. To raise with Ryan.
+- **Same model as Cisco.** `judge.py` calls `ctx.llm` with its own registered model setting, `task="metaskill_judge"`, so a user can pin a judge model in `config.yaml`. The Cisco adapter currently uses the user's active model. Once `judge.py` merges, the adapter should pass the same task, so Cisco and the review always use the same model.
 - Default severity guidance for `excess-scope`. Proposed: MEDIUM unless the out-of-scope action is also destructive or sends data out.
 - Results vary between runs (section 9 of the safety design). Whether to run the review more than once and keep findings that appear in most runs.
 - **[OPEN] Whether the review may ever make a result more lenient** than the deterministic layers, by downgrading or clearing a finding (open question 7 in the safety design). The motivating case: Cisco's `DATA_EXFIL_NETWORK_REQUESTS` fires at MEDIUM on any outbound request, because a static rule cannot tell a skill's intended traffic from exfiltration. `arxiv` gets two such findings for fetching papers from arXiv, which is its whole purpose, so its safety score is 0.6, and none of Cisco's scan presets changes this. Judging whether a network call fits the skill's purpose is the same judgment as `excess-scope`, so the review could mark such findings as in scope. This is the risky direction: unlike the skipped-warning re-check, an injection here could make a skill look safer than the rules say. If allowed, it needs: which findings may be touched and by how much, the original kept in the report, CRITICAL findings and commands in code blocks or scripts left untouchable, and the restrictions above. Waits on `judge.py` and the validation set.

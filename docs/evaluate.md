@@ -73,7 +73,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `scanner_version` | Version of the external safety scanner; empty if it did not run |
 | `checks_version` | Version of our own safety rule set ([evaluate-safety.md](evaluate-safety.md), section 3.2) |
 
-**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), a status for each dimension (`dimensions`), three lists: `tests`, `rubric` and `findings`, and `local_warnings`.
+**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), a status for each dimension (`dimensions`), and four lists: `tests`, `rubric`, `findings` and `local_warnings`.
 
 **Dimension status (`dimensions`).** One entry per dimension, keyed by dimension name. It records whether the dimension ran as configured, so a score produced with less than was asked for (for example a `deep` safety scan that fell back to `static`) is not mistaken for a full one.
 
