@@ -111,10 +111,10 @@ Not included in the first version. It needs a source install with no releases or
 
 ## 4. Tiers
 
-| Tier | Runs | Needs a key | Cost |
+| Tier | Runs | Needs | Cost |
 |---|---|---|---|
-| `static` (default) | Cisco static analyzers + own checks | No | None |
-| `deep` | Everything in `static` + Cisco LLM analyzer + LLM review (3.3) | Yes | Two LLM passes per skill, plus one small call when own checks skipped warnings |
+| `static` (default) | Cisco static analyzers + own checks | Nothing | None |
+| `deep` | Everything in `static` + Cisco LLM analyzer + LLM review (3.3) | Hermes's `ctx.llm`, i.e. the user's configured model. No API key is ever handled by the plugin. | Two LLM passes per skill, plus one small call when own checks skipped warnings |
 
 Static-only is not enough to rank on. Cisco reports that its rules alone catch 7.7% of malicious skills at HIGH on its benchmark, against 66.7% reaching MEDIUM or above with its LLM judge (15.4% false-positive rate) **[VERIFY]**. That benchmark covers malicious skills only and used one specific judge model, so it does not transfer directly to our setup or to the careless categories.
 
@@ -130,8 +130,8 @@ No cascade (escalating to the LLM only when static results look bad) in the firs
 ### Cost and privacy
 
 - `deep` sends the full skill contents to the configured LLM provider. Before the first call, show which provider receives what. This matters most for a skill that has not been generalized yet and still contains personal config.
-- **[OPEN]** Real token cost per scan is unknown. Measure it on one skill before setting a default cap.
-- Cisco's LLM analyzer calls the model itself. This is the one exception to the rule in section 6 of evaluate.md that scoring modules call `judge.py`, never a model directly. The adapter configures it with the same provider and model as `judge.py`.
+- Measured cost of Cisco's LLM pass: about 4,400 input tokens for a small skill and 28,000 for a large one, plus a few hundred output tokens (details in [safety/cisco.md](safety/cisco.md)). **[OPEN]** A default cap per scan.
+- Cisco's LLM analyzer would normally call a model with its own key. Hermes never gives plugins keys, so an adapter routes Cisco's requests through `ctx.llm` instead, the same access `judge.py` uses: Cisco and the judge run on the user's configured model, and Hermes handles auth. See [safety/cisco.md](safety/cisco.md), "How Cisco reaches the model".
 
 ## 5. Data model
 
@@ -177,11 +177,11 @@ The adapter is the one module that knows about Cisco's scanner (`cisco.py`). It 
 It does five things:
 
 1. **Checks availability.** The import is guarded. If the package is missing, `available()` returns false and `scan()` returns `status="not-installed"` with no findings.
-2. **Picks analyzers from the tier.** `static` uses the scanner's default analyzers (`static_analyzer`, `bytecode`, `pipeline`, `correlation`), which need no key. `deep` builds them with `build_analyzers(policy, use_llm=True, ...)`, which adds `llm_analyzer`, given the same provider and model as `judge.py`.
+2. **Picks analyzers from the tier.** `static` uses the scanner's default analyzers (`static_analyzer`, `bytecode`, `pipeline`, `correlation`), which need no key. `deep` builds them with `build_analyzers(policy, use_llm=True, ...)`, which adds `llm_analyzer`, pointed at `ctx.llm` through the adapter with a placeholder key.
 3. **Runs the scan** through the SDK on one skill directory.
 4. **Translates findings.** Field by field, as in the table below. The scanner's diagnostic notices go into `detail` (section 2.2), and findings with the scanner's sixth severity, `SAFE`, are skipped.
 5. **Handles failure.** Verified against 2.2.1, the LLM layer fails in two ways:
-   - **Setup**, such as no API key: `build_analyzers` raises `AnalyzerConfigurationError`, a `ValueError` and not a `SkillScannerError`. The adapter reruns as `static` and returns `llm-unavailable`.
+   - **Setup**, such as a misconfigured model: `build_analyzers` raises `AnalyzerConfigurationError`, a `ValueError` and not a `SkillScannerError`. The adapter reruns as `static` and returns `llm-unavailable`.
    - **Run time**, such as the API being down: nothing is raised. The scan returns normally, with the failure in `analyzers_failed`. The adapter reads that list, keeps the static findings and returns `llm-unavailable`.
 
    Any other error returns `error` with the message; it never raises into the caller.
@@ -261,7 +261,8 @@ Measured per category, at each tier: detection rate and false-positive rate, for
   - Own checks: 6 skills at HIGH after three noisy rules were narrowed, results in [safety/checks.md](safety/checks.md). Two in `github` are likely legitimate, such as a git credential helper that must print its token.
 - The `deep` tier only partly reads large skills. Cisco's LLM analyzer has a context budget: on `p5js` it read about 20,000 characters of `SKILL.md` and skipped five reference files. `detail` lists what was skipped.
 - Low static recall. Without `deep`, most malicious skills pass undetected.
-- The LLM tier is not deterministic. Two runs can give different findings.
+- The LLM tier is not deterministic. Two runs can give different findings. Measured on `gpt-5.4-nano` over 25 scans: details varied (an extra LOW finding, a MEDIUM reported as LOW) but every skill's score was the same on every successful run.
+- The LLM tier sometimes fails to produce a valid answer, because `ctx.llm` cannot make the provider enforce Cisco's schema. With the adapter's retry, 2 of 25 scans failed on `gpt-5.4-nano`, both on large skills; they fall back to static with status `partial`.
 - The confirmation check in 3.2 is a heuristic. A confirmation step written far from the command, or phrased unusually, will be missed and reported as a finding.
 - The warning check in 3.2 is also a heuristic. An unusually phrased sentence can be misread as a warning and skipped. Skipped matches are listed in `detail`, and the `deep` review re-checks them; at `static` they stay skipped.
 - We read instructions, not behaviour. A skill that fetches its real instructions at run time looks clean.
@@ -272,7 +273,7 @@ Measured per category, at each tier: detection rate and false-positive rate, for
 1. Does the malicious layer need our own implementation? (1)
 2. Do OpenClaw skills parse in Cisco's scanner without conversion? Hermes skills do. (3.1)
 3. Score values. (5)
-4. Per-scan token cost and the default cap. (4)
+4. Default token cap per scan; the per-scan cost is now measured. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
 6. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position, and Cisco itself depends on PyYAML). (3.1)
 7. Whether the `deep` review may ever make a result more lenient than the deterministic layers, by downgrading or clearing a finding. Example: Cisco's `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. If yes: which findings, by how much, keeping the original, and how to stop a skill talking the reviewer into it. Re-checking skipped warnings is not covered, because it can only add findings. See [safety/review.md](safety/review.md). (3.3)

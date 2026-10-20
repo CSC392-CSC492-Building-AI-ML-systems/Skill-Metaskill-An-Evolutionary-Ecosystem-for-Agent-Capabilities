@@ -13,6 +13,7 @@ Cisco covers the **malicious** side of safety: prompt injection, data exfiltrati
 ```python
 class CiscoBackend:
     name = "cisco"
+    def __init__(self, llm: PluginLlm | None = None): ...   # Hermes's ctx.llm, for deep
     def available(self) -> bool: ...
     def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult: ...
     def version(self) -> str: ...          # "2.2.1", or "" if not installed
@@ -70,9 +71,10 @@ True if `skill_scanner` can be imported, checked with `importlib.util.find_spec`
 1. **Not installed:** return `not-installed`, no findings, `detail` with the install command.
 2. **Static:** run `SkillScanner().scan_skill(skill.path)`.
 3. **Deep:**
-   1. Build analyzers with the judge's provider, model and key.
-   2. If that raises `AnalyzerConfigurationError`, run the static scan instead and return `llm-unavailable`, with the error in `detail`.
-   3. Otherwise scan. If `llm_analyzer` is in `analyzers_failed`, return `llm-unavailable` with the error in `detail`. The static analyzers still ran, so their findings are kept.
+   1. Without `ctx.llm` (outside Hermes, as in tests and CI), run the static scan and return `llm-unavailable`, with `detail` saying there is no Hermes LLM access.
+   2. Otherwise route the model through `ctx.llm` (next section) and build the analyzers with the adapter's model name and a placeholder key.
+   3. If that raises `AnalyzerConfigurationError`, run the static scan instead and return `llm-unavailable`, with the error in `detail`.
+   4. Otherwise scan. If `llm_analyzer` is in `analyzers_failed`, return `llm-unavailable` with the error in `detail`. The static analyzers still ran, so their findings are kept.
 4. **Convert** `result.to_dict()` into our findings (below).
 5. **Anything else raises:** return `error` with the message. Never raise into the caller.
 
@@ -103,9 +105,44 @@ Decided. The list of notice rule IDs lives in one constant (`SCANNER_NOTICES`), 
 
 Decided: Cisco's `hardcoded_secrets` and `policy_violation` are not about harm to the user, so they are kept with `dimension = config_cleanliness` (`ROUTED_CATEGORIES`). They stay in the report as evidence, `findings.py` already ignores them for the safety score, and Configuration Cleanliness can decide later whether to use them. Changing this is one constant.
 
-## Configuration it needs
+## How Cisco reaches the model
 
-From `EvaluationConfig`: `safety_tier`, `judge_provider`, `judge_model`. The API key comes from the same place `judge.py` will read it, so Cisco's LLM and our judge always use the same model (section 4 of the safety design).
+Hermes never gives plugins API keys: a plugin asks Hermes for a completion through `ctx.llm`, and Hermes handles auth. Cisco's LLM analyzer, though, calls models itself through LiteLLM and needs a model, a key and a URL. `hermes_bridge.py` connects the two without any key:
+
+1. It registers a LiteLLM custom provider, `metaskill_hermes`, added to LiteLLM's provider list rather than replacing it.
+2. For each scan, it gives Cisco a model name `metaskill_hermes/<scan id>` and a placeholder key (`not-a-key`). Cisco requires some key value; this one is never used or sent anywhere. Nothing is read from the environment.
+3. Each request Cisco makes is translated for `ctx.llm.complete_structured`: Cisco's system message becomes `instructions`, its user message `input`, and temperature and max tokens pass through. Requests `ctx.llm` cannot express (tools, streaming, multi-turn history) are refused with a clear error, never silently changed.
+4. The reply and its token usage go back to Cisco, which parses them as usual.
+
+So Cisco's LLM layer runs on whichever model the user has configured in Hermes, with Hermes's auth and permission settings. Without `ctx.llm`, Cisco runs static only.
+
+### The schema gap, and the retry
+
+Called directly, Cisco asks the provider to enforce its JSON schema while the model writes (`"strict": true`), so a required field cannot be left out. `ctx.llm` cannot do this: it always sends `"strict": false`, hard-coded in Hermes's `agent/plugin_llm.py`, and when given a schema it validates the reply afterwards and fails the whole call on any mismatch. A small model often misses a required field, such as `aitech` or `evidence_ids`, in Cisco's large schema.
+
+So the adapter:
+
+- sends the schema as guidance inside the instructions and asks `ctx.llm` for plain JSON mode, so Hermes does not fail the call;
+- checks the reply against the schema itself (`jsonschema`, which LiteLLM depends on) and, if it does not fit, asks once more, listing what was wrong (`MAX_RETRIES = 1`);
+- returns a reply that still does not fit, for Cisco to reject; the scan then falls back to static, as for any other LLM failure.
+
+Token usage covers both calls when a retry happens.
+
+### Live results
+
+Measured on 20 Oct 2026 inside Hermes, on `gpt-5.4-nano`: 5 deep scans each of `obsidian`, `songsee`, `arxiv`, `google-workspace` and `p5js`.
+
+| Adapter version | LLM layer failed | Of which large skills | Scans retried |
+|---|---|---|---|
+| Schema passed to `ctx.llm` | 10 / 25 (40%) | 5 / 10 | — |
+| Schema as guidance | 7 / 25 (28%) | 6 / 10 | — |
+| Schema as guidance + one retry | **2 / 25 (8%)** | 2 / 10 | 6 / 25 |
+
+- **Remaining failures:** one reply still missed fields after the retry; one fitted the schema but Cisco rejected its `evidence_ids`, which must point at real items in Cisco's own prompt, something a schema cannot express. Both fell back to static (`partial`).
+- **Stable scores:** across the 23 successful scans, each skill got the same safety score every run (1.0, 1.0, 0.6, 0.3, 0.0). Details varied: an extra LOW finding, or a MEDIUM reported as LOW. Cisco's majority-vote option (`llm_consensus_runs`) is therefore not used: it would multiply cost and failures without changing scores on this sample. Revisit if the validation set shows scores flipping.
+- **Size and cost:** about 4,400 input tokens for a small skill and 28,000 for `p5js`, a few hundred output tokens, 3 to 9 seconds per call. Cisco's prompt runs about 2.6 characters per token. A retry roughly doubles a scan's tokens.
+
+Small skills never failed; large skills did, so a stronger model than `gpt-5.4-nano` would likely fail less. The real fix is a strict-schema option in `ctx.llm`, which would be a request to Hermes upstream.
 
 ## Tests
 
@@ -118,7 +155,9 @@ Run against recorded output, so CI does not need the scanner installed.
 - **Conversion:** fields map as in the table; missing line, missing snippet, whole-skill finding.
 - **Notices:** dropped from findings, summarized in `detail`.
 - **Routing:** `hardcoded_secrets` gets `config_cleanliness`.
-- **Statuses:** not installed; setup failure falls back to static; run-time LLM failure gives `llm-unavailable` with static findings kept; unexpected exception gives `error`.
+- **Statuses:** not installed; no `ctx.llm` at deep runs static; setup failure falls back to static; run-time LLM failure gives `llm-unavailable` with static findings kept; unexpected exception gives `error`.
+- **Adapter** (`tests/safety/test_hermes_bridge.py`): request translation, refusing what `ctx.llm` cannot express, the schema sent as guidance, the retry (valid, invalid once, invalid twice, not JSON, tokens across both calls), registration and cleanup, and the provider added once without removing others. Two tests run Cisco's real LLM analyzer end to end against a fake `ctx.llm`; they are skipped where the scanner is not installed, as in CI.
+- **Live:** the measurement above was a manual run inside Hermes, not part of the test suite, since it costs tokens and needs a configured model.
 
 The scanner calls are wrapped in one small method so tests can replace it with a fake that returns a fixture or raises.
 
