@@ -8,13 +8,15 @@ reads file metadata: it never opens a file and never changes anything.
 
 from __future__ import annotations
 
+import ntpath
 import os
+import posixpath
 import re
 import time
 from pathlib import Path
 
 from metaskill.evaluate.models import LocalWarning, Skill
-from metaskill.evaluate.safety.checks import SYSTEM_EXACT, DeleteTarget
+from metaskill.evaluate.safety.checks import DeleteTarget, is_system_path
 
 MANY_FILES = 100
 RECENT_DAYS = 7
@@ -23,7 +25,10 @@ MAX_SECONDS = 1.0  # per target
 IMPORTANT_HOME_FOLDERS = {"Documents", "Desktop", "Pictures", "Downloads", "Music", "Videos"}
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}")
-_VARIABLE = re.compile(r"\$\{([A-Za-z_]\w*)(?::\?[^}]*)?\}|\$([A-Za-z_]\w*)")
+# $VAR, ${VAR}, ${VAR:?msg}, and on Windows %VAR%, $env:VAR, ${env:VAR}
+_VARIABLE = re.compile(r"\$\{(?:env:)?([A-Za-z_]\w*)(?::\?[^}]*)?\}|\$(?:env:)?([A-Za-z_]\w*)|%([A-Za-z_]\w*)%")
+_WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")  # C:\... or \\server\share
+_HOME_VARS = {"HOME", "USERPROFILE"}
 
 
 def local_warnings(skill: Skill, targets: list[DeleteTarget],
@@ -64,20 +69,33 @@ def _resolve(raw: str, config: dict[str, str], env: dict[str, str], home: Path) 
         return config.get(m.group(1), m.group(0))
 
     def variable(m: re.Match) -> str:
-        name = m.group(1) or m.group(2)
-        value = str(home) if name == "HOME" else env.get(name, "")
-        return value or m.group(0)
+        name = m.group(1) or m.group(2) or m.group(3)
+        if name.upper() in _HOME_VARS:
+            return str(home)
+        return _env_value(env, name) or m.group(0)
 
     t = _VARIABLE.sub(variable, _PLACEHOLDER.sub(placeholder, t))
-    if "{{" in t or "$" in t:
+    if "{{" in t or "$" in t or re.search(r"%\w+%", t):
         return None  # an unresolved placeholder or variable
-    if t == "~" or t.startswith("~/"):
+    if t == "~" or t.startswith(("~/", "~\\")):
         t = str(home) + t[1:]
-    while t.endswith(("/*", "/.")) and len(t) > 2:
-        t = t[:-2]
-    if not t.startswith("/") or any(c in t for c in "*?["):
+    for suffix in ("/*", "/.", "\\*", "\\."):
+        while t.endswith(suffix) and len(t) > 3:
+            t = t[:-2]
+    if any(c in t for c in "*?["):
         return None
-    return Path(os.path.normpath(t))
+    if _WINDOWS_ABSOLUTE.match(t):
+        return Path(ntpath.normpath(t))
+    if t.startswith("/"):
+        return Path(posixpath.normpath(t))
+    return None  # relative: depends on the folder the agent is working in
+
+
+def _env_value(env: dict[str, str], name: str) -> str:
+    """An environment variable's value; names are matched in any case, as on Windows."""
+    if name in env:
+        return env[name]
+    return next((v for k, v in env.items() if k.upper() == name.upper()), "")
 
 
 def _reasons(path: Path, follows_links: bool, home: Path) -> list[str]:
@@ -88,12 +106,12 @@ def _reasons(path: Path, follows_links: bool, home: Path) -> list[str]:
         return [f"is a link to `{os.readlink(path)}`; deleting through it removes `{real}`"]
 
     reasons = []
-    if str(path) in SYSTEM_EXACT:
-        reasons.append("is a system folder")
     if path == home:
         reasons.append("is your home folder")
     elif path.parent == home and path.name in IMPORTANT_HOME_FOLDERS:
         reasons.append(f"is your {path.name} folder")
+    elif is_system_path(str(path)):
+        reasons.append("is a system folder")
     if path.is_dir():
         reasons += _contents(path)
     return reasons

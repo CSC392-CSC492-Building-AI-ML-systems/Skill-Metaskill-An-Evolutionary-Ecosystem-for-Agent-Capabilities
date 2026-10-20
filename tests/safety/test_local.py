@@ -162,3 +162,39 @@ def test_local_warnings_round_trip_in_the_report():
     w = LocalWarning("~/x", "/home/u/x", "SKILL.md:1", ["contains 120 files"], "msg")
     result = SkillResult("s", Scores(None, None, None, None, None, None, None), 0.0, local_warnings=[w])
     assert SkillResult.from_dict(result.to_dict()).local_warnings == [w]
+
+
+
+# --- Windows forms ----------------------------------------------------------------------
+# These check how targets are resolved; the files themselves can only be looked up on Windows.
+
+
+WIN_HOME = r"C:\Users\alice"
+
+
+def test_windows_home_variables_resolve_to_the_home_folder():
+    for target in (r"%USERPROFILE%\Documents", r"$env:USERPROFILE\Documents", r"${env:USERPROFILE}\Documents"):
+        assert str(local._resolve(target, {}, {}, WIN_HOME)) == r"C:\Users\alice\Documents"
+
+
+def test_windows_environment_variables_match_in_any_case():
+    env = {"AppData": r"C:\Users\alice\AppData\Roaming"}
+    assert str(local._resolve(r"$env:APPDATA\myapp\*", {}, env, WIN_HOME)) == r"C:\Users\alice\AppData\Roaming\myapp"
+    assert str(local._resolve(r"%appdata%\myapp", {}, env, WIN_HOME)) == r"C:\Users\alice\AppData\Roaming\myapp"
+
+
+def test_windows_drive_paths_and_tilde():
+    assert str(local._resolve("C:/Data/../Data/x", {}, {}, WIN_HOME)) == r"C:\Data\x"
+    assert str(local._resolve(r"~\notes", {}, {}, WIN_HOME)) == r"C:\Users\alice\notes"
+
+
+def test_unresolved_or_relative_windows_targets_are_skipped():
+    assert local._resolve(r"%OUT_DIR%\build", {}, {}, WIN_HOME) is None
+    assert local._resolve(r".\dist", {}, {}, WIN_HOME) is None
+    assert local._resolve(r"build\*", {}, {}, WIN_HOME) is None
+
+
+def test_system_folder_reason_uses_the_shared_check(tmp_path):
+    # Own home is reported as home, not as a system folder.
+    [w] = warn(tmp_path, target("~"))
+    assert w.reasons == ["is your home folder"]

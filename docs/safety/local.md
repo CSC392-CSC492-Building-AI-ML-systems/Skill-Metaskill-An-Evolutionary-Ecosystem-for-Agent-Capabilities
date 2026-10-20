@@ -41,9 +41,12 @@ Only targets that point to the same place whatever folder the agent is working i
 | Home path: `~/Documents`, `$HOME/notes` | Yes | The user's home folder |
 | Environment variable: `$OUTPUT_DIR` | Yes, if set | Its value in the user's environment |
 | Placeholder: `{{OUTPUT_DIR}}` | Yes, if the user has a value for it | The user's personalization config |
-| Relative path: `build/`, `data/` | No | Depends on the folder the agent is in later |
+| Windows forms: `C:\Data`, `%USERPROFILE%\x`, `$env:APPDATA\x`, `~\x` | Yes | Drive paths as written; home variables as the home folder; other variables from the environment, matched in any case as on Windows |
+| Relative path: `build/`, `data/`, `.\dist` | No | Depends on the folder the agent is in later |
 
 Unresolvable targets are skipped silently; the static finding already covers them.
+
+Only paths for the machine's own system can exist on it: a `C:\...` target is never found on Linux, and is skipped like any missing path. Windows resolution is tested on Linux; the lookups themselves have not yet been run on a Windows machine.
 
 ## What counts as important
 

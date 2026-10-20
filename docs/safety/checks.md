@@ -32,7 +32,7 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 | Source | Scanned | Warning check |
 |---|---|---|
 | Fenced code blocks in `SKILL.md` and other `.md` files | Yes | No |
-| Script files (`.sh`, `.bash`, `.py`, `.js`, `.ts`, `.ps1`) | Yes, every line | No |
+| Script files (`.sh`, `.bash`, `.zsh`, `.py`, `.js`, `.ts`, `.ps1`, `.psm1`, `.bat`, `.cmd`) | Yes, every line | No |
 | Prose in markdown, including inline code (`` `rm -rf` ``) | Yes | Yes |
 | Binary or very large files | No | — |
 
@@ -76,7 +76,7 @@ Severities are decided. A severity answers: if the agent does this in an otherwi
 
 | Rule | Matches | Severity |
 |---|---|---|
-| `recursive-delete` | `rm -r`, `rm -rf`, `rm -fr`, `shutil.rmtree`, `Remove-Item -Recurse`, `find ... -delete` | Set by the target, below |
+| `recursive-delete` | `rm -r`, `rm -rf`, `rm -fr`, `shutil.rmtree`, `Remove-Item -Recurse`, `find ... -delete`; on Windows `rmdir /s`, `rd /s`, `del /s` | Set by the target, below |
 | `force-push` | `git push --force`, `git push -f` | HIGH: can destroy other people's work on a shared branch |
 | `history-rewrite` | `git reset --hard`, `git clean -fd` | HIGH: permanently discards uncommitted work or untracked files |
 | `db-drop-database` | `DROP DATABASE` | CRITICAL: everything at once, like wiping a disk |
@@ -103,6 +103,22 @@ Rules for judging a target:
 - **Empty-variable guard.** `${DIR:?}` aborts when `DIR` is empty, so a guarded variable is judged as unknown, not CRITICAL.
 - **Placeholders are unknown.** A generalized skill's `rm -rf {{OUTPUT_DIR}}` deletes whatever folder each user configures, so it is HIGH.
 - **Several targets in one command:** the most severe one sets the severity.
+
+#### Windows
+
+Windows targets are converted to the forward-slash form above before they are judged, so the same rules and severities apply:
+
+| Written as | Judged as |
+|---|---|
+| `C:\`, `C:\Windows\...`, `C:\Program Files\...`, `C:\ProgramData\...`, `C:\Users`, `C:\Users\<name>` | System or home: CRITICAL |
+| `%USERPROFILE%`, `$env:USERPROFILE`, `${env:USERPROFILE}` | `$HOME`, so the home rules apply, including `.ssh` and `AppData` |
+| `%TEMP%\x`, `$env:TEMP\x` | `/tmp/x`: rebuildable |
+| Other `%VAR%`, `$env:VAR` followed by a separator | A variable that may be empty, CRITICAL, unless it is always set on Windows (`APPDATA`, `SystemRoot`, `ProgramFiles` and similar) |
+| `.\dist`, `build\` | Relative, judged by name as on Unix |
+
+Drive letters and Windows folder names are compared without case. Variables set in the same script are followed for `.bat`/`.cmd` (`set NAME=value`) and PowerShell (`$name = "value"`, `$env:NAME = "value"`). Windows confirmation steps also count: `set /p`, `choice`, `Read-Host`, and `-Confirm` or `-WhatIf` on the command. Arguments containing backslashes are split without shell escaping, so `C:\Windows` keeps its backslashes.
+
+Tested on Linux with Windows-style scripts; not yet run on a Windows machine.
 
 #### Symlinks
 

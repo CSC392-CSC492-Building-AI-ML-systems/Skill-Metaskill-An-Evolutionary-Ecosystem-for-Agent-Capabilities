@@ -20,7 +20,8 @@ from metaskill.evaluate.safety.findings import SEVERITY_RANK, BackendResult, Bac
 CHECKS_VERSION = "1"
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
-SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1"}
+SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
+                   ".bat", ".cmd"}
 MAX_FILE_BYTES = 1_000_000
 CONFIRM_LOOKBACK = 5  # script lines before a command searched for a confirmation
 MAX_LISTED_SKIPS = 10
@@ -55,13 +56,22 @@ REBUILDABLE = {
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "htmlcov",
 }
 HOME_FORMS = ("~", "$HOME", "${HOME}")
-HOME_CRITICAL = (".ssh", ".config", ".gnupg")
+HOME_CRITICAL = (".ssh", ".config", ".gnupg", "appdata")  # compared case-insensitively
 SYSTEM_EXACT = {
     "/", "/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/opt",
     "/home", "/root", "/Users", "/System", "/Library", "/Applications",
 }
 SYSTEM_PREFIXES = ("/etc/", "/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/", "/boot/", "/System/")
 ALWAYS_SET = {"HOME", "PWD", "TMPDIR", "USER"}  # never empty, so never the empty-variable case
+
+# Windows: paths are converted to the forward-slash form above before judging
+# (_canonical), so the same rules apply. Drive letters and names are compared lowercase.
+WINDOWS_HOME_VARS = {"USERPROFILE", "HOME"}
+WINDOWS_TEMP_VARS = {"TEMP", "TMP"}
+WINDOWS_ALWAYS_SET = {"SYSTEMROOT", "WINDIR", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES",
+                      "PROGRAMDATA", "HOMEDRIVE", "HOMEPATH", "USERNAME", "COMPUTERNAME"}
+WINDOWS_SYSTEM_EXACT = {"windows", "program files", "program files (x86)", "programdata", "users"}
+WINDOWS_SYSTEM_PREFIXES = ("windows/", "program files/", "program files (x86)/", "programdata/")
 
 _KIND_SEVERITY = {
     "system": Severity.CRITICAL,
@@ -143,6 +153,10 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
     ctx = _Context()
     for path, text in files:
         ctx.shell_vars[path] = _assignments(_SHELL_ASSIGN, _SHELL_LITERAL, text)
+        if Path(path).suffix.lower() in (".bat", ".cmd"):
+            ctx.shell_vars[path] = _assignments(_CMD_ASSIGN, _CMD_LITERAL, text)
+        elif Path(path).suffix.lower() in (".ps1", ".psm1"):
+            ctx.shell_vars[path] = _assignments(_PS_ASSIGN, _PY_LITERAL, text)
         ctx.py_vars[path] = _assignments(_PY_ASSIGN, _PY_LITERAL, text)
     bundle_links = _bundle_symlinks(skill)
     ctx.links = {_normalize(name) for name, _ in bundle_links} | _created_links(units)
@@ -274,16 +288,27 @@ class _Hit:
     py_var: bool = False  # shutil.rmtree(variable): resolve as a Python variable
 
 
-_SEPARATOR = re.compile(r"[;&|`)\n]|\s#")
+def _command_end(rest: str) -> int:
+    """Where a command ends: ; & | ` ) a newline or a comment, outside quotes."""
+    quote = ""
+    for i, c in enumerate(rest):
+        if quote:
+            quote = "" if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c in ";&|`)\n" or (c == "#" and i > 0 and rest[i - 1].isspace()):
+            return i
+    return len(rest)
 
 
 def _args(text: str, end: int) -> list[str]:
     """Shell-like arguments after position end, up to the end of the command."""
     rest = text[end:]
-    stop = _SEPARATOR.search(rest)
-    segment = rest[:stop.start()] if stop else rest
+    segment = rest[:_command_end(rest)]
     try:
-        tokens = shlex.split(segment)
+        # Backslashes are path separators on Windows, not escapes: split without
+        # POSIX rules there, and quotes are stripped when a target is judged.
+        tokens = shlex.split(segment, posix="\\" not in segment)
     except ValueError:
         tokens = segment.split()
     return [t for t in tokens if "<" not in t and ">" not in t]
@@ -307,6 +332,7 @@ _RM = re.compile(r"(?<![\w.-])rm\s+")
 _RMTREE = re.compile(r"shutil\.rmtree\(\s*(?:(['\"])(.*?)\1|([A-Za-z_][\w.]*))")
 _REMOVE_ITEM = re.compile(r"(?<![\w-])Remove-Item\b", re.I)
 _FIND = re.compile(r"(?<![\w.-])find\s+")
+_CMD_DELETE = re.compile(r"(?<![\w.%$-])(?:rmdir|rd|del|erase)(?=\s)", re.I)
 
 
 def _follows(target: str) -> bool:
@@ -357,6 +383,16 @@ def _deletes(text: str, prose: bool) -> list[_Hit]:
                              f"Remove-Item {targets[0]} -Recurse",
                              any(a.lower() in ("-confirm", "-whatif") for a in args),
                              [(t, True) for t in targets]))
+
+    for m in _CMD_DELETE.finditer(text):
+        args = _args(text, m.end())
+        if not any(a.lower() == "/s" for a in args):
+            continue  # not recursive
+        targets = [a for a in args if not a.startswith("/")]
+        if targets:
+            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
+                             f"{m.group(0)} /s {targets[0]}",
+                             targets=[(t, False) for t in targets]))
 
     for m in _FIND.finditer(text):
         args = _args(text, m.end())
@@ -587,7 +623,8 @@ def _is_warning(unit: _Unit, line_index: int, col: int) -> bool:
 
 _CONFIRM = re.compile(
     r"\b(?:ask(?:s|ing)?|confirm\w*|are\s+you\s+sure|dry[- ]?run|back(?:[\s-]?up)s?)\b"
-    r"|\bread\s+-[a-zA-Z]*p\b|\binput\s*\(|\bconfirm\s*\(|--dry-run\b|\bRead-Host\b|-WhatIf\b",
+    r"|\bread\s+-[a-zA-Z]*p\b|\binput\s*\(|\bconfirm\s*\(|--dry-run\b|\bRead-Host\b|-WhatIf\b"
+    r"|-Confirm\b|\bset\s+/p\b|\bchoice\b",
     re.I)
 
 
@@ -608,8 +645,12 @@ def _confirmed(unit: _Unit, line_index: int, previous: _Unit | None) -> bool:
 _SHELL_ASSIGN = re.compile(r"^\s*(?:export\s+|local\s+|readonly\s+|declare\s+)?([A-Za-z_]\w*)=(\S*)", re.M)
 _SHELL_LITERAL = re.compile(r"\"([^\"$`]*)\"|'([^']*)'|([^\s;&|\"'$`]*)")
 _PY_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*?)\s*(?:#.*)?$", re.M)
+_CMD_LITERAL = re.compile(r"([^%!]*)")
 _PY_LITERAL = re.compile(r"(['\"])([^'\"]*)\1")
-_VAR_REF = re.compile(r"\$\{([A-Za-z_]\w*)(?::\?[^}]*)?\}|\$([A-Za-z_]\w*)")
+_CMD_ASSIGN = re.compile(r"^\s*set\s+\"?([A-Za-z_]\w*)=([^\"&|\r\n]*)\"?\s*$", re.M | re.I)
+_PS_ASSIGN = re.compile(r"^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*(?:#.*)?$", re.M)
+# $VAR, ${VAR}, ${VAR:?msg}, and on Windows %VAR%, $env:VAR, ${env:VAR}
+_VAR_REF = re.compile(r"\$\{(?:env:)?([A-Za-z_]\w*)(?::\?[^}]*)?\}|\$(?:env:)?([A-Za-z_]\w*)|%([A-Za-z_]\w*)%")
 _LN = re.compile(r"(?<![\w.-])ln\s+")
 
 
@@ -663,7 +704,7 @@ def _bundle_symlinks(skill: Skill) -> list[tuple[str, str]]:
 
 
 def _normalize(target: str) -> str:
-    t = target.strip().strip("'\"")
+    t = target.strip().strip("'\"").replace("\\", "/")
     while t.endswith(("/*", "/.")) and len(t) > 2:
         t = t[:-2]
     while t.endswith("/") and len(t) > 1:
@@ -676,7 +717,7 @@ def _normalize(target: str) -> str:
 def _substitute(target: str, values: dict[str, list[str | None]]) -> str:
     """Replace $VAR with its value when the file assigns it exactly once, to a literal."""
     def replace(m: re.Match) -> str:
-        name = m.group(1) or m.group(2)
+        name = m.group(1) or m.group(2) or m.group(3)
         assigned = values.get(name, [])
         return assigned[0] if len(assigned) == 1 and assigned[0] is not None else m.group(0)
     return _VAR_REF.sub(replace, target)
@@ -688,7 +729,7 @@ def _classify(raw: str, follows: bool, path: str, py_var: bool, ctx: _Context) -
         if len(assigned) != 1 or assigned[0] is None:
             return "unknown"
         raw = assigned[0]
-    t = _substitute(raw.strip().strip("'\""), ctx.shell_vars.get(path, {}))
+    t = _canonical(_substitute(raw.strip().strip("'\""), ctx.shell_vars.get(path, {})))
     norm = _normalize(t)
     if "{{" in t:
         return "unknown"
@@ -697,19 +738,53 @@ def _classify(raw: str, follows: bool, path: str, py_var: bool, ctx: _Context) -
     if _is_system(norm):
         return "system"
     var = re.match(r"\$\{?([A-Za-z_]\w*)(:\?)?", t)
-    if var and not var.group(2) and var.group(1) not in ALWAYS_SET and t[var.end():].lstrip("}").startswith("/"):
+    always = var is not None and (var.group(1) in ALWAYS_SET or var.group(1).upper() in WINDOWS_ALWAYS_SET)
+    if var and not var.group(2) and not always and t[var.end():].lstrip("}").startswith("/"):
         return "empty-variable"
     if _is_rebuildable(norm):
         return "rebuildable"
     return "unknown"
 
 
+def _canonical(target: str) -> str:
+    """Windows forms in the forward-slash form the rules use.
+
+    `C:\\Windows` becomes `c:/windows`, `%USERPROFILE%` and `$env:USERPROFILE`
+    become `$HOME`, `%TEMP%` becomes `/tmp`, and other `%VAR%` / `$env:VAR`
+    become `$VAR`, so they are judged like Unix variables.
+    """
+    t = target.replace("\\", "/")
+
+    def var(m: re.Match) -> str:
+        name = m.group(1) or m.group(2) or m.group(3)
+        if name.upper() in WINDOWS_HOME_VARS:
+            return "$HOME"
+        if name.upper() in WINDOWS_TEMP_VARS:
+            return "/tmp"
+        return m.group(0) if m.group(0).startswith("$") and "env:" not in m.group(0) else f"${name}"
+
+    t = _VAR_REF.sub(var, t)
+    if re.match(r"^[A-Za-z]:(?:/|$)", t):
+        t = t.lower()
+    return t
+
+
+def is_system_path(path: str) -> bool:
+    """True for a system or home folder, written in Unix or Windows form."""
+    return _is_system(_normalize(_canonical(path)))
+
+
 def _is_system(norm: str) -> bool:
     if norm in SYSTEM_EXACT or norm.startswith(SYSTEM_PREFIXES):
         return True
+    drive = re.match(r"^[a-z]:(?:/(.*))?$", norm)
+    if drive:
+        rest = drive.group(1) or ""
+        return (rest == "" or rest in WINDOWS_SYSTEM_EXACT or rest.startswith(WINDOWS_SYSTEM_PREFIXES)
+                or re.fullmatch(r"users/[^/]+", rest) is not None)
     if re.fullmatch(r"/(?:home|Users)/[^/]+", norm):
         return True
-    if norm in HOME_FORMS or any(norm == f"{h}/{d}" for h in HOME_FORMS for d in HOME_CRITICAL):
+    if norm in HOME_FORMS or any(norm.lower() == f"{h}/{d}".lower() for h in HOME_FORMS for d in HOME_CRITICAL):
         return True
     return norm in ("..", ".git") or norm.endswith(("/..", "/.git"))
 

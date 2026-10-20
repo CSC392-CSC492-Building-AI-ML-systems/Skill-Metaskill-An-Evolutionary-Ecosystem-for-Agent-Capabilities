@@ -378,3 +378,74 @@ def test_unexpected_error_is_returned_not_raised(tmp_path, monkeypatch):
     result = scan(make(tmp_path, {}))
     assert result.status is BackendStatus.ERROR
     assert "parser broke" in result.detail
+
+
+# --- Windows -------------------------------------------------------------------------------
+
+
+def windows_script(tmp_path, name, *lines):
+    return scan(make(tmp_path, {f"scripts/{name}": "\n".join(lines) + "\n"})).findings
+
+
+@pytest.mark.parametrize("command, severity", [
+    (r"Remove-Item -Recurse -Force C:\ ", CRITICAL),
+    (r"Remove-Item -Recurse -Force C:\Windows\System32", CRITICAL),
+    (r'Remove-Item -Recurse "C:\Program Files (x86)\App"', CRITICAL),
+    (r"Remove-Item -Recurse $env:USERPROFILE\.ssh", CRITICAL),
+    (r"Remove-Item -Recurse $env:USERPROFILE\AppData", CRITICAL),
+    (r"Remove-Item -Recurse -Force $env:OUT_DIR\*", CRITICAL),  # empty variable: becomes \*
+    (r"Remove-Item -Recurse .\dist", MEDIUM),
+    (r"Remove-Item -Recurse $env:TEMP\myapp", MEDIUM),
+    (r"Remove-Item -Recurse -Force D:\data", HIGH),
+    (r"Remove-Item -Recurse $env:APPDATA\myapp", HIGH),  # always set, so not the empty case
+])
+def test_powershell_delete_targets(tmp_path, command, severity):
+    [f] = windows_script(tmp_path, "clean.ps1", command)
+    assert (f.rule, f.severity) == ("recursive-delete", severity)
+
+
+@pytest.mark.parametrize("command, severity", [
+    (r"rmdir /s /q C:\Users\alice", CRITICAL),
+    (r"rd /s /q %USERPROFILE%", CRITICAL),
+    (r"rmdir /s /q %BUILD_DIR%\ ", CRITICAL),
+    (r"rmdir /s /q build", MEDIUM),
+    (r"rd /s /q %TEMP%\myapp", MEDIUM),
+    (r"del /s /q *.log", HIGH),
+])
+def test_cmd_delete_targets(tmp_path, command, severity):
+    [f] = windows_script(tmp_path, "clean.bat", command)
+    assert (f.rule, f.severity) == ("recursive-delete", severity)
+
+
+@pytest.mark.parametrize("command", [r"rmdir build", r"del /q notes.txt", r"rd C:\empty"])
+def test_non_recursive_cmd_deletes_are_not_matched(tmp_path, command):
+    assert windows_script(tmp_path, "clean.bat", command) == []
+
+
+def test_cmd_variable_set_in_the_same_script_is_followed(tmp_path):
+    [f] = windows_script(tmp_path, "clean.bat", "set OUT=build", "rmdir /s /q %OUT%")
+    assert f.severity is MEDIUM
+
+
+def test_powershell_variable_set_in_the_same_script_is_followed(tmp_path):
+    [f] = windows_script(tmp_path, "clean.ps1", '$out = "dist"', "Remove-Item -Recurse $out")
+    assert f.severity is MEDIUM
+
+
+@pytest.mark.parametrize("name, lines", [
+    ("clean.bat", ["set /p ok=Delete everything? [y/N]", "rmdir /s /q data"]),
+    ("clean.bat", ["choice /m \"Delete data\"", "rmdir /s /q data"]),
+    ("clean.ps1", ['$answer = Read-Host "Delete data?"', "Remove-Item -Recurse data"]),
+    ("clean.ps1", ["Remove-Item -Recurse -Confirm data"]),
+])
+def test_windows_confirmations(tmp_path, name, lines):
+    assert windows_script(tmp_path, name, *lines) == []
+
+
+@pytest.mark.parametrize("path, expected", [
+    (r"C:\Windows", True), ("c:\\", True), (r"C:\Users\bob", True), (r"C:\Program Files\App", True),
+    (r"%USERPROFILE%\.ssh", True), (r"D:\projects", False), (r"C:\Users\bob\Documents", False),
+    ("/etc", True), ("/home/alice", True), ("/opt/app", False),
+])
+def test_is_system_path(path, expected):
+    assert checks.is_system_path(path) is expected
