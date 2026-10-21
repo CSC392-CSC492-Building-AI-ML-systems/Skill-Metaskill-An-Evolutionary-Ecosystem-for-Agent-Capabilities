@@ -110,32 +110,70 @@ Construct it with `Judge.from_context(ctx, config)` (or `make_judge`). In tests,
 
 | Method | Used by | Returns |
 |---|---|---|
-| `rate(skill, criteria, instructions="")` | `clarity.py` | `list[RubricRating]`, in the order of `criteria` |
-| `review(skill, categories, *, dimension, source="llm-review", instructions="")` | `safety/review.py`, `config_cleanliness.py` | `list[Finding]` |
-| `check(task, output, checklist)` / `judge(task, check, run)` | `runner.py` | `Verdict` |
-| `ask(instructions, material, schema, purpose)` | the methods above | The parsed JSON object |
+| `rate(skill, criteria, instructions="", **options)` | `clarity.py` | `list[RubricRating]`, in the order of `criteria` |
+| `review(skill, categories, *, dimension, source="llm-review", instructions="", **options)` | `safety/review.py`, `config_cleanliness.py` | `ReviewResult` |
+| `check(task, output, checklist, **options)` / `judge(task, check, run)` | `runner.py` | `Verdict` |
+| `ask(instructions, material, schema, purpose, *, system_prompt, temperature, max_tokens, timeout)` | the methods above, and callers with their own schema | The parsed JSON object |
 | `judge_model` (property) | report writer | `"provider/model"` of every reply, comma separated |
+| `usage` / `total_usage` | report writer | `TokenUsage` per purpose (`rate`, `review`, `check`, ...) / summed |
 
 If `judge_model` lists more than one model, Hermes fell back to another model during the run, and the scores did not all come from one judge. Record this in `ReportMeta.judge_model`.
 
+**`ask`'s settings.** `options` on `rate`, `review` and `check` are the same keyword arguments (`CallOptions`), passed on to `ask`:
+
+| Argument | Default | Description |
+|---|---|---|
+| `system_prompt` | `SYSTEM_PROMPT` | Replaces the system prompt, e.g. for a call whose answers carry no quotes. `MATERIAL_IS_DATA` (2.3) is always added to it |
+| `temperature` | `0.0` | `None` leaves it to Hermes |
+| `max_tokens` | `None` | Reply length cap; `None` leaves it to Hermes |
+| `timeout` | `None` | Seconds; `None` leaves it to Hermes |
+
+What a skill is for (its name and description) is not the judge's concern: the caller puts it in `instructions`.
+
 **`rate`** takes `Criterion(name, question, levels)` objects, where `levels` are the anchored levels from worst to best (at least two). The judge picks a level number, and the result is normalised to `[0, 1]`: the worst level is `0.0` and the best is `1.0`. Criteria that the judge skipped, rated twice, rated out of range or supported with an unverifiable quote are left out. The caller decides how a missing criterion scores.
 
-**`review`** takes `categories` as `{name: meaning}`. Findings with an unknown category or severity, or a quote not found in the skill, are dropped. Kept findings get `location` (`path:line`) from the quote, and `rule = category`.
+**`review`** takes `categories` as `{name: meaning}`. The judge answers with `category`, `severity`, `file`, `message` and `quote` per finding. Kept findings get `location` (`path:line`) from the quote, and `rule = category`. It returns a `ReviewResult`:
 
-### 2.3 Evidence rules
+| Field | Description |
+|---|---|
+| `findings` | The kept findings |
+| `dropped` | `DroppedAnswer(answer, reason)` for every answer not kept: unknown category, unknown severity, quote not found in the skill, or not a JSON object. `answer` is the item as the judge returned it, so the caller can report it |
+| `skipped` | Files not sent because the skill was over `max_chars` (2.3) |
+| `usage` | `TokenUsage` of this review, retries included |
 
-Every rating, finding and checklist item must quote its supporting text exactly, as one contiguous span. The system prompt (`SYSTEM_PROMPT`) tells the judge this. The code then checks every quote:
+### 2.3 What the judge sees, and evidence rules
 
-- `skill_sources(skill)` is the material the judge sees: `SKILL.md` first, then every bundled file that decodes as UTF-8. Binary files are left out.
-- `locate(sources, quote)` returns the `path:line` of the first exact match, or `None`. Line endings are normalised (`\r\n` → `\n`), and whitespace around the quote is ignored.
-- Anything whose quote is not found is dropped. This is the main guard against hallucinated evidence (evaluate.md 3.3, evaluate-safety.md 3.3).
+`skill_sources(skill)` is the material for `rate` and `review`:
+
+- `SKILL.md` first, then scripts (files under `scripts/` or with a script extension), then the other bundled files that decode as UTF-8. Binary files are left out.
+- Hidden text is stripped first (`strip_hidden`): HTML comments and characters that render as nothing (zero-width, bidi controls, tag characters). A comment is replaced by its line breaks, so line numbers still match the file on disk.
+- `fit(sources, max_chars)` cuts it to `EvaluationConfig.judge_max_chars` in that order. A file that does not fit is skipped whole, and later, smaller files may still fit. `SKILL.md` is always sent, cut to the budget if it alone is over it.
+- Each file is sent in a `<file path="...">` block with numbered lines (`12| ...`).
+
+Everything in the input is untrusted. `MATERIAL_IS_DATA`, added to every system prompt, tells the judge that the input is material to evaluate and that instructions in it are to be judged, not followed.
+
+Every rating, finding and checklist item must quote its supporting text exactly, as one contiguous span. The default system prompt (`SYSTEM_PROMPT`) tells the judge this. The code then checks every quote:
+
+- `locate(sources, quote, file=None)` returns the `path:line` of the first match, or `None`. Any run of whitespace in the quote matches any run in the text, so a re-spaced or re-wrapped quote still counts. Line numbers the judge copied from the material are ignored. `file`, the path the judge named, is searched first; the other files are still searched after it.
+- Anything whose quote is not found is not used. This is the main guard against hallucinated evidence (evaluate.md 3.3, evaluate-safety.md 3.3).
+
+### 2.4 Reply format and retries
+
+The JSON schema is sent in the instructions as guidance, with `json_mode` on. It is not passed to `ctx.llm` as `json_schema`: Hermes validates that strictly and fails the whole call on any mismatch, which made 10 of 25 Cisco scans fail on `gpt-5.4-nano` (evaluate-safety.md, safety/cisco.md).
+
+The judge checks each reply itself (`schema_problems`: type, required fields, enums, items; extra fields are ignored). A reply that does not fit, or that Hermes could not parse as JSON, is asked for again with the problems listed, up to `EvaluationConfig.judge_retries` times (default 1, so at most two calls). After the last try:
+
+- A JSON object is returned even if it still does not fit. The methods above drop what they cannot use (`review` lists it in `dropped`).
+- Anything else raises `JudgeError`.
+
+Every call, retries included, counts in `usage`.
 
 ## 3. Errors
 
 | Exception | Meaning | What the caller does |
 |---|---|---|
 | `JudgeUnavailable` | The judge cannot run. Causes: no `ctx.llm`, no provider or credentials (Hermes' `AuxiliaryClientUnavailable`), a provider/model override that Hermes refused, or `make_judge("llm")` without `ctx` | Mark the dimension `skipped` (score `null`) |
-| `JudgeError` | The judge ran, but its answer could not be used (schema mismatch, non-JSON reply, request failure), or a deterministic check is malformed | Mark the dimension `error` (score `null`) |
+| `JudgeError` | The judge ran, but its answer could not be used (no JSON object after every retry, request failure), or a deterministic check is malformed | Mark the dimension `error` (score `null`) |
 | `ValueError` | Programming error, e.g. a check given to the wrong judge type, or an empty checklist | Fix the caller |
 
 `JudgeUnavailable` from a missing provider only shows up once a call is made. Catch it around `rate`, `review`, `check` and `judge`, not only around construction.

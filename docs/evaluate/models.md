@@ -58,6 +58,8 @@ Settings for one `evaluate` or `rank` call.
 | `runs_per_task` | `3` | `n` in evaluate.md 4.4. Must be ≥ 1 |
 | `judge_provider` | `""` | Provider override for the LLM judge; empty follows Hermes config ([judge.md](judge.md) 2.1) |
 | `judge_model` | `""` | Model override for the LLM judge |
+| `judge_retries` | `1` | Times a judge reply that does not fit its schema is asked for again ([judge.md](judge.md) 2.4). Must be ≥ 0 |
+| `judge_max_chars` | `100000` | Characters of a skill sent to the judge; larger skills are cut ([judge.md](judge.md) 2.3). Must be ≥ 1 |
 | `safety_tier` | `static` | Safety scan depth |
 | `weights` | equal, `1/6` each | Weight of each dimension in `overall`; each must be in `[0, 1]`. **[OPEN]** evaluate.md, open question 1 |
 | `output_max_chars` | `2000` | Truncation length for `TestResult.output`. **[OPEN]** |
