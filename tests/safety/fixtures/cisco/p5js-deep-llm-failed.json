@@ -1,0 +1,239 @@
+{
+  "analyzers_failed": [
+    {
+      "analyzer": "llm_analyzer",
+      "error": "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+    }
+  ],
+  "analyzers_used": [
+    "static_analyzer",
+    "bytecode",
+    "pipeline",
+    "correlation",
+    "llm_analyzer"
+  ],
+  "duration_ms": 7447,
+  "findings": [
+    {
+      "analyzer": "llm",
+      "category": "policy_violation",
+      "description": "The LLM analyzer encountered an error and could not complete semantic analysis: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.",
+      "file_path": null,
+      "id": "llm_analysis_failed_p5js",
+      "line_number": null,
+      "metadata": {
+        "error": "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.",
+        "error_type": "InternalServerError",
+        "llm_model": "openai/gpt-4o-mini",
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0"
+      },
+      "remediation": "Check your LLM provider configuration (API key, model name, network connectivity). The scan completed with static analysis only \u2014 LLM-based threat detection was not performed.",
+      "rule_id": "LLM_ANALYSIS_FAILED",
+      "severity": "INFO",
+      "snippet": null,
+      "title": "LLM analysis failed"
+    },
+    {
+      "analyzer": "llm",
+      "category": "policy_violation",
+      "description": "instruction body (26,998 chars) exceeds limit (20,000); only its beginning and end were analyzed",
+      "file_path": "SKILL.md (instruction body)",
+      "id": "llm_budget_SKILL.md (instruction body)",
+      "line_number": null,
+      "metadata": {
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0"
+      },
+      "remediation": "Increase llm_analysis.max_instruction_body_chars in your scan policy to include more content. The full file was not analyzed.",
+      "rule_id": "LLM_CONTEXT_BUDGET_EXCEEDED",
+      "severity": "INFO",
+      "snippet": null,
+      "title": "'SKILL.md (instruction body)' only partially analyzed (19,999 excerpt chars from 26,998)"
+    },
+    {
+      "analyzer": "llm",
+      "category": "policy_violation",
+      "description": "file size (10,430 chars) exceeds per-file limit (10,000)",
+      "file_path": "references/animation.md",
+      "id": "llm_budget_references/animation.md",
+      "line_number": null,
+      "metadata": {
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0"
+      },
+      "remediation": "Increase llm_analysis.max_referenced_file_chars in your scan policy to include this content in LLM analysis.",
+      "rule_id": "LLM_CONTEXT_BUDGET_EXCEEDED",
+      "severity": "INFO",
+      "snippet": null,
+      "title": "'references/animation.md' excluded from LLM analysis (10,430 chars)"
+    },
+    {
+      "analyzer": "llm",
+      "category": "policy_violation",
+      "description": "file size (15,505 chars) exceeds per-file limit (10,000)",
+      "file_path": "references/export-pipeline.md",
+      "id": "llm_budget_references/export-pipeline.md",
+      "line_number": null,
+      "metadata": {
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0"
+      },
+      "remediation": "Increase llm_analysis.max_referenced_file_chars in your scan policy to include this content in LLM analysis.",
+      "rule_id": "LLM_CONTEXT_BUDGET_EXCEEDED",
+      "severity": "INFO",
+      "snippet": null,
+      "title": "'references/export-pipeline.md' excluded from LLM analysis (15,505 chars)"
+    },
+    {
+      "analyzer": "llm",
+      "category": "policy_violation",
+      "description": "file size (12,999 chars) exceeds per-file limit (10,000)",
+      "file_path": "references/troubleshooting.md",
+      "id": "llm_budget_references/troubleshooting.md",
+      "line_number": null,
+      "metadata": {
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0"
+      },
+      "remediation": "Increase llm_analysis.max_referenced_file_chars in your scan policy to include this content in LLM analysis.",
+      "rule_id": "LLM_CONTEXT_BUDGET_EXCEEDED",
+      "severity": "INFO",
+      "snippet": null,
+      "title": "'references/troubleshooting.md' excluded from LLM analysis (12,999 chars)"
+    },
+    {
+      "analyzer": "llm",
+      "category": "policy_violation",
+      "description": "file size (23,414 chars) exceeds per-file limit (10,000)",
+      "file_path": "references/visual-effects.md",
+      "id": "llm_budget_references/visual-effects.md",
+      "line_number": null,
+      "metadata": {
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0"
+      },
+      "remediation": "Increase llm_analysis.max_referenced_file_chars in your scan policy to include this content in LLM analysis.",
+      "rule_id": "LLM_CONTEXT_BUDGET_EXCEEDED",
+      "severity": "INFO",
+      "snippet": null,
+      "title": "'references/visual-effects.md' excluded from LLM analysis (23,414 chars)"
+    },
+    {
+      "analyzer": "static",
+      "category": "command_injection",
+      "description": "Pattern detected: Function('",
+      "file_path": "scripts/export-frames.js",
+      "id": "COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR_73e072afbc",
+      "line_number": 128,
+      "metadata": {
+        "aitech": "AITech-9.1",
+        "aitech_name": "Model or Agentic System Manipulation",
+        "category_normalization": "native",
+        "matched_pattern": "(?<!\\.)Function\\s*\\(\\s*['\"]",
+        "matched_text": "Function('",
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0",
+        "scanner_category": "INJECTION ATTACK",
+        "semantic_facts": {
+          "context_kind": "code",
+          "evidence_kind": "signature_pattern",
+          "signals": [
+            {
+              "file_path": "scripts/export-frames.js",
+              "kind": "signature_polarity",
+              "rule_id": "COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR",
+              "value_class": "active"
+            }
+          ]
+        },
+        "signature_context": "code",
+        "signature_match_end": 28,
+        "signature_match_start": 18,
+        "signature_pattern_index": 1,
+        "signature_pattern_sha256": "3a5cc07b10fb4b6da4c8ca5ac2ec334c1f8798c052896791c677f1beae01e2c4",
+        "signature_polarity": "active",
+        "source_category": "command_injection"
+      },
+      "remediation": "Avoid new Function() and string arguments to setTimeout/setInterval. Use direct function references instead",
+      "rule_id": "COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR",
+      "severity": "CRITICAL",
+      "snippet": "await page.waitForFunction('window._p5Ready === true', { timeout: 5000 });",
+      "title": "Dynamic code execution via Function constructor or string-based setTimeout/setInterval"
+    },
+    {
+      "analyzer": "llm",
+      "category": "policy_violation",
+      "description": "file size (10,828 chars) exceeds per-file limit (10,000)",
+      "file_path": "templates/viewer.html",
+      "id": "llm_budget_templates/viewer.html",
+      "line_number": null,
+      "metadata": {
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0"
+      },
+      "remediation": "Increase llm_analysis.max_referenced_file_chars in your scan policy to include this content in LLM analysis.",
+      "rule_id": "LLM_CONTEXT_BUDGET_EXCEEDED",
+      "severity": "INFO",
+      "snippet": null,
+      "title": "'templates/viewer.html' excluded from LLM analysis (10,828 chars)"
+    }
+  ],
+  "findings_count": 8,
+  "is_safe": false,
+  "max_severity": "CRITICAL",
+  "scan_duration_seconds": 7.447476863861084,
+  "scan_metadata": {
+    "cel": {
+      "elapsed_ms": 0.0,
+      "errors": [],
+      "evaluated": 0,
+      "evaluation_ms": 0.0,
+      "expression_set_hash": "f26459b8f4a46a974d7ab0aaae34127b5b6a40d693e266e12fca03a69a6d26aa",
+      "fact_schema": "v1",
+      "fallbacks": 0,
+      "mode": "shadow",
+      "per_rule": {},
+      "projection_incomplete": 0,
+      "projection_ms": 0.0,
+      "retained": 1,
+      "runtime": "cel-go",
+      "runtime_version": "v0.32.0;helper=2.2.1",
+      "suppressed": 0,
+      "suppressed_candidates": [],
+      "would_suppress": 0
+    },
+    "llm_overall_assessment": "",
+    "llm_primary_threats": [],
+    "policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+    "policy_name": "default",
+    "policy_preset_base": "balanced",
+    "policy_version": "1.0",
+    "rule_contract": {
+      "checked": 7,
+      "errors": [],
+      "invalid_findings": 0,
+      "schema_version": 2,
+      "status": "passed"
+    }
+  },
+  "skill_name": "p5js",
+  "skill_path": "<skills>/creative/p5js",
+  "timestamp": "2026-10-18T23:49:23.977604+00:00"
+}

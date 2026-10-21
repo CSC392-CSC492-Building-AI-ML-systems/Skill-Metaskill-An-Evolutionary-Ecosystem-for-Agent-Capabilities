@@ -73,7 +73,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `scanner_version` | Version of the external safety scanner; empty if it did not run |
 | `checks_version` | Version of our own safety rule set ([evaluate-safety.md](evaluate-safety.md), section 3.2) |
 
-**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), a status for each dimension (`dimensions`), and three lists: `tests`, `rubric` and `findings`.
+**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), a status for each dimension (`dimensions`), and four lists: `tests`, `rubric`, `findings` and `local_warnings`.
 
 **Dimension status (`dimensions`).** One entry per dimension, keyed by dimension name. It records whether the dimension ran as configured, so a score produced with less than was asked for (for example a `deep` safety scan that fell back to `static`) is not mistaken for a full one.
 
@@ -123,6 +123,16 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `quote` | The offending text |
 | `location` | File and line, e.g. `SKILL.md:42` |
 | `message` | What is wrong, in plain words, for the report |
+
+**Local warnings (`local_warnings`).** What the skill would delete on the machine that ran the evaluation, when that looks important ([safety/local.md](safety/local.md)). Specific to that machine and never scored. They contain real local paths, so remove them before sharing a report.
+
+| Field | Description |
+|---|---|
+| `target` | The delete target as written in the skill, e.g. `~/Documents/drafts` |
+| `resolved` | The real path on this machine |
+| `location` | Where the delete is in the skill, e.g. `SKILL.md:14` |
+| `reasons` | Why it looks important, e.g. `contains 312 files` |
+| `message` | One sentence for the user |
 
 Example (abridged):
 
@@ -179,7 +189,8 @@ Example (abridged):
       "quote": "gsutil rm -r gs://...",
       "location": "SKILL.md:42",
       "message": "Recursively deletes a bucket path with no confirmation step before it"
-    }]
+    }],
+    "local_warnings": []
   }]
 }
 ```
@@ -221,7 +232,7 @@ How hard is it to get the skill working, and is that effort necessary? Signals:
 - Placeholders (`{{...}}`) that map to a documented config entry count **positively**. This is what `generalize` produces.
 - Penalties for hardcoded paths, usernames, hosts, or credentials (reuses `generalize` detection), for undocumented placeholders, and for config that the skill body never uses.
 - An LLM check for setup steps that could be simplified or removed.
-- **[OPEN]** Whether this dimension also consumes the safety scanner's `hardcoded_secrets` and `policy_violation` findings, which are cleanliness issues, not safety ones. See [evaluate-safety.md](evaluate-safety.md), section 2.
+- The safety scanner's `hardcoded_secrets` and `policy_violation` findings are routed here (`dimension: config_cleanliness`), since they are cleanliness issues, not safety ones. See [evaluate-safety.md](evaluate-safety.md), section 2.2. **[OPEN]** Whether and how they affect this dimension's score.
 
 ### 3.5 Efficiency
 

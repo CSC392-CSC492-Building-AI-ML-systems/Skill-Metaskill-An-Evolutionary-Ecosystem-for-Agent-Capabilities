@@ -577,6 +577,40 @@ class Scores:
 
 
 @dataclass
+class LocalWarning:
+    """Running the skill on this machine could delete something important.
+
+    Specific to the machine that ran the evaluation, never scored
+    (docs/safety/local.md). Holds real local paths: remove before sharing a report.
+    """
+
+    target: str  # as written in the skill, e.g. "~/Documents/drafts"
+    resolved: str  # the real path on this machine
+    location: str  # where the delete is in the skill, e.g. "SKILL.md:14"
+    reasons: list[str]  # e.g. ["contains 312 files", "is a git repository"]
+    message: str  # one sentence for the user
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target,
+            "resolved": self.resolved,
+            "location": self.location,
+            "reasons": self.reasons,
+            "message": self.message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LocalWarning:
+        return LocalWarning(
+            target=data["target"],
+            resolved=data["resolved"],
+            location=data["location"],
+            reasons=data["reasons"],
+            message=data["message"],
+        )
+
+
+@dataclass
 class SkillResult:
     """Everything evaluated for one skill."""
 
@@ -587,6 +621,7 @@ class SkillResult:
     tests: list[TestResult] = field(default_factory=list)
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -597,6 +632,7 @@ class SkillResult:
             "tests": [t.to_dict() for t in self.tests],
             "rubric": [r.to_dict() for r in self.rubric],
             "findings": [f.to_dict() for f in self.findings],
+            "local_warnings": [w.to_dict() for w in self.local_warnings],
         }
 
     @classmethod
@@ -611,6 +647,7 @@ class SkillResult:
             tests=[TestResult.from_dict(t) for t in data["tests"]],
             rubric=[RubricRating.from_dict(r) for r in data["rubric"]],
             findings=[Finding.from_dict(f) for f in data["findings"]],
+            local_warnings=[LocalWarning.from_dict(w) for w in data.get("local_warnings", [])],
         )
 
 
