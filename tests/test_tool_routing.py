@@ -240,7 +240,6 @@ def test_register_wires_tool_and_command():
     plugin.register(ctx)
     assert [t["name"] for t in ctx.tools] == ["metaskill"]
     assert ctx.tasks == ["metaskill_judge"]
-    assert ctx.tasks == ["metaskill_judge"]
     name, handler, _, hint = ctx.commands[0]
     assert name == "metaskill" and hint
     handler("generalize my-skill")

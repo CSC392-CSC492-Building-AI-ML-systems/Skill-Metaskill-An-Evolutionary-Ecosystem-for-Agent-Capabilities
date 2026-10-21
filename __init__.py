@@ -2,14 +2,8 @@
 
 import functools
 
-import functools
-
 from . import schemas, tools
 from .metaskill.evaluate.judge import JUDGE_TASK
-
-
-def _handle_metaskill(raw_args):
-    return "metaskill is not implemented yet"
 
 
 def _handle_metaskill(raw_args):

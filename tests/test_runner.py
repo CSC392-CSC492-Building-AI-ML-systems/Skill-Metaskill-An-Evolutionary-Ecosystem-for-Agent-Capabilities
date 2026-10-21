@@ -83,7 +83,8 @@ def task(task_id="write-report", checks=None, fixtures=()):
 def writes_report_with_skill(prompt, skill, workdir):
     if skill is not None:
         (workdir / "report.txt").write_text("ok", encoding="utf-8")
-    return AgentRun(output="wrote it" if skill else "could not", tokens=120, tool_calls=3)
+    output = "wrote the report to report.txt" if skill else "could not"
+    return AgentRun(output=output, tokens=120, tool_calls=3)
 
 
 # --- Running ----------------------------------------------------------------
@@ -184,14 +185,16 @@ def test_llm_checks_without_a_judge_are_errors_and_not_run(skill, run_dir):
 
 
 def test_llm_judge_is_built_once_and_reports_its_model(skill, run_dir):
-    reply = {"items": [{"item": 1, "met": True, "reason": "", "quote": "wrote it"}]}
+    # The judge needs a quote of at least 3 words or 15 characters (judge.MIN_QUOTE_WORDS).
+    quote = "wrote the report to report.txt"
+    reply = {"items": [{"item": 1, "met": True, "reason": "", "quote": quote}]}
     ctx = SimpleNamespace(llm=FakeLlm(reply, reply))
     result = run_tasks(skill, [task(checks=[LLM_CHECK])], FakeAgent(writes_report_with_skill),
                        config=config(runs=1, judge_retries=0), run_dir=run_dir, ctx=ctx)
     with_skill, baseline = result.tests
     assert with_skill.passed and with_skill.judge is JudgeType.LLM
-    assert with_skill.evidence == "wrote it"
-    assert not baseline.passed  # "wrote it" is not in the baseline's output
+    assert with_skill.evidence == quote
+    assert not baseline.passed  # the quote is not in the baseline's output
     assert result.judge_model == "fake/judge-model"
     assert result.judge_usage == TokenUsage(100, 10, 2)
 
