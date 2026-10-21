@@ -31,7 +31,7 @@ verdict = judge.judge(task, check, RunOutput(text=agent_output, workdir=run_dir)
 | `ctx` | The Hermes plugin context passed to `register(ctx)`. Required for the LLM judge |
 | `config` | `EvaluationConfig`; the LLM judge reads `judge_provider` and `judge_model` from it. Defaults to `EvaluationConfig()` |
 | `timeout` | Seconds an `exit_code` command may run. Deterministic judge only |
-| `run_command` | Runs `exit_code` commands: `(command, workdir, timeout) -> (exit code or None on timeout, stderr)`. Defaults to `run_on_host` (1.3). Deterministic judge only |
+| `run_command` | Runs `exit_code` commands: `(command, workdir, timeout) -> (exit code or None on timeout, stderr)`. Without one, `exit_code` checks are not run (1.3). Deterministic judge only |
 
 Every `Check` records its own judge type, so the runner can choose the judge per check:
 
@@ -82,7 +82,9 @@ Behaviour to be aware of:
 
 - A `file_exists` target that, as written, points outside `workdir` (an absolute path, or `../x`) raises `JudgeError`. This is checked on the text of the target, not on disk.
 - A `file_exists` target that the agent run made into a link leading out of `workdir` counts as not existing, so the task fails. Otherwise a skill could plant such a link to turn a failed task into a `JudgeError`, which leaves the dimension unscored instead of scored low.
-- **`exit_code` runs untrusted code.** The command is human-written, but it usually runs files in `workdir` (e.g. `python test.py`) that the agent run, steered by the skill under test, could have replaced. `runner.py` should pass a `run_command` that runs it in the same sandbox as the task run. The default, `run_on_host`, runs it on this machine with the user's file permissions, so it is not a sandbox. It only limits the damage:
+- **`exit_code` runs untrusted code, so it needs a sandbox.** The command is human-written, but it usually runs files in `workdir` (e.g. `python test.py`) that the agent run, steered by the skill under test, could have replaced. It must run in the same sandbox as the task run, through the `run_command` that `runner.py` passes (planned with MET-20).
+- **Without a `run_command`, `exit_code` checks are not run.** They raise `JudgeUnavailable`, so the run is recorded as not judged rather than failed, and a task with an `exit_code` check cannot be scored until the sandbox exists. `target` and `expected` are still validated first, so a broken check raises `JudgeError` as usual.
+- `run_on_host` runs the command on this machine, with the user's file and network access. It is not a sandbox and is only for tests, where the commands are the test's own. It limits some damage, nothing more:
   - a clean environment: only `PATH`, `PATHEXT`, `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `LANG`, `LC_ALL` and `TZ` are kept, so API keys Hermes loaded from `~/.hermes/.env` are not passed on; `HOME`, `USERPROFILE` and the temp folder variables point at `workdir`; on Windows, `NoDefaultCurrentDirectoryInExePath` stops `cmd.exe` from running a `python.bat` the run left in `workdir` in place of `python`;
   - no stdin, stdout discarded, and only the last 1,000 bytes of stderr kept;
   - on timeout, the command and every process it started are killed. On POSIX, background processes it left running are killed even when it exits in time.
@@ -185,7 +187,7 @@ Every call, retries included, counts in `usage`.
 
 | Exception | Meaning | What the caller does |
 |---|---|---|
-| `JudgeUnavailable` | The judge cannot run. Causes: no `ctx.llm`, no provider or credentials (Hermes' `AuxiliaryClientUnavailable`), a provider/model override that Hermes refused, or `make_judge("llm")` without `ctx` | Mark the dimension `skipped` (score `null`) |
+| `JudgeUnavailable` | The judge cannot run. Causes: no `ctx.llm`, no provider or credentials (Hermes' `AuxiliaryClientUnavailable`), a provider/model override that Hermes refused, `make_judge("llm")` without `ctx`, or an `exit_code` check with no sandbox (`run_command`) | Mark the dimension `skipped` (score `null`) |
 | `JudgeError` | The judge ran, but its answer could not be used (no JSON object after every retry, request failure), Hermes rejected the request's arguments, or a deterministic check is malformed | Mark the dimension `error` (score `null`) |
 | `ValueError` | Programming error, e.g. a check given to the wrong judge type, or an empty checklist | Fix the caller |
 

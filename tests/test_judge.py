@@ -18,6 +18,7 @@ from metaskill.evaluate.judge import (
     fit,
     locate,
     make_judge,
+    run_on_host,
     schema_problems,
     skill_sources,
     strip_hidden,
@@ -492,7 +493,7 @@ def test_file_exists_does_not_follow_links_out_of_the_run_folder(tmp_path):
 
 
 def test_exit_code(tmp_path):
-    j = DeterministicJudge()
+    j = DeterministicJudge(run_command=run_on_host)
     ok = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "exit 0"), run_in(tmp_path))
     three = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "exit 3", "3"), run_in(tmp_path))
     wrong = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "exit 1"), run_in(tmp_path))
@@ -505,7 +506,7 @@ def test_exit_code_runs_in_the_run_folder(tmp_path):
     check = deterministic(
         CheckKind.EXIT_CODE,
         f'"{sys.executable}" -c "import os, sys; sys.exit(not os.path.exists(\'marker\'))"')
-    assert DeterministicJudge().judge(TASK, check, run_in(tmp_path)).passed
+    assert DeterministicJudge(run_command=run_on_host).judge(TASK, check, run_in(tmp_path)).passed
 
 
 def test_exit_code_gets_a_clean_environment(tmp_path, monkeypatch):
@@ -513,13 +514,21 @@ def test_exit_code_gets_a_clean_environment(tmp_path, monkeypatch):
     script = ("import os, sys; home = os.path.realpath(os.path.expanduser('~')); "
               "sys.exit('OPENAI_API_KEY' in os.environ or home != os.path.realpath('.'))")
     check = deterministic(CheckKind.EXIT_CODE, f'"{sys.executable}" -c "{script}"')
-    assert DeterministicJudge().judge(TASK, check, run_in(tmp_path)).passed
+    assert DeterministicJudge(run_command=run_on_host).judge(TASK, check, run_in(tmp_path)).passed
 
 
 def test_exit_code_times_out(tmp_path):
     check = deterministic(CheckKind.EXIT_CODE, f'"{sys.executable}" -c "import time; time.sleep(30)"')
-    verdict = DeterministicJudge(timeout=0.5).judge(TASK, check, run_in(tmp_path))
+    j = DeterministicJudge(timeout=0.5, run_command=run_on_host)
+    verdict = j.judge(TASK, check, run_in(tmp_path))
     assert not verdict.passed and "timed out" in verdict.reason
+
+
+def test_exit_code_is_not_run_without_a_sandbox(tmp_path):
+    check = deterministic(CheckKind.EXIT_CODE, f'"{sys.executable}" -c "open(\'ran\', \'w\')"')
+    with pytest.raises(JudgeUnavailable, match="need a sandbox"):
+        make_judge(JudgeType.DETERMINISTIC).judge(TASK, check, run_in(tmp_path))
+    assert not (tmp_path / "ran").exists()
 
 
 def test_exit_code_runs_through_the_given_runner(tmp_path):

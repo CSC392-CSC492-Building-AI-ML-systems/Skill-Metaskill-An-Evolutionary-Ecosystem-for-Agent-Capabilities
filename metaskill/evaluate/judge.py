@@ -680,15 +680,16 @@ class DeterministicJudge:
     path outside the run folder) raises JudgeError: the task is broken, not the skill.
 
     `run_command` runs EXIT_CODE commands. The command usually runs files the agent run
-    could have changed, so it is untrusted code: runner.py passes one that runs it in the
-    same sandbox as the run. The default, run_on_host, only gives it a clean environment.
+    could have changed, so it is untrusted code and must run in the same sandbox as the
+    run. Without a `run_command`, EXIT_CODE checks raise JudgeUnavailable rather than run
+    on this machine. run_on_host is not a sandbox; pass it only in tests.
     """
 
     judge_type: ClassVar[JudgeType] = JudgeType.DETERMINISTIC
 
     def __init__(self, *, timeout: float = 60.0, run_command: CommandRunner | None = None):
         self.timeout = timeout  # seconds an EXIT_CODE command may run
-        self.run_command = run_command or run_on_host
+        self.run_command = run_command
 
     def judge(self, task: Task, check: Check, run: RunOutput) -> Verdict:
         _require(self, check)
@@ -722,6 +723,10 @@ class DeterministicJudge:
         except ValueError:
             raise JudgeError(
                 f"exit_code expected must be an integer, got {check.expected!r}") from None
+        if self.run_command is None:
+            raise JudgeUnavailable(
+                f"`{check.target}` was not run: exit_code checks run files the agent run "
+                "could have changed, so they need a sandbox, and none is configured")
         code, stderr = self.run_command(check.target, run.workdir, self.timeout)
         if code is None:
             return _binary(False, f"`{check.target}` timed out after {self.timeout:g}s")
@@ -755,7 +760,8 @@ _STDERR_TAIL = 1000  # bytes of stderr kept
 
 
 def run_on_host(command: str, workdir: Path, timeout: float) -> tuple[int | None, str]:
-    """Run command through a shell in workdir, on this machine. Not a sandbox.
+    """Run command through a shell in workdir, on this machine. Not a sandbox: the
+    command has the user's file and network access, so this is only for tests.
 
     The command gets a clean environment, with home and temp folders pointing at
     workdir, and no stdin. On timeout, it and every process it started are killed.
