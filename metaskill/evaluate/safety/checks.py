@@ -108,6 +108,19 @@ class DeleteTarget:
     severity: Severity
 
 
+@dataclass
+class SkippedWarning:
+    """A prose match skipped because its sentence warns against it, for the deep
+    review's re-check (docs/safety/review.md, "Re-checking skipped warnings")."""
+
+    location: str  # e.g. "SKILL.md:12"
+    rule: str
+    snippet: str  # the matched command, e.g. "rm -rf ~/"
+    sentence: str  # the sentence containing the match
+    paragraph: str  # the paragraph or list item it is in
+    finding: Finding  # what it becomes if the re-check says it is an instruction
+
+
 class ChecksBackend:
     name = "own-checks"
 
@@ -116,7 +129,7 @@ class ChecksBackend:
 
     def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult:
         try:
-            findings, _, notes = _run(skill)
+            findings, _, notes, _ = _run(skill)
         except Exception as e:  # never raise into the caller
             return BackendResult(self.name, BackendStatus.ERROR, tier,
                                  detail=f"{type(e).__name__}: {e}")
@@ -126,6 +139,13 @@ class ChecksBackend:
 def delete_targets(skill: Skill) -> list[DeleteTarget]:
     """Every unconfirmed delete target, as data. Same parsing as scan()."""
     return _run(skill)[1]
+
+
+def skipped_warnings(skill: Skill) -> list[SkippedWarning]:
+    """Prose matches skipped as warnings that would otherwise be findings. Same
+    parsing as scan(); a match that was also confirmed is left out, since it would
+    not be a finding either way."""
+    return _run(skill)[3]
 
 
 # --- Reading the skill ---------------------------------------------------------
@@ -152,7 +172,7 @@ class _Context:
     links: set[str] = field(default_factory=set)  # names that are or become symlinks
 
 
-def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
+def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
     notes: list[str] = []
     files = _read_files(skill, notes)
     units = [u for path, text in files for u in _units(path, text)]
@@ -171,6 +191,7 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
     found: dict[tuple[str, int, str], Finding] = {}
     targets: list[DeleteTarget] = []
     skipped: list[str] = []
+    rechecks: list[SkippedWarning] = []
 
     for u_index, unit in enumerate(units):
         previous = units[u_index - 1] if u_index and units[u_index - 1].path == unit.path else None
@@ -179,6 +200,14 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
                 location = f"{unit.path}:{lineno}"
                 if unit.kind == "prose" and _is_warning(unit, l_index, hit.start):
                     skipped.append(f"{location} ({hit.snippet})")
+                    if not (hit.category == DESTRUCTIVE and (
+                            hit.confirmed or _confirmed(unit, l_index, previous))):
+                        rechecks.append(SkippedWarning(
+                            location, hit.rule, hit.snippet,
+                            _sentence(unit, l_index, hit.start),
+                            " ".join(t.strip() for _, t in unit.lines),
+                            # A throwaway target list: skipped deletes are not delete targets.
+                            _finding(hit, unit, lineno, text, ctx, [])))
                     continue
                 if hit.category == DESTRUCTIVE and (
                         hit.confirmed or _confirmed(unit, l_index, previous)):
@@ -204,7 +233,7 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
         shown = ", ".join(skipped[:MAX_LISTED_SKIPS])
         more = len(skipped) - MAX_LISTED_SKIPS
         notes.insert(0, f"skipped as a warning: {shown}" + (f" and {more} more" if more > 0 else ""))
-    return list(found.values()), targets, notes
+    return list(found.values()), targets, notes, rechecks
 
 
 # --- Hidden characters (checks.md, "Hidden characters") --------------------------
@@ -662,16 +691,29 @@ _NOT_A_WARNING = re.compile(
     re.I)
 
 
-def _is_warning(unit: _Unit, line_index: int, col: int) -> bool:
-    """A prose match that its own sentence warns against (checks.md, warning check)."""
-    if unit.warning_block:
-        return True
+def _sentence_span(unit: _Unit, line_index: int, col: int) -> tuple[str, int, int, int]:
+    """The prose unit as one string, and the start, match position and end of the
+    sentence containing column col of line line_index. Inline code is not split."""
     texts = [text for _, text in unit.lines]
     joined = " ".join(texts)
     position = sum(len(t) + 1 for t in texts[:line_index]) + col
     masked = re.sub(r"`[^`]*`", lambda m: "x" * len(m.group(0)), joined)
     starts = [m.end() for m in re.finditer(r"[.!?](?=\s)", masked[:position])]
-    prefix = joined[starts[-1] if starts else 0:position]
+    end = re.compile(r"[.!?](?=\s|$)").search(masked, position)
+    return joined, starts[-1] if starts else 0, position, end.end() if end else len(joined)
+
+
+def _sentence(unit: _Unit, line_index: int, col: int) -> str:
+    joined, start, _, end = _sentence_span(unit, line_index, col)
+    return joined[start:end].strip()
+
+
+def _is_warning(unit: _Unit, line_index: int, col: int) -> bool:
+    """A prose match that its own sentence warns against (checks.md, warning check)."""
+    if unit.warning_block:
+        return True
+    joined, start, position, _ = _sentence_span(unit, line_index, col)
+    prefix = joined[start:position]
     return bool(_WARNING_WORDS.search(prefix)) and not _NOT_A_WARNING.search(prefix)
 
 

@@ -489,3 +489,37 @@ def test_emoji_flags_joiners_bom_and_comments_are_not_hidden_text(tmp_path):
 
 def found_list(findings):
     return {(f.rule, f.location, f.severity) for f in findings}
+
+
+# --- Skipped warnings, for the deep review's re-check -----------------------------------
+
+
+def test_skipped_warnings_carry_the_sentence_paragraph_and_finding(tmp_path):
+    text = "Be careful here. Never run `rm -rf ~/` on this machine. Use the build folder instead."
+    [w] = checks.skipped_warnings(make(tmp_path, {"SKILL.md": text + "\n"}))
+    assert w.location == "SKILL.md:1"
+    assert w.rule == "recursive-delete"
+    assert w.sentence == "Never run `rm -rf ~/` on this machine."
+    assert w.paragraph == text
+    assert (w.finding.severity, w.finding.source) == (CRITICAL, "own-checks")
+
+
+def test_skipped_warnings_match_the_skipped_list_in_detail():
+    skill = load(FIXTURES / "warnings-only")
+    locations = {w.location for w in checks.skipped_warnings(skill)}
+    assert locations == {"SKILL.md:8", "SKILL.md:11", "SKILL.md:13"}
+    for location in locations:
+        assert location in scan(skill).detail
+
+
+def test_confirmed_skipped_matches_are_not_rechecked(tmp_path):
+    text = "Back up first. Never run `rm -rf data/` without that backup."
+    skill = make(tmp_path, {"SKILL.md": text + "\n"})
+    assert "skipped as a warning" in scan(skill).detail
+    assert checks.skipped_warnings(skill) == []
+
+
+def test_skipped_deletes_are_not_delete_targets(tmp_path):
+    skill = make(tmp_path, {"SKILL.md": "Never run `rm -rf ~/`.\n"})
+    assert checks.skipped_warnings(skill)
+    assert delete_targets(skill) == []
