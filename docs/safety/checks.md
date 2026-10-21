@@ -19,7 +19,10 @@ class ChecksBackend:
     def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult: ...
 
 def delete_targets(skill: Skill) -> list[DeleteTarget]: ...
+def skipped_warnings(skill: Skill) -> list[SkippedWarning]: ...
 ```
+
+`skipped_warnings(skill)` returns each prose match skipped as a warning, with its sentence, paragraph and the finding it would become, for the deep review's re-check ([review.md](review.md)). Matches that were also confirmed are left out.
 
 `delete_targets()` returns every unconfirmed delete with its target as data: the path as written, its location, whether the command follows symlinks, and the severity it was given. The local warnings in [local.md](local.md) use it to look the targets up on the user's machine. `scan()` uses the same parsing, so the two never disagree.
 

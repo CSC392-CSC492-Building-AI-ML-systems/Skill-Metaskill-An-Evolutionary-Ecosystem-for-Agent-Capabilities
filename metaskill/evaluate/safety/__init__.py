@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from metaskill.evaluate.judge import JUDGE_TASK
+from metaskill.evaluate.judge import JUDGE_TASK, Judge
 from metaskill.evaluate.models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
 from metaskill.evaluate.safety import local
@@ -18,6 +18,7 @@ from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, PACKAGE, CiscoBacke
 from metaskill.evaluate.safety.findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
 from metaskill.evaluate.safety.hermes_bridge import PluginLlm
+from metaskill.evaluate.safety.review import ReviewBackend
 
 # Statuses that still produced findings the score can rely on. A deep scan that
 # fell back to static is usable: its static findings are real.
@@ -73,9 +74,15 @@ def local_warnings(skill: Skill, config_values: dict[str, str] | None = None) ->
 def default_backends(config: EvaluationConfig, llm: PluginLlm | None = None) -> list[SafetyBackend]:
     """The backends for a tier: Cisco and own checks, plus the LLM review at deep.
 
-    The LLM review (review.py) is not built yet.
+    Without llm (Hermes's ctx.llm), the review is still listed at deep so its absence
+    shows as llm-unavailable, and safety as partial.
     """
-    return [CiscoBackend(llm, task=JUDGE_TASK), ChecksBackend()]
+    backends: list[SafetyBackend] = [CiscoBackend(llm, task=JUDGE_TASK), ChecksBackend()]
+    if config.safety_tier is SafetyTier.DEEP:
+        judge = Judge(llm, provider=config.judge_provider, model=config.judge_model,
+                      retries=config.judge_retries, max_chars=config.judge_max_chars) if llm else None
+        backends.append(ReviewBackend(judge))
+    return backends
 
 
 def missing_dependencies() -> list[Dependency]:
