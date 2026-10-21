@@ -187,7 +187,9 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
             ctx.shell_vars[path] = _assignments(_CMD_ASSIGN, _CMD_LITERAL, text)
         elif Path(path).suffix.lower() in (".ps1", ".psm1"):
             ctx.shell_vars[path] = _assignments(_PS_ASSIGN, _PY_LITERAL, text)
-        ctx.py_vars[path] = _assignments(_PY_ASSIGN, _PY_LITERAL, text)
+        ctx.py_vars[path] = {
+            name: [_python_path(v) if v is not None else None for v in values]
+            for name, values in _assignments(_PY_ASSIGN, _PY_ANY, text).items()}
     bundle_links = _bundle_symlinks(skill)
     ctx.links = {_normalize(name) for name, _ in bundle_links} | _created_links(units)
 
@@ -417,10 +419,62 @@ def _hits(text: str, unit: _Unit) -> list[_Hit]:
 
 
 _RM = re.compile(r"(?<![\w.-])rm\s+")
-_RMTREE = re.compile(r"shutil\.rmtree\(\s*(?:(['\"])(.*?)\1|([A-Za-z_][\w.]*))")
+_RMTREE = re.compile(r"shutil\.rmtree\(")
+_PY_STR = r"""(?:[rRbBuU]?(?P<q>['"])(?P<s>[^'"]*)(?P=q))"""
+# Python expressions for the home folder: os.environ["HOME"], os.getenv("HOME"),
+# os.path.expanduser("~"), Path.home() and pathlib.Path.home().
+_PY_HOME = (r"(?:os\.environ\s*\[\s*['\"](?:HOME|USERPROFILE)['\"]\s*\]"
+            r"|os\.environ\.get\(\s*['\"](?:HOME|USERPROFILE)['\"]\s*\)"
+            r"|os\.getenv\(\s*['\"](?:HOME|USERPROFILE)['\"]\s*\)"
+            r"|os\.path\.expanduser\(\s*['\"]~['\"]\s*\)"
+            r"|(?:pathlib\.)?Path\.home\(\s*\))")
 _REMOVE_ITEM = re.compile(r"(?<![\w-])Remove-Item\b", re.I)
 _FIND = re.compile(r"(?<![\w.-])find\s+")
 _CMD_DELETE = re.compile(r"(?<![\w.%$-])(?:rmdir|rd|del|erase)(?=\s)", re.I)
+
+
+def _first_argument(text: str, start: int) -> str:
+    """The first argument of a call whose "(" ends at start, up to a top-level comma or ")"."""
+    depth, quote = 0, ""
+    for i in range(start, len(text)):
+        c = text[i]
+        if quote:
+            quote = "" if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return text[start:i].strip()
+            depth -= 1
+        elif c == "," and depth == 0:
+            return text[start:i].strip()
+    return text[start:].strip()
+
+
+def _python_path(expr: str) -> str | None:
+    """The path a Python expression names, written the way the rules read paths, or
+    None if it cannot be worked out: "~/Documents" for os.path.expanduser("~/Documents"),
+    os.path.join(os.environ["HOME"], "Documents") or Path.home() / "Documents"."""
+    expr = expr.strip()
+    m = re.fullmatch(_PY_STR, expr)
+    if m:
+        return m.group("s")
+    m = re.fullmatch(rf"os\.path\.expanduser\(\s*{_PY_STR}\s*\)", expr)
+    if m:
+        return m.group("s")
+    m = re.fullmatch(rf"(?:pathlib\.)?Path\(\s*{_PY_STR}\s*\)\.expanduser\(\s*\)", expr)
+    if m:
+        return m.group("s")
+    if re.fullmatch(_PY_HOME, expr):
+        return "~"
+    m = (re.fullmatch(rf"os\.path\.join\(\s*{_PY_HOME}(?P<rest>(?:\s*,\s*{_PY_STR})*)\s*\)", expr)
+         or re.fullmatch(rf"{_PY_HOME}(?P<rest>(?:\s*/\s*{_PY_STR})+)", expr))
+    if m:
+        parts = re.findall(r"""['"]([^'"]*)['"]""", m.group("rest"))
+        return "/".join(["~", *parts])
+    return None
 
 
 def _follows(target: str) -> bool:
@@ -456,10 +510,13 @@ def _deletes(text: str, prose: bool) -> list[_Hit]:
                          [(t, _follows(t)) for t in targets]))
 
     for m in _RMTREE.finditer(text):
-        literal, variable = m.group(2), m.group(3)
-        hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(), m.group(0) + ")",
-                         targets=[(literal if literal is not None else variable, False)],
-                         py_var=literal is None))
+        argument = _first_argument(text, m.end())
+        path = _python_path(argument)
+        is_name = path is None and re.fullmatch(r"[A-Za-z_]\w*", argument) is not None
+        hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
+                         f"shutil.rmtree({argument})",
+                         targets=[(path if path is not None else argument, False)],
+                         py_var=is_name))
 
     for m in _REMOVE_ITEM.finditer(text):
         args = _args(text, m.end())
@@ -795,6 +852,7 @@ _SHELL_LITERAL = re.compile(r"\"([^\"$`]*)\"|'([^']*)'|([^\s;&|\"'$`]*)")
 _PY_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*?)\s*(?:#.*)?$", re.M)
 _CMD_LITERAL = re.compile(r"([^%!]*)")
 _PY_LITERAL = re.compile(r"(['\"])([^'\"]*)\1")
+_PY_ANY = re.compile(r"(.+)")  # Python values are resolved by _python_path
 _CMD_ASSIGN = re.compile(r"^\s*set\s+\"?([A-Za-z_]\w*)=([^\"&|\r\n]*)\"?\s*$", re.M | re.I)
 _PS_ASSIGN = re.compile(r"^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*(?:#.*)?$", re.M)
 # $VAR, ${VAR}, ${VAR:?msg}, and on Windows %VAR%, $env:VAR, ${env:VAR}

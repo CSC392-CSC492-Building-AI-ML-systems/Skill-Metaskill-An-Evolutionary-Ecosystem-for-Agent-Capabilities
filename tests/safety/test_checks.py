@@ -604,3 +604,26 @@ def test_checks_version_was_bumped():
 ])
 def test_commands_named_as_examples(tmp_path, text, is_finding):
     assert bool(prose(tmp_path, text).findings) is is_finding
+
+
+
+@pytest.mark.parametrize("code, severity", [
+    ('shutil.rmtree(os.path.expanduser("~/Documents"))', CRITICAL),
+    ('shutil.rmtree(os.path.join(os.environ["HOME"], "Documents"))', CRITICAL),
+    ('shutil.rmtree(os.path.join(os.getenv("HOME"), "Pictures"), ignore_errors=True)', CRITICAL),
+    ('shutil.rmtree(Path.home() / "Desktop")', CRITICAL),
+    ('shutil.rmtree(pathlib.Path("~/Music").expanduser())', CRITICAL),
+    ('shutil.rmtree(Path.home())', CRITICAL),
+    ('shutil.rmtree(os.path.join(os.environ["HOME"], "Documents", "old"))', HIGH),
+    ('shutil.rmtree(Path.home() / ".cache" / "myapp")', HIGH),
+    ('shutil.rmtree(os.path.join(base, "build"))', HIGH),
+])
+def test_python_home_path_expressions(tmp_path, code, severity):
+    [f] = scan(make(tmp_path, {"scripts/clean.py": code + "\n"})).findings
+    assert f.severity is severity
+
+
+def test_python_variable_assigned_a_home_expression(tmp_path):
+    code = 'docs = os.path.expanduser("~/Documents")\nshutil.rmtree(docs)\n'
+    [f] = scan(make(tmp_path, {"scripts/clean.py": code})).findings
+    assert f.severity is CRITICAL

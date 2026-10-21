@@ -107,6 +107,7 @@ The check cannot see the user's machine, so it cannot know what is actually at a
 Rules for judging a target:
 
 - **Rebuildable only when plain.** A relative path whose last part is in the rebuildable list, such as `build/`, `./dist` or `frontend/node_modules`, or a path under `/tmp/`. A trailing `/*` (the folder's contents) is allowed. Any `..`, other glob, variable or other absolute path makes it unknown. A path ending in `..`, such as `build/../../`, resolves to `..` and is CRITICAL, so it never passes as `build/`.
+- **Python home-folder expressions are understood:** `os.path.expanduser("~/x")`, `os.path.join(os.environ["HOME"], "x")` (also `os.getenv` and `USERPROFILE`), `Path.home() / "x"` and `Path("~/x").expanduser()`, also when assigned to a variable first.
 - **Variables set in the same script are followed once.** `DIR=build` followed by `rm -rf "$DIR"` is judged as `build`. Only one literal assignment in the same file; anything else is unknown.
 - **Empty-variable guard.** `${DIR:?}` aborts when `DIR` is empty, so a guarded variable is judged as unknown, not CRITICAL.
 - **Placeholders are unknown.** A generalized skill's `rm -rf {{OUTPUT_DIR}}` deletes whatever folder each user configures, so it is HIGH.
