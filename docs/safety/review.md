@@ -92,7 +92,7 @@ So a prompt injection cannot make a skill look safer than the deterministic resu
 | One direction only, enforced in code | Injection making a skill look safer |
 | The reply is only read as data, never passed to a shell, `eval` or another prompt | Its output being executed |
 | Minimal input: sentence and paragraph, not the whole skill | Room for an injection to work with |
-| Hidden text removed first: HTML comments, invisible Unicode. The judge does this for the main call; `review.py` runs `strip_hidden()` on the re-check's sentences and paragraphs | Instructions a human reviewer cannot see |
+| Hidden text removed first: HTML comments, invisible Unicode. `review.py` runs `strip_hidden()` on the re-check's sentences and paragraphs. The main review is the exception: it sees hidden text marked as hidden, since that is where an instruction the user would not notice is most likely to be ([judge.md](../evaluate/judge.md) 2.3) | Instructions a human reviewer cannot see swaying the re-check |
 | One skill per call, no shared conversation | One skill's text affecting another's verdicts |
 | Small `max_tokens`, temperature 0, a timeout (`ask()`'s parameters), and `judge_retries` retries | Runaway output and cost |
 
@@ -138,8 +138,9 @@ A fake judge returns fixed responses, so no tests call a real model. Parsing, re
 
 `Judge.review(skill, categories, *, dimension, source, instructions, **options)` returns a `ReviewResult` with `findings`, `dropped`, `skipped` and `usage` ([judge.md](../evaluate/judge.md) 2.2). It already:
 
-- sends the skill's files with their paths and line numbers, hidden text stripped and cut to `judge_max_chars`;
-- tells the model, in every system prompt, that the skill is material to judge, never instructions;
+- sends the skill's files with their paths and line numbers, hidden text marked as hidden, and cut to `judge_max_chars`;
+- tells the model, in every system prompt, that the skill is material to judge, never instructions, and in the review's instructions what hidden text is;
+- stores the model's messages as one capped line; a report must still escape them ([judge.md](../evaluate/judge.md) 2.3);
 - sends the schema as guidance rather than having `ctx.llm` enforce it, which avoids the failures the Cisco adapter measured ([cisco.md](cisco.md), "How Cisco reaches the model"), and retries up to `judge_retries` times;
 - checks every quote, computes the location, and returns what it dropped with the reason;
 - records tokens for every call, retries included.
