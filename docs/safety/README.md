@@ -8,7 +8,7 @@ Status: planning. One document per file in `metaskill/evaluate/safety/`. The ove
 | `cisco.py` | [cisco.md](cisco.md) | Built, tested |
 | `__init__.py` | [score.md](score.md) | Built, tested; runs Cisco and own checks, the review once `review.py` exists |
 | `checks.py` | [checks.md](checks.md) | Built, tested; in the default backends |
-| `review.py` | [review.md](review.md) | Planned; blocked on `judge.py` |
+| `review.py` | [review.md](review.md) | Planned; `judge.py` is built, so it is no longer blocked |
 | `local.py` | [local.md](local.md) | Built, tested; called by the runner once it exists |
 
 ## How the files fit together
@@ -38,7 +38,7 @@ Each backend is independent: it only knows how to scan a skill and return a `Bac
 2. `cisco.py`: gives a working `static` tier with one backend.
 3. `__init__.py`: wires backends together; `score()` is usable by the runner from here.
 4. `checks.py`: adds the careless categories no scanner covers.
-5. `review.py`: adds `excess-scope`; needs `judge.py`.
+5. `review.py`: adds `excess-scope`; built on `judge.py` (see [review.md](review.md), "What `judge.py` already does").
 
 ## Rules every backend follows
 
