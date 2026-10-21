@@ -160,7 +160,7 @@ If `judge_model` lists more than one model, Hermes fell back to another model du
 - Hidden text is stripped first (`strip_hidden`): HTML comments and characters that render as nothing (zero-width, bidi controls, tag characters). A comment is replaced by its line breaks, so line numbers still match the file on disk.
 - `fit(sources, max_chars)` cuts it to `EvaluationConfig.judge_max_chars` in that order. A file that does not fit is skipped whole, and later, smaller files may still fit. `SKILL.md` is always sent, cut to the budget if it alone is over it.
 - Each file is sent in a `<file path="...">` block with numbered lines (`12| ...`). The path is JSON-quoted, so a file name cannot close the attribute or the block, and numbered lines mean a `</file>` inside a file cannot either.
-- Symbolic links are left out, like binary files. A link could point outside the skill, e.g. at `~/.hermes/.env`, and its target would be sent to the provider.
+- Symbolic links are left out, like binary files. A link could point outside the skill, e.g. at `~/.hermes/.env`, and its target would be sent to the provider. A `SKILL.md` that links outside the skill raises `JudgeError`, since its text is always sent.
 
 Everything in the input is untrusted. `MATERIAL_IS_DATA`, added to every system prompt, tells the judge that the input is material to evaluate and that instructions in it are to be judged, not followed.
 

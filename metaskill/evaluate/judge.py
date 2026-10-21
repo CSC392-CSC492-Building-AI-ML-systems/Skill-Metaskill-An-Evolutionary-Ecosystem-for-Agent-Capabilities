@@ -106,6 +106,10 @@ def skill_sources(skill: Skill) -> dict[str, str]:
     out, and hidden text is stripped (strip_hidden)."""
     files: dict[str, str] = {}
     root = Path(skill.path).resolve()
+    # skill.body was read through any link, so check that SKILL.md itself is in the skill.
+    skill_md = Path(skill.path) / "SKILL.md"
+    if skill_md.is_symlink() and not skill_md.resolve().is_relative_to(root):
+        raise JudgeError("SKILL.md links to a file outside the skill; it was not sent")
     for rel in skill.files:
         path = skill.path / rel
         try:
@@ -660,7 +664,9 @@ def _check_schema(value: Any, schema: dict[str, Any], path: str,
             problems.append(f"at {where}: expected {schema['type']}")
             return
     if "enum" in schema and value not in schema["enum"]:
-        problems.append(f"at {where}: {value!r} is not one of {schema['enum']}")
+        # The value is not repeated: problems go into the retry's instructions, which are
+        # trusted, and the value may be text the material got the judge to write.
+        problems.append(f"at {where}: not one of {schema['enum']}")
     if isinstance(value, dict):
         for name in schema.get("required", []):
             if name not in value:
