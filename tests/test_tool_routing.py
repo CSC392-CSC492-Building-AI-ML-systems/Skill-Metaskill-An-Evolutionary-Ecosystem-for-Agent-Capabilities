@@ -44,7 +44,8 @@ def fake_pipelines(monkeypatch):
 def test_schema_requires_operation_and_skill_path():
     params = schemas.METASKILL["parameters"]
     assert params["required"] == ["operation", "skill_path"]
-    assert params["properties"]["operation"]["enum"] == ["generalize", "personalize"]
+    assert params["properties"]["operation"]["enum"] == [
+        "generalize", "personalize"]
 
 
 def test_schema_stays_small():
@@ -53,7 +54,8 @@ def test_schema_stays_small():
 
 
 def test_generalize_routes_with_default_output(fake_pipelines):
-    result = json.loads(tools.metaskill({"operation": "generalize", "skill_path": "skills/gcp"}))
+    result = json.loads(tools.metaskill(
+        {"operation": "generalize", "skill_path": "skills/gcp"}))
     expected_output = os.path.join("metaskill-output", "gcp-template")
     assert fake_pipelines["generalize"] == ("skills/gcp", expected_output)
     assert result["success"] is True
@@ -63,38 +65,44 @@ def test_generalize_routes_with_default_output(fake_pipelines):
 
 
 def test_default_output_uses_directory_name_for_skill_md():
-    path = tools.default_output_path("generalize", os.path.join("skills", "gcp", "SKILL.md"))
+    path = tools.default_output_path(
+        "generalize", os.path.join("skills", "gcp", "SKILL.md"))
     assert path == os.path.join("metaskill-output", "gcp-template")
 
 
 def test_personalize_routes_config(fake_pipelines):
-    args = {"operation": "personalize", "skill_path": "out/t", "config_path": "c.json", "output_path": "o"}
+    args = {"operation": "personalize", "skill_path": "out/t",
+            "config_path": "c.json", "output_path": "o"}
     result = json.loads(tools.metaskill(args))
     assert fake_pipelines["personalize"] == ("out/t", "c.json", "o")
     assert result["operation"] == "personalize"
 
 
 def test_personalize_requires_config(fake_pipelines):
-    result = json.loads(tools.metaskill({"operation": "personalize", "skill_path": "out/t"}))
+    result = json.loads(tools.metaskill(
+        {"operation": "personalize", "skill_path": "out/t"}))
     assert result["success"] is False
     assert "config_path" in result["error"]
     assert "personalize" not in fake_pipelines
 
 
 def test_unknown_operation_rejected():
-    result = json.loads(tools.metaskill({"operation": "evaluate", "skill_path": "x"}))
+    result = json.loads(tools.metaskill(
+        {"operation": "evaluate", "skill_path": "x"}))
     assert result["success"] is False
 
 
 def test_skill_name_instead_of_path_tells_model_to_resolve(fake_pipelines):
-    result = json.loads(tools.metaskill({"operation": "generalize", "skill_path": "gcp-file-transfer"}))
+    result = json.loads(tools.metaskill(
+        {"operation": "generalize", "skill_path": "gcp-file-transfer"}))
     assert result["success"] is False
     assert "find the skill's directory" in result["error"]
     assert "generalize" not in fake_pipelines
 
 
 def test_missing_config_file_rejected(fake_pipelines):
-    args = {"operation": "personalize", "skill_path": "out/t", "config_path": "nope.json"}
+    args = {"operation": "personalize",
+            "skill_path": "out/t", "config_path": "nope.json"}
     result = json.loads(tools.metaskill(args))
     assert result["success"] is False
     assert "config_path" in result["error"]
@@ -113,7 +121,8 @@ def test_missing_skill_path_rejected():
 def test_not_implemented_pipeline_reports_error(monkeypatch):
     monkeypatch.delitem(sys.modules, "metaskill.generalize", raising=False)
     monkeypatch.setattr(tools, "_load_entry_point", lambda operation: None)
-    result = json.loads(tools.metaskill({"operation": "generalize", "skill_path": "x"}))
+    result = json.loads(tools.metaskill(
+        {"operation": "generalize", "skill_path": "x"}))
     assert result["success"] is False
     assert "not implemented" in result["error"]
 
@@ -130,9 +139,11 @@ def test_pipeline_exception_does_not_leak_message(monkeypatch):
 
 def test_pipeline_cannot_override_operation(monkeypatch):
     monkeypatch.setattr(
-        tools, "_load_entry_point", lambda operation: lambda skill_path, output_path: {"operation": "other"}
+        tools, "_load_entry_point", lambda operation: lambda skill_path, output_path: {
+            "operation": "other"}
     )
-    result = json.loads(tools.metaskill({"operation": "generalize", "skill_path": "x"}))
+    result = json.loads(tools.metaskill(
+        {"operation": "generalize", "skill_path": "x"}))
     assert result["operation"] == "generalize"
 
 
@@ -166,7 +177,8 @@ def test_command_forwards_request_to_agent():
     ctx = FakeCtx()
     handler = tools.make_command_handler(ctx)
     assert handler("generalize gcp-file-transfer") is None
-    assert ctx.injected == ["Use the metaskill tool to: generalize gcp-file-transfer"]
+    assert ctx.injected == [
+        "Use the metaskill tool to: generalize gcp-file-transfer"]
 
 
 def test_command_without_args_shows_usage():
