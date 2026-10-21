@@ -66,7 +66,7 @@ So a prompt injection cannot make a skill look safer than the deterministic resu
 | One direction only, enforced in code | Injection making a skill look safer |
 | The reply is only read as data, never passed to a shell, `eval` or another prompt | Its output being executed |
 | Minimal input: sentence and paragraph, not the whole skill | Room for an injection to work with |
-| Hidden text removed first: HTML comments, invisible Unicode. The judge does this for the main call; `review.py` runs `strip_hidden()` on the re-check's sentences and paragraphs | Instructions a human reviewer cannot see |
+| Hidden text removed first: HTML comments, invisible Unicode. `review.py` runs `strip_hidden()` on the re-check's sentences and paragraphs. The main review is the exception: the judge shows it hidden text marked as hidden, since that is where an instruction the user would not notice is most likely to be ([judge.md](../evaluate/judge.md) 2.3) | Instructions a human reviewer cannot see swaying the re-check |
 | One skill per call, no shared conversation | One skill's text affecting another's verdicts |
 | Small `max_tokens`, temperature 0, a timeout (`ask()`'s parameters), and `judge_retries` retries | Runaway output and cost |
 

@@ -118,7 +118,7 @@ def test_finding_fields(tmp_path):
     ("> [!WARNING]\n> `git push --force` overwrites other people's commits.", False),
     ("Clean up by running `rm -rf ~/.cache/x`.", True),
     ("Don't forget to run `rm -rf build/`.", True),
-    ("It is not uncommon to `rm -rf build/` here.", True),  # was a known miss before checks v2
+    ("It is not uncommon to `rm -rf build/` here.", True),  # was a known miss before checks v3
     ("Run `rm -rf build/`; never touch src/.", True),  # the warning comes after the command
     ("> **Caution:** `DROP TABLE users` cannot be undone.", False),
 ])
@@ -526,7 +526,7 @@ def test_skipped_deletes_are_not_delete_targets(tmp_path):
 
 
 
-# --- Deleting the user's personal files (checks v2) ---------------------------------------
+# --- Deleting the user's personal files (checks v3) ---------------------------------------
 
 
 @pytest.mark.parametrize("command", [
@@ -587,7 +587,7 @@ def test_real_confirmation_steps_still_count(tmp_path, body):
 
 
 def test_checks_version_was_bumped():
-    assert checks.CHECKS_VERSION == "2"
+    assert checks.CHECKS_VERSION == "3"
 
 
 
