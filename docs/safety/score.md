@@ -19,7 +19,7 @@ def versions() -> dict[str, str]: ...
 
 - **`score`**: runs the safety check on one skill. `llm` is Hermes's `ctx.llm`, which the runner passes in; the deep tier's model calls go through it. Without it, `deep` runs Cisco static only.
 - **`missing_dependencies`**: what is not installed, with the install command for each. The tool calls this once before evaluation starts so the agent can ask the user whether to install (section 3.1 of the safety design). Safety itself never prompts or installs anything.
-- **`versions`**: `{"scanner_version": "2.2.1", "checks_version": "1"}`, for the report header (`ReportMeta`).
+- **`versions`**: `{"scanner_version": "2.2.1", "checks_version": "3"}`, for the report header (`ReportMeta`).
 
 ## What `score()` does
 

@@ -19,7 +19,8 @@ from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, 
 from metaskill.evaluate.safety.findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "2"
+CHECKS_VERSION = "3"  # 2: hidden characters. 3: personal folders CRITICAL; stricter warning
+                      # and confirmation checks
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -64,6 +65,8 @@ REBUILDABLE = {
 }
 HOME_FORMS = ("~", "$HOME", "${HOME}")
 HOME_CRITICAL = (".ssh", ".config", ".gnupg", "appdata")  # compared case-insensitively
+# The user's personal files: deleting one of these folders is as bad as deleting home.
+HOME_PERSONAL = ("documents", "desktop", "pictures", "downloads", "music", "videos")
 SYSTEM_EXACT = {
     "/", "/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/opt",
     "/home", "/root", "/Users", "/System", "/Library", "/Applications",
@@ -108,6 +111,19 @@ class DeleteTarget:
     severity: Severity
 
 
+@dataclass
+class SkippedWarning:
+    """A prose match skipped because its sentence warns against it, for the deep
+    review's re-check (docs/safety/review.md, "Re-checking skipped warnings")."""
+
+    location: str  # e.g. "SKILL.md:12"
+    rule: str
+    snippet: str  # the matched command, e.g. "rm -rf ~/"
+    sentence: str  # the sentence containing the match
+    paragraph: str  # the paragraph or list item it is in
+    finding: Finding  # what it becomes if the re-check says it is an instruction
+
+
 class ChecksBackend:
     name = "own-checks"
 
@@ -116,7 +132,7 @@ class ChecksBackend:
 
     def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult:
         try:
-            findings, _, notes = _run(skill)
+            findings, _, notes, _ = _run(skill)
         except Exception as e:  # never raise into the caller
             return BackendResult(self.name, BackendStatus.ERROR, tier,
                                  detail=f"{type(e).__name__}: {e}")
@@ -126,6 +142,13 @@ class ChecksBackend:
 def delete_targets(skill: Skill) -> list[DeleteTarget]:
     """Every unconfirmed delete target, as data. Same parsing as scan()."""
     return _run(skill)[1]
+
+
+def skipped_warnings(skill: Skill) -> list[SkippedWarning]:
+    """Prose matches skipped as warnings that would otherwise be findings. Same
+    parsing as scan(); a match that was also confirmed is left out, since it would
+    not be a finding either way."""
+    return _run(skill)[3]
 
 
 # --- Reading the skill ---------------------------------------------------------
@@ -152,7 +175,7 @@ class _Context:
     links: set[str] = field(default_factory=set)  # names that are or become symlinks
 
 
-def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
+def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
     notes: list[str] = []
     files = _read_files(skill, notes)
     units = [u for path, text in files for u in _units(path, text)]
@@ -164,21 +187,33 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
             ctx.shell_vars[path] = _assignments(_CMD_ASSIGN, _CMD_LITERAL, text)
         elif Path(path).suffix.lower() in (".ps1", ".psm1"):
             ctx.shell_vars[path] = _assignments(_PS_ASSIGN, _PY_LITERAL, text)
-        ctx.py_vars[path] = _assignments(_PY_ASSIGN, _PY_LITERAL, text)
+        ctx.py_vars[path] = {
+            name: [_python_path(v) if v is not None else None for v in values]
+            for name, values in _assignments(_PY_ASSIGN, _PY_ANY, text).items()}
     bundle_links = _bundle_symlinks(skill)
     ctx.links = {_normalize(name) for name, _ in bundle_links} | _created_links(units)
 
     found: dict[tuple[str, int, str], Finding] = {}
     targets: list[DeleteTarget] = []
     skipped: list[str] = []
+    rechecks: list[SkippedWarning] = []
 
     for u_index, unit in enumerate(units):
         previous = units[u_index - 1] if u_index and units[u_index - 1].path == unit.path else None
         for l_index, (lineno, text) in enumerate(unit.lines):
             for hit in _hits(text, unit):
                 location = f"{unit.path}:{lineno}"
-                if unit.kind == "prose" and _is_warning(unit, l_index, hit.start):
+                if unit.kind == "prose" and (_is_warning(unit, l_index, hit.start)
+                                             or _is_example(unit, l_index, hit)):
                     skipped.append(f"{location} ({hit.snippet})")
+                    if not (hit.category == DESTRUCTIVE and (
+                            hit.confirmed or _confirmed(unit, l_index, previous))):
+                        rechecks.append(SkippedWarning(
+                            location, hit.rule, hit.snippet,
+                            _sentence(unit, l_index, hit.start),
+                            " ".join(t.strip() for _, t in unit.lines),
+                            # A throwaway target list: skipped deletes are not delete targets.
+                            _finding(hit, unit, lineno, text, ctx, [])))
                     continue
                 if hit.category == DESTRUCTIVE and (
                         hit.confirmed or _confirmed(unit, l_index, previous)):
@@ -203,8 +238,9 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
     if skipped:
         shown = ", ".join(skipped[:MAX_LISTED_SKIPS])
         more = len(skipped) - MAX_LISTED_SKIPS
-        notes.insert(0, f"skipped as a warning: {shown}" + (f" and {more} more" if more > 0 else ""))
-    return list(found.values()), targets, notes
+        notes.insert(0, f"skipped as a warning or example: {shown}"
+                     + (f" and {more} more" if more > 0 else ""))
+    return list(found.values()), targets, notes, rechecks
 
 
 # --- Hidden characters (checks.md, "Hidden characters") --------------------------
@@ -383,10 +419,62 @@ def _hits(text: str, unit: _Unit) -> list[_Hit]:
 
 
 _RM = re.compile(r"(?<![\w.-])rm\s+")
-_RMTREE = re.compile(r"shutil\.rmtree\(\s*(?:(['\"])(.*?)\1|([A-Za-z_][\w.]*))")
+_RMTREE = re.compile(r"shutil\.rmtree\(")
+_PY_STR = r"""(?:[rRbBuU]?(?P<q>['"])(?P<s>[^'"]*)(?P=q))"""
+# Python expressions for the home folder: os.environ["HOME"], os.getenv("HOME"),
+# os.path.expanduser("~"), Path.home() and pathlib.Path.home().
+_PY_HOME = (r"(?:os\.environ\s*\[\s*['\"](?:HOME|USERPROFILE)['\"]\s*\]"
+            r"|os\.environ\.get\(\s*['\"](?:HOME|USERPROFILE)['\"]\s*\)"
+            r"|os\.getenv\(\s*['\"](?:HOME|USERPROFILE)['\"]\s*\)"
+            r"|os\.path\.expanduser\(\s*['\"]~['\"]\s*\)"
+            r"|(?:pathlib\.)?Path\.home\(\s*\))")
 _REMOVE_ITEM = re.compile(r"(?<![\w-])Remove-Item\b", re.I)
 _FIND = re.compile(r"(?<![\w.-])find\s+")
 _CMD_DELETE = re.compile(r"(?<![\w.%$-])(?:rmdir|rd|del|erase)(?=\s)", re.I)
+
+
+def _first_argument(text: str, start: int) -> str:
+    """The first argument of a call whose "(" ends at start, up to a top-level comma or ")"."""
+    depth, quote = 0, ""
+    for i in range(start, len(text)):
+        c = text[i]
+        if quote:
+            quote = "" if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return text[start:i].strip()
+            depth -= 1
+        elif c == "," and depth == 0:
+            return text[start:i].strip()
+    return text[start:].strip()
+
+
+def _python_path(expr: str) -> str | None:
+    """The path a Python expression names, written the way the rules read paths, or
+    None if it cannot be worked out: "~/Documents" for os.path.expanduser("~/Documents"),
+    os.path.join(os.environ["HOME"], "Documents") or Path.home() / "Documents"."""
+    expr = expr.strip()
+    m = re.fullmatch(_PY_STR, expr)
+    if m:
+        return m.group("s")
+    m = re.fullmatch(rf"os\.path\.expanduser\(\s*{_PY_STR}\s*\)", expr)
+    if m:
+        return m.group("s")
+    m = re.fullmatch(rf"(?:pathlib\.)?Path\(\s*{_PY_STR}\s*\)\.expanduser\(\s*\)", expr)
+    if m:
+        return m.group("s")
+    if re.fullmatch(_PY_HOME, expr):
+        return "~"
+    m = (re.fullmatch(rf"os\.path\.join\(\s*{_PY_HOME}(?P<rest>(?:\s*,\s*{_PY_STR})*)\s*\)", expr)
+         or re.fullmatch(rf"{_PY_HOME}(?P<rest>(?:\s*/\s*{_PY_STR})+)", expr))
+    if m:
+        parts = re.findall(r"""['"]([^'"]*)['"]""", m.group("rest"))
+        return "/".join(["~", *parts])
+    return None
 
 
 def _follows(target: str) -> bool:
@@ -422,10 +510,13 @@ def _deletes(text: str, prose: bool) -> list[_Hit]:
                          [(t, _follows(t)) for t in targets]))
 
     for m in _RMTREE.finditer(text):
-        literal, variable = m.group(2), m.group(3)
-        hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(), m.group(0) + ")",
-                         targets=[(literal if literal is not None else variable, False)],
-                         py_var=literal is None))
+        argument = _first_argument(text, m.end())
+        path = _python_path(argument)
+        is_name = path is None and re.fullmatch(r"[A-Za-z_]\w*", argument) is not None
+        hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
+                         f"shutil.rmtree({argument})",
+                         targets=[(path if path is not None else argument, False)],
+                         py_var=is_name))
 
     for m in _REMOVE_ITEM.finditer(text):
         args = _args(text, m.end())
@@ -654,32 +745,91 @@ def _unpinned_pip(args: list[str]) -> bool:
 
 # --- Warnings and confirmations --------------------------------------------------
 
-_WARNING_WORDS = re.compile(
-    r"\b(?:never|don['’]?t|do\s+not|must\s+not|mustn['’]?t|should\s+not|shouldn['’]?t|avoid|not"
-    r"|warning|caution|danger\w*)\b|important:|⚠", re.I)
-_NOT_A_WARNING = re.compile(
-    r"\b(?:don['’]?t|do\s+not)\s+(?:forget|skip)\b|\bnever\s+mind\b|\bavoid\b.*\bby\s+(?:running|using)\b",
-    re.I)
+# A warning must govern the command itself: a negation directly before it, optionally
+# with a verb like "run", and possibly other commands joined by "or"/"and". A negation
+# elsewhere in the sentence does not count, so "don't hesitate to run `x`" or
+# "don't forget to run `x`" are instructions, not warnings.
+_GOVERNING_NEGATION = re.compile(
+    r"(?:\bnever|\bdon['’]?t|\bdo\s+not|\bmust\s+not|\bmustn['’]?t|\bshould\s+not|\bshouldn['’]?t"
+    r"|\bavoid|\bnot(?:\s+to)?|\bunder\s+no\s+circumstances(?:\s+should\s+you)?)\s+"
+    r"(?:(?:run|running|use|using|execute|executing|type|typing|call|calling|invoke|invoking"
+    r"|do|doing|try|trying)\s+)?"
+    r"(?:`[^`]*`\s*(?:,|\bor\b|\band\b|\bnor\b)?\s*)*$", re.I)
+# A warning label at the start of the sentence.
+_WARNING_LABEL = re.compile(r"^\W*(?:warning|caution|danger)\b|^\W*⚠", re.I)
+
+
+def _sentence_span(unit: _Unit, line_index: int, col: int) -> tuple[str, int, int, int]:
+    """The prose unit as one string, and the start, match position and end of the
+    sentence containing column col of line line_index. Inline code is not split."""
+    texts = [text for _, text in unit.lines]
+    joined = " ".join(texts)
+    position = sum(len(t) + 1 for t in texts[:line_index]) + col
+    masked = re.sub(r"`[^`]*`", lambda m: "x" * len(m.group(0)), joined)
+    # Abbreviations are not sentence ends: "(e.g. `x`)" stays one sentence.
+    masked = re.sub(r"\b(?:e\.g|i\.e|etc|vs|cf)\.", lambda m: "x" * len(m.group(0)), masked, flags=re.I)
+    starts = [m.end() for m in re.finditer(r"[.!?](?=\s)", masked[:position])]
+    end = re.compile(r"[.!?](?=\s|$)").search(masked, position)
+    return joined, starts[-1] if starts else 0, position, end.end() if end else len(joined)
+
+
+def _sentence(unit: _Unit, line_index: int, col: int) -> str:
+    joined, start, _, end = _sentence_span(unit, line_index, col)
+    return joined[start:end].strip()
+
+
+_EXAMPLE_LEAD = re.compile(r"(?:such\s+as|e\.g\.,?|for\s+example,?|for\s+instance,?|including)\s*$", re.I)
+_EXAMPLE_MARK = re.compile(r"\betc\b|\be\.g\.|\bfor\s+example\b|\bsuch\s+as\b", re.I)
+
+
+def _is_example(unit: _Unit, line_index: int, hit: _Hit) -> bool:
+    """A command named as an example in prose rather than given as an instruction:
+    inside parentheses with "etc." or "e.g.", or right after "such as" / "for example".
+
+    A delete with a concrete target is never an example, so "free up space (e.g.
+    `rm -rf ~/Documents`)" is still a finding.
+    """
+    if hit.rule == "recursive-delete" and any(t != "(unspecified)" for t, _ in hit.targets):
+        return False
+    joined, start, position, end = _sentence_span(unit, line_index, hit.start)
+    prefix = joined[start:position].rstrip().rstrip("`").rstrip()
+    if _EXAMPLE_LEAD.search(prefix):
+        return True
+    opened = prefix.rfind("(")
+    if opened == -1 or opened < prefix.rfind(")"):
+        return False
+    closed = joined.find(")", position)
+    parenthetical = joined[start + opened:closed if closed != -1 else end]
+    return bool(_EXAMPLE_MARK.search(parenthetical))
 
 
 def _is_warning(unit: _Unit, line_index: int, col: int) -> bool:
     """A prose match that its own sentence warns against (checks.md, warning check)."""
     if unit.warning_block:
         return True
-    texts = [text for _, text in unit.lines]
-    joined = " ".join(texts)
-    position = sum(len(t) + 1 for t in texts[:line_index]) + col
-    masked = re.sub(r"`[^`]*`", lambda m: "x" * len(m.group(0)), joined)
-    starts = [m.end() for m in re.finditer(r"[.!?](?=\s)", masked[:position])]
-    prefix = joined[starts[-1] if starts else 0:position]
-    return bool(_WARNING_WORDS.search(prefix)) and not _NOT_A_WARNING.search(prefix)
+    joined, start, position, _ = _sentence_span(unit, line_index, col)
+    prefix = joined[start:position]
+    if _WARNING_LABEL.search(prefix.lstrip()):
+        return True
+    return bool(_GOVERNING_NEGATION.search(prefix.rstrip().rstrip("`").rstrip() + " "))
 
 
+# An actual confirmation step, not just the word: asking the user, getting their
+# approval, an interactive prompt, a dry run, or a backup. "Confirm the export
+# finished" or "no need to confirm" do not count.
 _CONFIRM = re.compile(
-    r"\b(?:ask(?:s|ing)?|confirm\w*|are\s+you\s+sure|dry[- ]?run|back(?:[\s-]?up)s?)\b"
-    r"|\bread\s+-[a-zA-Z]*p\b|\binput\s*\(|\bconfirm\s*\(|--dry-run\b|\bRead-Host\b|-WhatIf\b"
-    r"|-Confirm\b|\bset\s+/p\b|\bchoice\b",
+    r"\bask(?:s|ing)?\s+(?:the\s+user|the\s+human|them|you|for\s+(?:confirmation|approval|permission))\b"
+    r"|\b(?:confirm|check)\s+with\s+(?:the\s+)?(?:user|human)\b"
+    r"|\b(?:get|obtain|request|wait\s+for)\s+(?:the\s+user['’]s\s+|explicit\s+|their\s+)?"
+    r"(?:confirmation|approval|permission)\b"
+    r"|\bare\s+you\s+sure\b|\bdry[- ]?run\b|--dry-run\b|-WhatIf\b"
+    r"|\b(?:make|take|create|keep)\s+(?:a\s+)?back[\s-]?up\b|\bback\s+(?:it\s+|them\s+|everything\s+)?up\b"
+    r"|\bread\s+-[a-zA-Z]*p\b|\binput\s*\(|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b"
+    r"|\bset\s+/p\b|\bchoice\b",
     re.I)
+# A confirmation phrase is ignored when the words just before it negate it.
+_NEGATED_BEFORE = re.compile(
+    r"\b(?:no|not|without|skip(?:ping)?|don['’]?t|never|needn['’]?t)\b[^.\n]{0,30}$", re.I)
 
 
 def _confirmed(unit: _Unit, line_index: int, previous: _Unit | None) -> bool:
@@ -690,7 +840,8 @@ def _confirmed(unit: _Unit, line_index: int, previous: _Unit | None) -> bool:
         window = list(unit.lines)
         if previous is not None and previous.kind == "prose":
             window += previous.lines
-    return any(_CONFIRM.search(text) for _, text in window)
+    return any(not _NEGATED_BEFORE.search(text[:m.start()])
+               for _, text in window for m in _CONFIRM.finditer(text))
 
 
 # --- Delete targets --------------------------------------------------------------
@@ -701,6 +852,7 @@ _SHELL_LITERAL = re.compile(r"\"([^\"$`]*)\"|'([^']*)'|([^\s;&|\"'$`]*)")
 _PY_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*?)\s*(?:#.*)?$", re.M)
 _CMD_LITERAL = re.compile(r"([^%!]*)")
 _PY_LITERAL = re.compile(r"(['\"])([^'\"]*)\1")
+_PY_ANY = re.compile(r"(.+)")  # Python values are resolved by _python_path
 _CMD_ASSIGN = re.compile(r"^\s*set\s+\"?([A-Za-z_]\w*)=([^\"&|\r\n]*)\"?\s*$", re.M | re.I)
 _PS_ASSIGN = re.compile(r"^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*(?:#.*)?$", re.M)
 # $VAR, ${VAR}, ${VAR:?msg}, and on Windows %VAR%, $env:VAR, ${env:VAR}
@@ -834,11 +986,16 @@ def _is_system(norm: str) -> bool:
     drive = re.match(r"^[a-z]:(?:/(.*))?$", norm)
     if drive:
         rest = drive.group(1) or ""
+        personal = "|".join(HOME_PERSONAL)
         return (rest == "" or rest in WINDOWS_SYSTEM_EXACT or rest.startswith(WINDOWS_SYSTEM_PREFIXES)
-                or re.fullmatch(r"users/[^/]+", rest) is not None)
+                or re.fullmatch(rf"users/[^/]+(?:/(?:{personal}|appdata))?", rest) is not None)
     if re.fullmatch(r"/(?:home|Users)/[^/]+", norm):
         return True
-    if norm in HOME_FORMS or any(norm.lower() == f"{h}/{d}".lower() for h in HOME_FORMS for d in HOME_CRITICAL):
+    if norm in HOME_FORMS or any(norm.lower() == f"{h}/{d}".lower()
+                                 for h in HOME_FORMS for d in HOME_CRITICAL + HOME_PERSONAL):
+        return True
+    personal = "|".join(HOME_PERSONAL)
+    if re.fullmatch(rf"(?:/home|/users|[a-z]:/users)/[^/]+/(?:{personal})", norm, re.I):
         return True
     return norm in ("..", ".git") or norm.endswith(("/..", "/.git"))
 
