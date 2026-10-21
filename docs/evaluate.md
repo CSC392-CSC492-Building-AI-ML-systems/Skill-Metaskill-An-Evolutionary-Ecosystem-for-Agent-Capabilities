@@ -317,7 +317,8 @@ Dependencies:
 
 - `runner.py` is the only module that executes the agent. `quality.py`, `robustness.py` and `efficiency.py` are pure functions over its results, so they share one execution pass and are testable without an LLM.
 - `clarity.py`, `safety/` and the LLM part of `config_cleanliness.py` call `judge.py`, never a model directly.
-  - Exception: the safety scanner's LLM analyzer makes its own call, configured with the judge's provider and model. See [evaluate-safety.md](evaluate-safety.md), section 4.
+  - Exception: the safety scanner's LLM analyzer makes its own calls, routed through Hermes's `ctx.llm` by its adapter rather than through `judge.py`. See [evaluate-safety.md](evaluate-safety.md), section 4, and [safety/cisco.md](safety/cisco.md).
+- `judge.py` itself is documented in [evaluate/judge.md](evaluate/judge.md).
 - Each scoring module exposes the same shape (`score(skill, ...) -> DimensionScore` from `models.py`), so `rank.py` treats all six uniformly.
 
 

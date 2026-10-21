@@ -1,23 +1,25 @@
 """Own deterministic checks for the careless side of safety (docs/safety/checks.md).
 
 Rules for destructive-unconfirmed, credential-logging and untrusted-source, plus
-symlinks that point outside the skill. No model and no network: the same skill
+symlinks that point outside the skill and characters a person cannot see. No model and no network: the same skill
 always gives the same findings.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from metaskill.evaluate.judge import mark_hidden
 from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, Skill
 from metaskill.evaluate.safety.findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "1"
+CHECKS_VERSION = "2"
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -47,6 +49,11 @@ MESSAGES = {
     "unpinned-git-install": "Installs from a git repository with no commit or tag pinned",
     "unpinned-install": "Installs a package with no version",
     "bundle-symlink": "The skill contains a symlink pointing outside its own folder",
+    "hidden-tag-text": "Invisible tag characters spell out text the agent reads but a person "
+                       "does not see",
+    "bidi-control": "Bidirectional control characters make the text display differently "
+                    "from what the agent reads",
+    "zero-width": "Zero-width characters that render as nothing",
 }
 
 # --- Delete targets (checks.md, "Delete targets") ------------------------------
@@ -184,6 +191,10 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
             for f in _shell_trace(unit):
                 found.setdefault((unit.path, int(f.location.rsplit(":", 1)[1]), f.rule), f)
 
+    for path, text in files:
+        for f in _hidden_characters(path, text):
+            found.setdefault((path, int(f.location.rsplit(":", 1)[1]), f.rule), f)
+
     for name, pointing_to in bundle_links:
         found[(name, 0, "bundle-symlink")] = Finding(
             Dimension.SAFETY, EXCESS_SCOPE, Severity.MEDIUM, ChecksBackend.name,
@@ -194,6 +205,49 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
         more = len(skipped) - MAX_LISTED_SKIPS
         notes.insert(0, f"skipped as a warning: {shown}" + (f" and {more} more" if more > 0 else ""))
     return list(found.values()), targets, notes
+
+
+# --- Hidden characters (checks.md, "Hidden characters") --------------------------
+
+# A flag emoji such as England's is a black flag followed by tag characters; it is not
+# hidden text.
+_TAG_FLAG = re.compile("\U0001f3f4[\U000e0020-\U000e007e]+\U000e007f")
+_HIDDEN = [
+    ("hidden-tag-text", Severity.HIGH, re.compile("[\U000e0000-\U000e007f]+")),
+    ("bidi-control", Severity.MEDIUM, re.compile("[\u202a-\u202e\u2066-\u2069]")),
+    # Joiners (U+200C, U+200D) are left out: emoji and several scripts need them.
+    ("zero-width", Severity.LOW, re.compile("[\u200b\u2060-\u2064\u180e\ufeff]")),
+]
+_HIDDEN_QUOTE_CHARS = 200
+
+
+def _hidden_characters(path: str, text: str) -> list[Finding]:
+    """One finding per kind of invisible character in a file, at its first line.
+
+    HTML comments are not reported: real skills use them for template notes. The LLM
+    review sees them, marked as hidden (judge.mark_hidden).
+    """
+    findings = []
+    lines = text.removeprefix("\ufeff").split("\n")  # a BOM at the start is not hidden
+    for rule, severity, pattern in _HIDDEN:
+        hits = [(n, line) for n, line in enumerate(lines, 1)
+                if pattern.search(_TAG_FLAG.sub("", line))]
+        if not hits:
+            continue
+        lineno, line = hits[0]
+        message = MESSAGES[rule]
+        if rule == "hidden-tag-text":
+            run = pattern.search(_TAG_FLAG.sub("", line)).group(0)
+            decoded = "".join(chr(ord(c) - 0xE0000) for c in run
+                              if 0xE0020 <= ord(c) <= 0xE007E)
+            message += f": {json.dumps(decoded[:_HIDDEN_QUOTE_CHARS])}"
+        if len(hits) > 1:
+            message += f" ({len(hits)} lines)"
+        findings.append(Finding(
+            Dimension.SAFETY, EXCESS_SCOPE, severity, ChecksBackend.name, rule,
+            # Shown visibly, so the report does not carry the hidden text on.
+            mark_hidden(line.strip())[:_HIDDEN_QUOTE_CHARS], f"{path}:{lineno}", message))
+    return findings
 
 
 def _read_files(skill: Skill, notes: list[str]) -> list[tuple[str, str]]:
