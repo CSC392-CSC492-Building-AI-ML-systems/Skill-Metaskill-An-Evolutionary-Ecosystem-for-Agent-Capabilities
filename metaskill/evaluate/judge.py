@@ -19,15 +19,20 @@ strictly and fails the whole call on any mismatch. The judge checks the reply it
 asks again, up to `retries` times, naming what was wrong (docs/evaluate/judge.md 2.4).
 
 Every rating, finding or checklist item must quote its supporting text. Quotes are
-checked to be real substrings of what was judged; anything with a quote that is not
-there is dropped (evaluate.md 3.3, evaluate-safety.md 3.3).
+checked to be real substrings of what was judged, and long enough to mean something;
+anything with a quote that is not there is dropped (evaluate.md 3.3, evaluate-safety.md
+3.3).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Protocol, TypedDict, Unpack
@@ -51,6 +56,10 @@ JUDGE_TASK = "metaskill_judge"
 DEFAULT_RETRIES = 1
 DEFAULT_MAX_CHARS = 100_000
 MAX_PROBLEMS_LISTED = 5  # schema problems named in a retry
+# A quote must have this many words, or this many characters, to count as evidence:
+# "uploaded" is in "Nothing was uploaded" but proves nothing.
+MIN_QUOTE_WORDS = 3
+MIN_QUOTE_CHARS = 15
 
 # Bundled files sent before the other references when a skill is cut to size.
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts",
@@ -96,10 +105,15 @@ def skill_sources(skill: Skill) -> dict[str, str]:
     scripts, then the other bundled files that decode as UTF-8. Binary files are left
     out, and hidden text is stripped (strip_hidden)."""
     files: dict[str, str] = {}
+    root = Path(skill.path).resolve()
     for rel in skill.files:
+        path = skill.path / rel
         try:
-            files[rel.as_posix()] = strip_hidden(
-                (skill.path / rel).read_text(encoding="utf-8-sig"))
+            # A link could point at a file outside the skill, e.g. ~/.hermes/.env, which
+            # would then be sent to the provider. Links are left out, like binary files.
+            if path.is_symlink() or not path.resolve().is_relative_to(root):
+                continue
+            files[rel.as_posix()] = strip_hidden(path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, OSError):
             continue
     sources = {"SKILL.md": strip_hidden(skill.body)}
@@ -143,10 +157,11 @@ def locate(sources: dict[str, str], quote: Any, file: str | None = None) -> str 
 
     Any run of whitespace in the quote matches any run in the text, so a quote that
     re-spaces or re-wraps a passage still counts. Line numbers the judge copied from the
-    material are ignored. `file`, the path the judge named, is searched first.
+    material are ignored. `file`, the path the judge named, is searched first. A quote
+    shorter than MIN_QUOTE_WORDS words and MIN_QUOTE_CHARS characters is not accepted.
     """
     words = clean_quote(quote).split()
-    if not words:
+    if len(words) < MIN_QUOTE_WORDS and len(" ".join(words)) < MIN_QUOTE_CHARS:
         return None
     pattern = re.compile(r"\s+".join(map(re.escape, words)))
     paths = list(sources)
@@ -177,8 +192,10 @@ def _normalize(text: str) -> str:
 
 def _render(sources: dict[str, str]) -> str:
     """The skill as the judge sees it: each file in a marked block, lines numbered."""
+    # json.dumps quotes the path, so a file name cannot close the attribute or the tag.
     return "\n\n".join(
-        f'<file path="{path}">\n{_number(text)}\n</file>' for path, text in sources.items())
+        f"<file path={json.dumps(path)}>\n{_number(text)}\n</file>"
+        for path, text in sources.items())
 
 
 def _number(text: str) -> str:
@@ -191,8 +208,9 @@ SYSTEM_PROMPT = (
     "You are a strict, impartial evaluator of agent skills. Judge only what the "
     "material shows; length and polish are not quality. Support every answer with "
     "`quote`: text copied exactly, character for character, from the material you were "
-    "given. Use one contiguous span, with no ellipses, paraphrase or added formatting. "
-    "Answers whose quote cannot be found are discarded. Reply with JSON only."
+    "given. Use one contiguous span of at least three words, with no ellipses, paraphrase "
+    "or added formatting. Answers whose quote cannot be found, or is shorter, are "
+    "discarded. Reply with JSON only."
 )
 
 # Added to every system prompt, including one a caller passes: the material is untrusted
@@ -310,11 +328,11 @@ class Judge:
 
     judge_type: ClassVar[JudgeType] = JudgeType.LLM
 
-    def __init__(self, llm: PluginLlm, *, task: str = JUDGE_TASK,
+    def __init__(self, llm: PluginLlm, *, task: str | None = JUDGE_TASK,
                  provider: str = "", model: str = "",
                  retries: int = DEFAULT_RETRIES, max_chars: int = DEFAULT_MAX_CHARS):
         self.llm = llm
-        self.task = task
+        self.task = task  # None: Hermes has no auxiliary tasks, so the active model runs
         # Explicit overrides from EvaluationConfig. Hermes only allows them once the
         # user sets plugins.entries.metaskill.llm.allow_provider/model_override.
         self.provider = provider
@@ -330,8 +348,11 @@ class Judge:
         llm = getattr(ctx, "llm", None)
         if llm is None:
             raise JudgeUnavailable("this Hermes version has no plugin LLM access (ctx.llm)")
-        return cls(llm, provider=config.judge_provider, model=config.judge_model,
-                   retries=config.judge_retries, max_chars=config.judge_max_chars)
+        # register(ctx) only registers JUDGE_TASK where Hermes supports auxiliary tasks.
+        task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
+        return cls(llm, task=task, provider=config.judge_provider,
+                   model=config.judge_model, retries=config.judge_retries,
+                   max_chars=config.judge_max_chars)
 
     @property
     def judge_model(self) -> str:
@@ -379,12 +400,8 @@ class Judge:
                              + "\nReply again with one complete JSON object that "
                              "matches the schema exactly.")
                 usage.calls += 1
-                try:
-                    result = self._complete(text, material, system, purpose,
-                                            temperature, max_tokens, timeout)
-                except ValueError as e:  # Hermes could not parse the reply as JSON
-                    parsed, problems = None, [f"the reply was not valid JSON ({e})"]
-                    continue
+                result = self._complete(text, material, system, purpose,
+                                        temperature, max_tokens, timeout)
                 self.used.add((result.provider, result.model))
                 reply_usage = getattr(result, "usage", None)
                 usage.input_tokens += int(getattr(reply_usage, "input_tokens", 0) or 0)
@@ -405,7 +422,8 @@ class Judge:
     def _complete(self, instructions: str, material: str, system_prompt: str, purpose: str,
                   temperature: float | None, max_tokens: int | None,
                   timeout: float | None) -> Any:
-        """One ctx.llm call. A reply Hermes cannot parse raises ValueError, for _ask."""
+        """One ctx.llm call. A reply that is not JSON comes back as text, not an error."""
+        kwargs: dict[str, Any] = {"task": self.task} if self.task else {}
         try:
             return self.llm.complete_structured(
                 instructions=instructions,
@@ -418,15 +436,17 @@ class Judge:
                 max_tokens=max_tokens,
                 timeout=timeout,
                 purpose=f"metaskill.evaluate.{purpose}",
-                task=self.task,
+                **kwargs,
             )
         except PermissionError as e:  # PluginLlmTrustError
             raise JudgeUnavailable(
                 f"Hermes refused the judge's provider/model override: {e}. Either clear "
                 "judge_provider/judge_model, or allow it under "
                 "plugins.entries.metaskill.llm in config.yaml.") from e
-        except ValueError:
-            raise
+        except ValueError as e:
+            # Hermes checks its arguments before sending anything, so a retry would only
+            # repeat the same call.
+            raise JudgeError(f"judge request was invalid: {e}") from e
         except Exception as e:
             # No credentials or provider: Hermes raises AuxiliaryClientUnavailable. Matched
             # by name, since plugins should not import Hermes internals.
@@ -539,24 +559,35 @@ class Judge:
 
         An item counts as met only if the judge says so and its quote is in the
         output. The task passes when every item is met.
+
+        The output is shaped by the skill under test, so it is treated like a skill's
+        files: hidden text stripped, lines numbered, and cut to `max_chars`, keeping the
+        end, where the agent's final answer is.
         """
         if not checklist:
             raise ValueError("an LLM check needs a checklist")
+        text = strip_hidden(output)
+        cut = len(text) > self.max_chars
+        if cut:
+            text = text[-self.max_chars:]
         items = "\n".join(f"{i}. {item}" for i, item in enumerate(checklist, 1))
         instructions = (
             f"An agent was given this task:\n\n{task.prompt}\n\n# Checklist\n\n{items}\n\n"
             "For every checklist item, say whether the agent output below meets it. "
-            "`item` is the item's number. Quotes come from the agent output.")
+            "`item` is the item's number. Quotes come from the agent output."
+            + _NUMBERED_NOTE
+            + (f" Only the last {self.max_chars} characters of the output are shown."
+               if cut else ""))
         schema = _object({"items": _array(_object({
             "item": {"type": "integer"},
             "met": {"type": "boolean"},
             "reason": {"type": "string"},
             "quote": {"type": "string"},
         }))})
-        data, _ = self._ask(instructions, f"<output>\n{output}\n</output>", schema, "check",
-                            **options)
+        data, _ = self._ask(instructions, f"<output>\n{_number(text)}\n</output>", schema,
+                            "check", **options)
 
-        sources = {"output": output}
+        sources = {"output": text}
         met: dict[int, str] = {}
         reasons: dict[int, str] = {}
         for entry in _items(data, "items"):
@@ -576,6 +607,8 @@ class Judge:
                 for n in unmet)
         else:
             reason = "all checklist items met"
+        if cut:
+            reason += f" (judged on the last {self.max_chars} characters of the output)"
         return Verdict(
             passed=not unmet,
             score=len(met) / len(checklist),
@@ -645,12 +678,17 @@ class DeterministicJudge:
 
     A check that cannot be evaluated as written (bad regex, non-integer exit code, a
     path outside the run folder) raises JudgeError: the task is broken, not the skill.
+
+    `run_command` runs EXIT_CODE commands. The command usually runs files the agent run
+    could have changed, so it is untrusted code: runner.py passes one that runs it in the
+    same sandbox as the run. The default, run_on_host, only gives it a clean environment.
     """
 
     judge_type: ClassVar[JudgeType] = JudgeType.DETERMINISTIC
 
-    def __init__(self, *, timeout: float = 60.0):
+    def __init__(self, *, timeout: float = 60.0, run_command: CommandRunner | None = None):
         self.timeout = timeout  # seconds an EXIT_CODE command may run
+        self.run_command = run_command or run_on_host
 
     def judge(self, task: Task, check: Check, run: RunOutput) -> Verdict:
         _require(self, check)
@@ -665,11 +703,15 @@ class DeterministicJudge:
     def _file_exists(self, check: Check, run: RunOutput) -> Verdict:
         if not check.target:
             raise JudgeError("a file_exists check needs a target path")
-        root = run.workdir.resolve()
-        path = (root / check.target).resolve()
-        if not path.is_relative_to(root):
+        # The target as written must stay in the run folder, or the task is broken. This
+        # is checked on the text, not on disk, where the run may have planted links.
+        target = Path(os.path.normpath(check.target))
+        if target.is_absolute() or target.drive or target.parts[:1] == ("..",):
             raise JudgeError(f"file_exists target {check.target} is outside the run folder")
-        found = path.exists()
+        # A link the run made that leads out of the folder does not count as the file.
+        root = run.workdir.resolve()
+        path = (root / target).resolve()
+        found = path.is_relative_to(root) and path.exists()
         return _binary(found, f"{check.target} {'exists' if found else 'does not exist'}")
 
     def _exit_code(self, check: Check, run: RunOutput) -> Verdict:
@@ -680,17 +722,13 @@ class DeterministicJudge:
         except ValueError:
             raise JudgeError(
                 f"exit_code expected must be an integer, got {check.expected!r}") from None
-        try:
-            # Task commands are human-written (evaluate.md 4.3), so a shell is fine here.
-            result = subprocess.run(
-                check.target, shell=True, cwd=run.workdir, capture_output=True,
-                text=True, timeout=self.timeout)
-        except subprocess.TimeoutExpired:
+        code, stderr = self.run_command(check.target, run.workdir, self.timeout)
+        if code is None:
             return _binary(False, f"`{check.target}` timed out after {self.timeout:g}s")
-        reason = f"`{check.target}` exited {result.returncode}, expected {expected}"
-        if result.returncode != expected and result.stderr.strip():
-            reason += f": {result.stderr.strip()[-200:]}"
-        return _binary(result.returncode == expected, reason)
+        reason = f"`{check.target}` exited {code}, expected {expected}"
+        if code != expected and stderr.strip():
+            reason += f": {stderr.strip()[-200:]}"
+        return _binary(code == expected, reason)
 
     def _output_matches(self, check: Check, run: RunOutput) -> Verdict:
         try:
@@ -706,15 +744,74 @@ def _binary(passed: bool, reason: str) -> Verdict:
     return Verdict(passed=passed, score=1.0 if passed else 0.0, reason=reason, evidence=None)
 
 
+# Runs an EXIT_CODE command: (command, workdir, timeout) -> (exit code, stderr). The exit
+# code is None if the command timed out.
+CommandRunner = Callable[[str, Path, float], tuple[int | None, str]]
+
+# Variables a shell needs to find programs and run; everything else, such as the API
+# keys Hermes loads from ~/.hermes/.env, is left out.
+_ENV_KEPT = ("PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "LANG", "LC_ALL", "TZ")
+_STDERR_TAIL = 1000  # bytes of stderr kept
+
+
+def run_on_host(command: str, workdir: Path, timeout: float) -> tuple[int | None, str]:
+    """Run command through a shell in workdir, on this machine. Not a sandbox.
+
+    The command gets a clean environment, with home and temp folders pointing at
+    workdir, and no stdin. On timeout, it and every process it started are killed.
+    """
+    env = {k: os.environ[k] for k in _ENV_KEPT if k in os.environ}
+    home = str(workdir)
+    env.update(HOME=home, USERPROFILE=home, TMPDIR=home, TEMP=home, TMP=home)
+    # cmd.exe looks for programs in the current folder before PATH, so a python.bat the
+    # run left in workdir would otherwise replace `python test.py`.
+    env["NoDefaultCurrentDirectoryInExePath"] = "1"
+    group: dict[str, Any] = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+        else {"start_new_session": True})
+    # stderr goes to a file, not a pipe: a leftover child holding a pipe open would make
+    # reading it hang, and a file keeps a flood of output out of memory.
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(command, shell=True, cwd=workdir, env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=err, **group)
+        try:
+            code: int | None = proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            code = None
+        _kill_tree(proc)
+        err.seek(0, os.SEEK_END)
+        err.seek(max(0, err.tell() - _STDERR_TAIL))
+        return code, err.read().decode("utf-8", "replace")
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill proc and what it started, including background processes left running."""
+    if os.name == "nt":
+        if proc.poll() is None:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, check=False)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+
+
 def make_judge(judge_type: JudgeType | str, *, ctx: Any = None,
-               config: EvaluationConfig | None = None, timeout: float = 60.0) -> TaskJudge:
+               config: EvaluationConfig | None = None, timeout: float = 60.0,
+               run_command: CommandRunner | None = None) -> TaskJudge:
     """The task judge of the given type, e.g. `make_judge(check.judge, ctx=ctx, config=c)`.
 
     The LLM judge needs the plugin context; without it this raises JudgeUnavailable.
+    `timeout` and `run_command` are for the deterministic judge.
     """
     judge_type = JudgeType(judge_type)
     if judge_type is JudgeType.DETERMINISTIC:
-        return DeterministicJudge(timeout=timeout)
+        return DeterministicJudge(timeout=timeout, run_command=run_command)
     if ctx is None:
         raise JudgeUnavailable("the LLM judge needs the plugin context (ctx.llm)")
     return Judge.from_context(ctx, config or EvaluationConfig())
