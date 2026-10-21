@@ -195,7 +195,7 @@ def test_register_wires_tool_and_command():
     class Ctx(FakeCtx):
         def __init__(self):
             super().__init__()
-            self.tools, self.commands = [], []
+            self.tools, self.commands, self.tasks = [], [], []
 
         def register_tool(self, **kwargs):
             self.tools.append(kwargs)
@@ -203,9 +203,13 @@ def test_register_wires_tool_and_command():
         def register_command(self, name, handler, description="", args_hint=""):
             self.commands.append((name, handler, description, args_hint))
 
+        def register_auxiliary_task(self, key, **kwargs):
+            self.tasks.append(key)
+
     ctx = Ctx()
     plugin.register(ctx)
     assert [t["name"] for t in ctx.tools] == ["metaskill"]
+    assert ctx.tasks == ["metaskill_judge"]
     name, handler, _, hint = ctx.commands[0]
     assert name == "metaskill" and hint
     handler("generalize my-skill")
