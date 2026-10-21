@@ -39,29 +39,32 @@ class PluginLlm(Protocol):
     def complete_structured(self, *, instructions: str, input: list[dict[str, Any]],
                             json_schema: Any = None, json_mode: bool = False,
                             temperature: float | None = None, max_tokens: int | None = None,
-                            timeout: float | None = None, purpose: str | None = None) -> Any: ...
+                            timeout: float | None = None, purpose: str | None = None,
+                            task: str | None = None) -> Any: ...
 
 
 class UnsupportedRequest(ValueError):
     """Cisco sent something ctx.llm cannot express (tools, multi-turn history)."""
 
 
-_llms: dict[str, PluginLlm] = {}
+_llms: dict[str, tuple[PluginLlm, str | None]] = {}  # scan id -> (ctx.llm, model setting)
 _lock = threading.Lock()
 _handler: Any = None
 
 
 @contextmanager
-def routed(llm: PluginLlm) -> Iterator[str]:
+def routed(llm: PluginLlm, task: str | None = None) -> Iterator[str]:
     """Make `llm` reachable by Cisco for the duration of a scan.
 
     Yields the model name to give Cisco. Each scan gets its own name, so
-    concurrent scans with different `ctx.llm` objects do not mix.
+    concurrent scans with different `ctx.llm` objects do not mix. `task` is the
+    Hermes model setting to call through, e.g. judge.py's `metaskill_judge`, so
+    Cisco runs on the same model as the judge; None means the user's active model.
     """
     _install()
     token = uuid.uuid4().hex
     with _lock:
-        _llms[token] = llm
+        _llms[token] = (llm, task)
     try:
         yield f"{PROVIDER}/{token}"
     finally:
@@ -123,13 +126,13 @@ def _text(content: Any) -> str:
     raise UnsupportedRequest(f"unexpected message content: {type(content).__name__}")
 
 
-def _llm_for(model: str) -> PluginLlm:
+def _llm_for(model: str) -> tuple[PluginLlm, str | None]:
     token = model.split("/", 1)[1] if "/" in model else model
     with _lock:
-        llm = _llms.get(token)
-    if llm is None:
+        entry = _llms.get(token)
+    if entry is None:
         raise RuntimeError(f"no Hermes LLM registered for {model!r}; is the scan still running?")
-    return llm
+    return entry
 
 
 def _install() -> None:
@@ -146,8 +149,11 @@ def _install() -> None:
             def completion(self, model: str, messages: list, *args: Any,
                            optional_params: dict | None = None, **kwargs: Any) -> Any:
                 params = optional_params or {}
-                result, usage = complete_with_retry(
-                    _llm_for(model), translate(messages, params), _schema(params))
+                llm, task = _llm_for(model)
+                kwargs = translate(messages, params)
+                if task:
+                    kwargs["task"] = task
+                result, usage = complete_with_retry(llm, kwargs, _schema(params))
                 return _response(ModelResponse, result, usage)
 
             async def acompletion(self, model: str, messages: list, *args: Any,

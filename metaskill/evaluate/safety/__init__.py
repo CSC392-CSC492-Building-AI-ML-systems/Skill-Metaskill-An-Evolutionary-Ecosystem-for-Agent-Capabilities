@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from metaskill.evaluate.judge import JUDGE_TASK
 from metaskill.evaluate.models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
 from metaskill.evaluate.safety import local
@@ -74,7 +75,7 @@ def default_backends(config: EvaluationConfig, llm: PluginLlm | None = None) -> 
 
     The LLM review (review.py) is not built yet.
     """
-    return [CiscoBackend(llm), ChecksBackend()]
+    return [CiscoBackend(llm, task=JUDGE_TASK), ChecksBackend()]
 
 
 def missing_dependencies() -> list[Dependency]:

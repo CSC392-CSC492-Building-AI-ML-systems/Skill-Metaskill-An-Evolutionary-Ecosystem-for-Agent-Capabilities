@@ -156,6 +156,7 @@ def test_default_backends_are_cisco_and_own_checks():
     assert isinstance(cisco, CiscoBackend)
     assert isinstance(own, ChecksBackend)
     assert cisco.llm is llm
+    assert cisco.task == "metaskill_judge"  # same model setting as judge.py
 
 
 def test_missing_dependencies_lists_cisco_when_not_installed(monkeypatch):

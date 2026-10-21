@@ -48,9 +48,12 @@ class LLMSetupError(Exception):
 class CiscoBackend:
     name = "cisco"
 
-    def __init__(self, llm: PluginLlm | None = None) -> None:
+    def __init__(self, llm: PluginLlm | None = None, task: str | None = None) -> None:
         # Hermes's ctx.llm, used only at the deep tier. Without it, Cisco runs static.
+        # task is the Hermes model setting to call through (judge.py's JUDGE_TASK),
+        # so Cisco and the review run on the same model.
         self.llm = llm
+        self.task = task
 
     def available(self) -> bool:
         return importlib.util.find_spec("skill_scanner") is not None
@@ -89,7 +92,7 @@ class CiscoBackend:
 
     def _route(self) -> AbstractContextManager[str]:
         """Make self.llm reachable by Cisco; yields the model name to give it."""
-        return routed(self.llm)
+        return routed(self.llm, self.task)
 
     def _build_deep_analyzers(self, model: str) -> list[Any]:
         from skill_scanner.core.analyzer_factory import (
