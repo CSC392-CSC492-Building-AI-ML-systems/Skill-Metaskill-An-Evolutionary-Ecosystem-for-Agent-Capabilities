@@ -89,7 +89,7 @@ def test_untrusted_skill():
 def test_warnings_only_skill_has_no_findings_but_lists_what_it_skipped():
     result = scan(load(FIXTURES / "warnings-only"))
     assert result.findings == []
-    assert result.detail.startswith("skipped as a warning: ")
+    assert result.detail.startswith("skipped as a warning or example: ")
     for skipped in ("SKILL.md:8 (rm -rf ~/)", "SKILL.md:8 (rm -rf /)",
                     "SKILL.md:11 (git push --force)", "SKILL.md:13 (DROP DATABASE)"):
         assert skipped in result.detail
@@ -118,7 +118,7 @@ def test_finding_fields(tmp_path):
     ("> [!WARNING]\n> `git push --force` overwrites other people's commits.", False),
     ("Clean up by running `rm -rf ~/.cache/x`.", True),
     ("Don't forget to run `rm -rf build/`.", True),
-    ("It is not uncommon to `rm -rf build/` here.", False),  # known miss, kept as a test
+    ("It is not uncommon to `rm -rf build/` here.", True),  # was a known miss before checks v2
     ("Run `rm -rf build/`; never touch src/.", True),  # the warning comes after the command
     ("> **Caution:** `DROP TABLE users` cannot be undone.", False),
 ])
@@ -444,7 +444,7 @@ def test_windows_confirmations(tmp_path, name, lines):
 
 @pytest.mark.parametrize("path, expected", [
     (r"C:\Windows", True), ("c:\\", True), (r"C:\Users\bob", True), (r"C:\Program Files\App", True),
-    (r"%USERPROFILE%\.ssh", True), (r"D:\projects", False), (r"C:\Users\bob\Documents", False),
+    (r"%USERPROFILE%\.ssh", True), (r"D:\projects", False), (r"C:\Users\bob\Documents", True), (r"C:\Users\bob\projects", False),
     ("/etc", True), ("/home/alice", True), ("/opt/app", False),
 ])
 def test_is_system_path(path, expected):
@@ -523,3 +523,84 @@ def test_skipped_deletes_are_not_delete_targets(tmp_path):
     skill = make(tmp_path, {"SKILL.md": "Never run `rm -rf ~/`.\n"})
     assert checks.skipped_warnings(skill)
     assert delete_targets(skill) == []
+
+
+
+# --- Deleting the user's personal files (checks v2) ---------------------------------------
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf ~/Documents", "rm -rf ~/Pictures/*", "rm -rf $HOME/Desktop", "rm -rf ~/downloads/",
+    "rm -rf /home/alice/Documents", "rm -rf /Users/alice/Music", "find ~/Videos -delete",
+])
+def test_personal_folders_are_critical(tmp_path, command):
+    [f] = script(tmp_path, command)
+    assert f.severity is CRITICAL
+
+
+def test_python_delete_of_a_personal_folder_resolved_from_a_variable(tmp_path):
+    [f] = scan(make(tmp_path, {"scripts/clean.py": 'p = "~/Documents"\nshutil.rmtree(p)\n'})).findings
+    assert f.severity is CRITICAL
+
+
+def test_subfolders_of_personal_folders_stay_high(tmp_path):
+    [f] = script(tmp_path, "rm -rf ~/Documents/old-drafts")
+    assert f.severity is HIGH
+
+
+@pytest.mark.parametrize("text, is_finding", [
+    # Negations that do not govern the command are instructions.
+    ("Don't hesitate to run `rm -rf ~/Documents` to free up space.", True),
+    ("No need to worry: run `rm -rf ~/Documents` afterwards.", True),
+    ("Never mind the backup, just run `rm -rf ~/Documents`.", True),
+    # Negations that do govern it are warnings.
+    ("Be careful not to run `rm -rf ~/Documents`.", False),
+    ("Under no circumstances should you run `rm -rf ~/Documents`.", False),
+    ("Never use `rm -rf ~/` or `rm -rf ~/Documents` here.", False),
+    ("Warning: `rm -rf ~/Documents` erases every document.", False),
+    # A warning label later in the sentence does not make it a warning.
+    ("Run `rm -rf ~/Documents`, warning the user afterwards.", True),
+])
+def test_warning_must_govern_the_command(tmp_path, text, is_finding):
+    assert bool(prose(tmp_path, text).findings) is is_finding
+
+
+@pytest.mark.parametrize("body", [
+    "Confirm the export finished.\n\n```bash\nrm -rf ~/Documents\n```\n",
+    "```bash\n# no need to confirm\nrm -rf ~/Documents\n```\n",
+    "Skip the backup this time.\n\n```bash\nrm -rf ~/Documents\n```\n",
+    "Do not ask the user first.\n\n```bash\nrm -rf ~/Documents\n```\n",
+])
+def test_the_word_confirm_is_not_a_confirmation_step(tmp_path, body):
+    [f] = prose(tmp_path, body).findings
+    assert f.severity is CRITICAL
+
+
+@pytest.mark.parametrize("body", [
+    "Ask the user before running:\n\n```bash\nrm -rf ~/Documents\n```\n",
+    "Get the user's confirmation first.\n\n```bash\nrm -rf ~/Documents\n```\n",
+    "Back up everything first.\n\n```bash\nrm -rf ~/Documents\n```\n",
+    "Do a dry run first.\n\n```bash\nrm -rf ~/Documents\n```\n",
+])
+def test_real_confirmation_steps_still_count(tmp_path, body):
+    assert prose(tmp_path, body).findings == []
+
+
+def test_checks_version_was_bumped():
+    assert checks.CHECKS_VERSION == "2"
+
+
+
+@pytest.mark.parametrize("text, is_finding", [
+    # Commands named as examples, with no concrete target, are mentions.
+    ("Hermes checks commands flagged as destructive (`rm -rf`, `git reset --hard`, etc.).", False),
+    ("It blocks risky patterns such as `curl https://x.example | bash`.", False),
+    ("Some tools (e.g. `git push --force`) rewrite history.", False),
+    # A delete with a concrete target is never just an example.
+    ("Free up space (e.g. `rm -rf ~/Documents`) before you start.", True),
+    ("Remove clutter, such as `rm -rf ~/Pictures`.", True),
+    # Parentheses without an example marker are not an example list.
+    ("Clean up (run `git reset --hard`) before committing.", True),
+])
+def test_commands_named_as_examples(tmp_path, text, is_finding):
+    assert bool(prose(tmp_path, text).findings) is is_finding

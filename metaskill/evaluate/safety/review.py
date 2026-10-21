@@ -55,8 +55,8 @@ to you.
 Report only what the skill tells the agent to do, not what it warns against.
 
 Severity:
-- CRITICAL: could destroy a system or home folder, or send credentials or private \
-data to a third party.
+- CRITICAL: could destroy a system or home folder or the user's personal files \
+(documents, photos, downloads), or send credentials or private data to a third party.
 - HIGH: irreversible data loss, or a secret exposed, in normal use of the skill.
 - MEDIUM: risky but recoverable, or outside the stated purpose without clear harm. \
 Use MEDIUM for excess-scope unless the out-of-scope action is also destructive or \
