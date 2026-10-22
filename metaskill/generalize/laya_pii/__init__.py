@@ -7,6 +7,10 @@ After that, detection runs locally with no outbound network traffic.
 laya itself is supplied by the optional ``metaskill-laya`` companion plugin
 (plugins/metaskill-laya), which declares it as a dependency.
 
+This package holds everything Laya-specific: ``pii_demo.py`` is the vendored
+model code, and ``skill_scan.py`` walks a skill directory (a stopgap until the
+generalize inventory stage is merged).
+
 There is no fallback detector. If laya is not installed, ``load_detector``
 raises ``LayaUnavailable`` so the caller can report it instead of silently
 returning fewer results.

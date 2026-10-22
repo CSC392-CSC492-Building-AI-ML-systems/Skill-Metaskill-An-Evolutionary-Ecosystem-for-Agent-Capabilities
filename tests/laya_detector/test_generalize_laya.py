@@ -1,7 +1,7 @@
 """Tests for generalize's Laya PII detection, through the metaskill tool.
 
 Fast tests use the fake detector from conftest.py (no model, no network).
-Run the real model test with:  pytest -q --runslow
+Run the real model test with:  METASKILL_RUN_SLOW=1 pytest -q
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ import json
 import sys
 
 import pytest
-from conftest import FakeDetector
 
 import tools
 from metaskill.generalize import laya_pii
@@ -68,12 +67,16 @@ def test_unsupported_files_are_not_scanned(fake_laya, sample_skill):
     assert _generalize(sample_skill)["counts"]["files_scanned"] == 1
 
 
-def test_model_path_is_passed_to_the_detector(monkeypatch, sample_skill):
+def test_result_reports_that_laya_was_used(fake_laya, sample_skill):
+    assert _generalize(sample_skill)["detectors"] == ["laya"]
+
+
+def test_model_path_is_passed_to_the_detector(monkeypatch, sample_skill, fake_detector_class):
     seen = []
 
     def fake_load(model_path=""):
         seen.append(model_path)
-        return FakeDetector()
+        return fake_detector_class()
 
     monkeypatch.setattr(laya_pii, "load_detector", fake_load)
 
@@ -83,7 +86,7 @@ def test_model_path_is_passed_to_the_detector(monkeypatch, sample_skill):
 
 
 def test_missing_laya_is_an_error_not_a_silent_fallback(monkeypatch, sample_skill):
-    monkeypatch.setitem(sys.modules, "metaskill.generalize.pii_demo", None)
+    monkeypatch.setitem(sys.modules, "metaskill.generalize.laya_pii.pii_demo", None)
 
     data = _generalize(sample_skill)
 

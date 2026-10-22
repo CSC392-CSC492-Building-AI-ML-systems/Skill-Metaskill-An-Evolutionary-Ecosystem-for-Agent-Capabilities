@@ -1,7 +1,7 @@
-"""Tests for the Laya PII detector wrapper (metaskill/generalize/laya_pii.py).
+"""Tests for the Laya PII detector wrapper (metaskill/generalize/laya_pii/).
 
 Fast tests use the fake detector from conftest.py (no model, no network).
-Run the real model test with:  pytest -q --runslow
+Run the real model test with:  METASKILL_RUN_SLOW=1 pytest -q
 """
 
 from __future__ import annotations
@@ -36,8 +36,11 @@ def test_scan_skips_empty_text():
     assert laya_pii.scan("   ") == []
 
 
+PII_DEMO = "metaskill.generalize.laya_pii.pii_demo"
+
+
 def test_missing_laya_raises_with_install_hint(monkeypatch):
-    monkeypatch.setitem(sys.modules, "metaskill.generalize.pii_demo", None)
+    monkeypatch.setitem(sys.modules, PII_DEMO, None)
 
     with pytest.raises(laya_pii.LayaUnavailable, match="metaskill-laya"):
         laya_pii.scan(_TEXT)
@@ -61,9 +64,9 @@ def _fake_pii_demo(monkeypatch):
         def __init__(self, model, device=None):
             built.append({"model": model, "device": device})
 
-    module = types.ModuleType("metaskill.generalize.pii_demo")
+    module = types.ModuleType(PII_DEMO)
     module.PiiRedactor = Recorder
-    monkeypatch.setitem(sys.modules, "metaskill.generalize.pii_demo", module)
+    monkeypatch.setitem(sys.modules, PII_DEMO, module)
     return built
 
 
