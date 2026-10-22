@@ -52,7 +52,8 @@ def _load_entry_point(operation):
         return None
 
 
-def run(operation, skill_path, config_path=None, output_path=None):
+def run(operation, skill_path, config_path=None, output_path=None,
+        use_laya=None, laya_model_path=None):
     """Validate arguments, route to the pipeline, and return a response dict."""
     if operation not in _ENTRY_POINTS:
         return _error(operation, f"unknown operation; expected one of {', '.join(_ENTRY_POINTS)}")
@@ -79,6 +80,10 @@ def run(operation, skill_path, config_path=None, output_path=None):
     kwargs = {"output_path": output_path}
     if operation == "personalize":
         kwargs["config_path"] = config_path
+    if operation == "generalize" and use_laya:
+        kwargs["use_laya"] = True
+        if laya_model_path:
+            kwargs["laya_model_path"] = laya_model_path
     try:
         result = entry_point(skill_path, **kwargs)
     except Exception as exc:  # report the type only: messages may echo file contents
@@ -105,6 +110,8 @@ def metaskill(args, **kwargs):
             args.get("skill_path"),
             config_path=args.get("config_path"),
             output_path=args.get("output_path"),
+            use_laya=args.get("use_laya"),
+            laya_model_path=args.get("laya_model_path"),
         )
         result["success"] = result["status"] == "ok"
         return json.dumps(result)

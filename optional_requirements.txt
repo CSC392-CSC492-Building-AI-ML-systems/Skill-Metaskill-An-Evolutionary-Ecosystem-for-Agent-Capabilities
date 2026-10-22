@@ -1,0 +1,3 @@
+# For development and CI outside Hermes. Hermes users install the
+# metaskill-laya plugin instead (see plugins/metaskill-laya).
+laya>=0.3.6,!=0.3.7

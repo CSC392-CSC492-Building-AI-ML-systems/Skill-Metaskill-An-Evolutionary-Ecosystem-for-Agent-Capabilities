@@ -1,0 +1,9 @@
+name: metaskill-laya
+version: 0.1.0
+manifest_version: 2
+description: Optional Laya Experts PII model support for the metaskill plugin
+requires_plugins:
+  - id: metaskill
+    version_range: ">=0.1.0"
+python_dependencies:
+  - "laya>=0.3.6,!=0.3.7"
