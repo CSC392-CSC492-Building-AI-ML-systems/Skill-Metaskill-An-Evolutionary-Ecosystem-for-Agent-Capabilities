@@ -17,7 +17,8 @@ MANIFEST = json.loads((PILOT / "cases.json").read_text(encoding="utf-8"))
 def test_hand_authored_answers_agree_with_contract_oracle(case):
     tickets = json.loads((PILOT / case["input"]).read_text(encoding="utf-8"))
     gold = json.loads((PILOT / case["expected"]).read_text(encoding="utf-8"))
-    assert expected_report(tickets, "Example Alpha") == gold
+    profile = json.loads((PILOT / case["profile"]).read_text(encoding="utf-8"))
+    assert expected_report(tickets, profile["organization"]) == gold
     assert assess_output(json.dumps(gold), gold)[0]
 
 
@@ -78,3 +79,46 @@ def test_configuration_annotations_resolve_to_fixture_evidence():
                     value = value[key]
                 assert isinstance(value, dict)
 
+
+
+def test_manifest_schedules_equal_inputs_for_all_candidates_and_profiles():
+    cases = MANIFEST["cases"]
+    assert len(cases) == 80
+    assert len({c["case_id"] for c in cases}) == 80
+    groups = {}
+    for case in cases:
+        assert (PILOT / case["skill"] / "SKILL.md").is_file()
+        groups.setdefault((case["skill"], case["profile"]), set()).add(case["task_id"])
+    assert len(groups) == 10
+    for profile in ["profiles/alpha.json", "profiles/beta.json"]:
+        task_sets = [tasks for (skill, p), tasks in groups.items() if p == profile]
+        assert len(task_sets) == 5
+        assert all(tasks == task_sets[0] and len(tasks) == 8 for tasks in task_sets)
+
+
+def test_wrong_totals_mutation_is_consistent_but_gold_stays_correct():
+    text = (PILOT / "skills/wrong-totals/SKILL.md").read_text(encoding="utf-8")
+    assert "Group all tickets, including cancelled tickets" in text
+    assert "Include every team with at least one ticket" in text
+    assert "Cancelled-only input is summarized like any other nonempty input" in text
+    assert "ignore cancelled" not in text
+    assert "Group non-cancelled" not in text
+    for case in MANIFEST["cases"]:
+        if case["skill"] == "skills/wrong-totals" and case["input"].endswith("cancelled-only.json"):
+            gold = json.loads((PILOT / case["expected"]).read_text(encoding="utf-8"))
+            assert gold["teams"] == [] and gold["total_minutes"] == 0
+
+
+@pytest.mark.parametrize("organization", [None, "", " ", "\t\n", 12, True])
+def test_invalid_organization_is_evaluator_configuration_error(organization):
+    with pytest.raises(ValueError, match="non-whitespace"):
+        expected_report([], organization)
+
+
+def test_valid_organization_is_not_trimmed_and_schemas_reject_blank_labels():
+    import re
+    assert expected_report([], " Example Alpha ")["organization"] == " Example Alpha "
+    for path in (PILOT / "skills").glob("*/config.schema.json"):
+        field = json.loads(path.read_text(encoding="utf-8"))["properties"]["organization"]
+        assert not re.search(field["pattern"], " \t\n")
+        assert re.search(field["pattern"], " Example Alpha ")
