@@ -7,6 +7,7 @@ Run the real model test with:  pytest -q --runslow
 from __future__ import annotations
 
 import sys
+import types
 
 import pytest
 
@@ -50,6 +51,38 @@ def test_missing_laya_package_alone_raises_with_install_hint(monkeypatch):
 
     with pytest.raises(laya_pii.LayaUnavailable, match="metaskill-laya"):
         laya_pii.load_detector()
+
+
+def _fake_pii_demo(monkeypatch):
+    """Install a stand-in pii_demo module that records how the detector is built."""
+    built = []
+
+    class Recorder:
+        def __init__(self, model, device=None):
+            built.append({"model": model, "device": device})
+
+    module = types.ModuleType("metaskill.generalize.pii_demo")
+    module.PiiRedactor = Recorder
+    monkeypatch.setitem(sys.modules, "metaskill.generalize.pii_demo", module)
+    return built
+
+
+def test_detector_runs_on_cpu_by_default(monkeypatch):
+    monkeypatch.delenv(laya_pii.DEVICE_ENV, raising=False)
+    built = _fake_pii_demo(monkeypatch)
+
+    laya_pii.load_detector()
+
+    assert built == [{"model": laya_pii.HUB_REPO, "device": "cpu"}]
+
+
+def test_detector_device_can_be_overridden(monkeypatch):
+    monkeypatch.setenv(laya_pii.DEVICE_ENV, "cuda")
+    built = _fake_pii_demo(monkeypatch)
+
+    laya_pii.load_detector("/models/pii")
+
+    assert built == [{"model": "/models/pii", "device": "cuda"}]
 
 
 def test_detector_is_cached_per_model_path():

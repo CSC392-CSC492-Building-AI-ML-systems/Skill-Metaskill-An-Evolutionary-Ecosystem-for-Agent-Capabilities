@@ -14,9 +14,13 @@ returning fewer results.
 
 from __future__ import annotations
 
+import os
 import threading
 
 HUB_REPO = "goku-san/laya-experts"
+# CPU by default: on an Apple-silicon Mac laya picks the GPU (MPS) on its own, and
+# there it hung indefinitely. Set this to "mps" or "cuda" to opt back in.
+DEVICE_ENV = "METASKILL_LAYA_DEVICE"
 INSTALL_HINT = "laya is not installed; run: hermes plugins install metaskill-laya"
 
 
@@ -36,7 +40,10 @@ def load_detector(model_path: str = ""):
                 from .pii_demo import PiiRedactor
 
                 # The constructor imports laya itself, so it belongs inside the try.
-                _MODELS[model_path] = PiiRedactor(model=model_path or HUB_REPO)
+                _MODELS[model_path] = PiiRedactor(
+                    model=model_path or HUB_REPO,
+                    device=os.environ.get(DEVICE_ENV, "cpu"),
+                )
             except ImportError as exc:
                 raise LayaUnavailable(INSTALL_HINT) from exc
         return _MODELS[model_path]
