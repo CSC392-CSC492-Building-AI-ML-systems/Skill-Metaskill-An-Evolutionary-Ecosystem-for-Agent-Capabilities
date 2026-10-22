@@ -23,7 +23,9 @@ Existing design choices include:
 - Safety uses findings and preserves evidence; a critical finding does not remove a skill from ranking.
 - Rankings are evaluated fresh; historical reports are not reused as current scores.
 
-All other numeric choices below are proposals unless explicitly attributed to the existing designs.
+The null-ranking policy below reflects agreement in the team discussion and is incorporated into the accompanying revision of `evaluate.md`. Numeric formulas and thresholds remain proposals unless explicitly attributed to the existing designs.
+
+Safety-specific categories, backend behaviour, severity mappings, and safety validation belong to `evaluate-safety.md`. This document consumes the resulting Safety score and status; it does not maintain a second safety specification.
 
 ## Scoring Conventions
 
@@ -50,9 +52,27 @@ Separate three concepts:
 
 A zero means observed poor performance. A null means no valid dimension score. A perfect score describes performance on assessed evidence, not universal correctness or safety.
 
-**[PROPOSED]** For runtime dimensions, require a complete planned task/run matrix before publishing a dimension score. If execution is incomplete because of the harness or infrastructure, return `error` or `skipped` as appropriate. Do not silently remove difficult or unavailable tasks from the denominator. A later partial-runtime policy would require explicit design and report changes.
+**[PROPOSED]** For runtime dimensions, require a complete planned task/run matrix before publishing a dimension score. Before marking a dimension `error` for transient harness or infrastructure failure, apply the bounded retry policy below. If required execution is still incomplete, return `error` or `skipped` as appropriate. Do not silently remove difficult or unavailable tasks from the denominator. A later partial-runtime policy would require explicit design and report changes.
+
+### Runtime infrastructure retries
+
+**[PROPOSED]** A run with no valid outcome because of a confirmed transient harness or service failure may be retried up to `runtime_retries` additional times. Fix the limit before execution, record it with run settings, and apply it equally to baseline and with-skill runs. A proposed initial limit is two additional attempts (three attempts total); this is distinct from the three planned repeated runs per task.
+
+Classify the cause before retrying. Service connection failure or a harness startup fault may qualify. A completed task failure, malformed candidate output, candidate-caused crash, or task timeout does not qualify merely because it is inconvenient. Unknown causes are retained for diagnosis rather than presumed infrastructure failures.
+
+Each retry uses the same logical task/variant/run identity and starts from reset fixtures and equivalent permitted state. If external effects cannot be safely reset or verified, stop and report the execution problem instead of duplicating actions.
+
+Retain every attempt's classification, error, timing, resource measurements where available, and log path. The first valid outcome fills that logical run's `TestResult`; no valid failure is replaced with another attempt. Failed infrastructure attempts remain in operational logs rather than becoming fabricated failing task results.
+
+Score Quality, Robustness, and task Efficiency from accepted valid runs. Report additional retry costs separately so measured task efficiency does not hide the actual expense of evaluation. If retries are exhausted, mark the affected dimension(s) errored with null scores and retain available evidence.
+
+`runtime_retries` and structured attempt history are proposed runner extensions, not existing model fields. The existing `TestResult` shape remains unchanged. Before implementing configuration or structured retry metadata, update `EvaluationConfig`, its serialization/hash, `models.py`, and their documentation together. This documentation-only PR defines the policy; it does not claim retry support is implemented.
 
 ## Task-Level Scoring
+
+### Compatibility with existing models
+
+The current `Task`/`Check` models and judge verdicts remain the runtime contract. Criterion IDs, weights, required flags, and the gate below are proposed scoring inputs, not fields already supported by `Check`. They require a reviewed adapter or model extension and synchronized changes to `models.py`, `evaluate.md`, model documentation, and tests before implementation. Do not silently write them into existing report records.
 
 ### Deterministic assertions and semantic checklists
 
@@ -241,55 +261,43 @@ If the task needs no external configuration and the absence of setup is verified
 
 Measure tokens, seconds, and tool calls during paired task runs. Keep raw measurements in the report. Static instruction size is supporting evidence and has no numeric contribution in this initial proposal.
 
-### Proposed formula
+### Alternatives under review
 
-**[PROPOSED]** For each task, include a resource in numeric comparison only when every planned baseline and with-skill repetition passes the task. Report the fraction of planned tasks that qualify. This avoids rewarding cheap failure and avoids selecting only favourable successful repetitions.
+**[OPEN]** There is no selected Efficiency formula or eligibility threshold in this draft. The team must decide how task success and failed baselines affect cost comparison before implementing this dimension.
 
-For each qualifying task, compare mean cost per resource:
+One candidate transformation of measured costs is:
 
 ```text
 e_resource = baseline_mean / (baseline_mean + skill_mean)
-E_t = mean(e_tokens, e_seconds, e_tool_calls)
-E   = mean_t(E_t)
 ```
 
-Equal cost scores `0.5`; half the baseline cost scores approximately `0.667`; twice the cost scores approximately `0.333`. The score approaches one as the skill becomes much cheaper. It is a relative cost score, not a task-success score.
+It gives equal cost `0.5`, half the baseline cost approximately `0.667`, and twice the baseline cost approximately `0.333`. This is an alternative to examine, not the adopted scoring rule. Combining resource scores and handling zero denominators still require agreement.
 
-If both means are zero, score that resource `0.5`: neither has a cost advantage. If only the baseline is zero, score zero; if only the skill is zero, score one. Invalid, negative, or missing measurements are errors rather than zero costs.
+The previous draft paired this formula with a rule requiring every repetition of both variants to pass and at least 50% of tasks to qualify. That eligibility rule and threshold are withdrawn from the proposed specification. They could make Efficiency unavailable even when the candidate improves task success, and the team's null policy would then prevent an overall ranking.
 
-**[PROPOSED]** Publish an Efficiency score only if at least half the planned tasks qualify; otherwise use `skipped` with the reason that successful paired evidence is insufficient. Record the qualifying task IDs. Across candidates, numerical Efficiency comparison requires the same qualifying task set; otherwise flag the comparison as limited.
+Compare these options using synthetic results before selecting a method:
 
-This is a proposed exception to requiring all runtime tasks to contribute to every dimension: all runs must still execute, but only fully successful pairs establish useful cost comparisons.
+| Alternative | Benefit | Issue to resolve |
+| --- | --- | --- |
+| Compare costs across all completed runs and display success separately | Uses the entire planned task set. | Cheap failures can appear efficient unless the interpretation or formula accounts for them. |
+| Compare costs only where outcomes meet equivalent success requirements | Compares costs of useful results. | Can discard many tasks, create different subsets across candidates, or leave no usable pairs. |
+| Use a cost-per-success or other success-conditioned measure | Connects resource use to task success. | Zero successes, small samples, and aggregation can make estimates unstable. |
 
-### Tradeoff for review
+Record raw measurements for every valid run regardless of the eventual method. Do not treat a genuine task failure as missing execution, and do not assign a neutral score merely to keep a candidate rankable.
 
-The rule can leave Efficiency unavailable when a skill provides strong positive lift and the baseline cannot pass. Raw costs remain useful, but they do not establish cost efficiency at equivalent successful outcomes.
-
-**[OPEN]** The team must choose between this conservative policy, a reviewed cost-per-success method, or another task-conditioned measure. The equal resource weights and 50% coverage threshold are provisional.
+The selected method must specify resource weights, zero and missing measurements, failed tasks, task coverage, and cross-candidate comparability. Until that method is approved, this draft cannot prescribe a numeric Efficiency score or a definitive score for the all-failure case.
 
 ## Safety
 
-Follow the safety design's worst-finding approach. Duplicate reports of the same underlying issue must not create extra score penalties. Preserve original backend evidence and sources.
+[The safety design, section 5](../evaluate-safety.md#5-data-model), owns how findings become a Safety score, including the provisional worst-finding mapping. Its categories, deduplication rules, backend handling, and validation cases remain maintained there. This document intentionally does not reproduce its severity-to-score table.
 
-The current safety document supplies the following provisional mapping:
+For aggregation, consume the Safety component's returned score, status, reason, and detail. A usable numeric score participates in the overall calculation; a null score invokes the missing-dimension rule below. Neither absent findings nor a missing backend independently establishes a perfect Safety score.
 
-| Worst finding | Score |
-| --- | --- |
-| None | 1.0 |
-| INFO or LOW | 0.9 |
-| MEDIUM | 0.6 |
-| HIGH | 0.3 |
-| CRITICAL | 0.0 |
+A numeric `partial` assessment differs from a null assessment. Under the current evaluation design, a deep-to-static fallback remains eligible for ranked output when all dimensions are numeric, but must be flagged with the actual scope of assessment. This document does not redefine which backend combinations justify a partial score.
 
-These values remain **[OPEN]** in the authoritative design and are not finalized here.
+Critical findings do not independently remove a skill from ranking under the current evaluation design. If the separate runner policy prevents execution and runtime dimensions consequently become null, the general null-ranking rule applies.
 
-No findings means no detected findings at the stated tier, not proof of safety. Record requested and actual tier, available backends, scanner version, own-checks version, and judge settings.
-
-A valid fallback can receive a numeric score with `partial` status. If no usable safety assessment is available, return null with the appropriate skipped/error status. The score must not become one merely because no backend ran.
-
-Do not introduce a new critical-finding exclusion rule for ranking: the current evaluation design retains such skills. Whether they may be executed is a separate unresolved runner policy.
-
-**[OPEN]** The safety document's static-only ranking wording and the evaluation design's ranked, flagged fallback policy need reconciliation before finalizing rank recommendations.
+**[OPEN]** The safety document's static-only ranking wording and the evaluation design's ranked, flagged fallback policy still need clarification by their owners. Preserve the documented flagged-fallback behaviour in examples without claiming that the wording conflict has been resolved.
 
 ## Overall Score and Ranking
 
@@ -307,9 +315,13 @@ A mean allows a high score in one dimension to offset a low score in another. In
 
 ### Missing and partial dimensions
 
-**[PROPOSED]** If any dimension is null, overall is null and the skill appears as unranked with its available evidence. Do not renormalize the remaining dimensions, because candidates could then be ranked on different criteria.
+**[TEAM DISCUSSION AGREEMENT — DOCUMENTED POLICY, IMPLEMENTATION PENDING]** If any of the six dimensions is null, overall is null and the skill is unranked. This reflects the reviewer and teammate discussion and the accompanying revision of `evaluate.md`. It specifies intended aggregation behaviour; the current model classes permit null values but do not implement ranking.
 
-This resolves an existing open question only if approved by the team.
+Do not replace null with zero or renormalize the available dimensions. Such overall scores would represent different assessments. Preserve all available dimension scores, statuses, reasons, and evidence so the user can still make an informed decision.
+
+If every submitted skill is missing at least one dimension, report every skill as unranked. State that no complete overall comparison was available and identify the missing dimensions for each skill. Do not declare an overall winner from an incomplete assessment.
+
+If some skills are complete, rank those eligible skills and display incomplete skills as unranked in the same report.
 
 A partial but numeric Safety result remains ranked and flagged under the current evaluation design. Other partial results require a documented scoring rule. Do not treat `partial` as permission to invent a replacement score.
 
@@ -341,8 +353,8 @@ Suppose a run yields:
 - Robustness `0.90`, from repeated task evidence.
 - Clarity `0.80`, from anchored ratings.
 - Configuration Cleanliness `0.75`.
-- Efficiency `0.60`, with sufficient qualifying paired tasks.
-- Safety `0.90`, under the provisional LOW/INFO mapping.
+- Efficiency `0.60`, supplied only to illustrate overall arithmetic; the Efficiency formula remains open.
+- Safety `0.90`, supplied by the Safety component under its own versioned scoring policy.
 
 Then:
 
@@ -356,19 +368,29 @@ The other dimension values are illustrative outputs, not labels assigned to an a
 
 ### Consistent failure
 
-A skill fails every task on every repetition and receives task scores of zero. Quality is zero; Robustness is one. Efficiency is unavailable under the successful-pair policy. Its overall is therefore null under the proposed missing-dimension rule.
+A skill fails every task on every repetition and receives task scores of zero. Under the proposed formulas, Quality is zero and Robustness is one. The Efficiency result is not determined by this draft because its success-conditioning policy remains open. If the eventual Efficiency method returns null, the skill is unranked; if it returns a valid numeric score and the other dimensions are numeric, an overall score can be calculated.
 
 This outcome exposes why Robustness must not be read as correctness.
 
 ### Unavailable judge
 
-The clarity judge is unavailable. Clarity has `skipped` status and a null score. Other evidence remains visible; overall is null and the skill is unranked under the proposal. A missing API key is not scored as bad clarity.
+The clarity judge is unavailable. Clarity has `skipped` status and a null score. Other evidence remains visible; overall is null and the skill is unranked under the team discussion agreement. A missing API key is not scored as bad clarity.
 
 ### Safety fallback
 
-A deep safety scan falls back to a valid static assessment whose worst finding is HIGH. Safety is `0.3` under the provisional mapping, status is `partial`, and the reason identifies the missing deep layer.
+A deep safety scan falls back to a valid static assessment. The Safety component returns a numeric score with `partial` status, and the reason identifies the missing deep layer. The numeric mapping is defined in the safety document, not duplicated here.
 
 If all other dimensions are numeric, the current evaluation design permits ranked output with a warning. The report must not imply that this assessment is equivalent to a completed deep scan.
+
+### All submitted skills have missing dimensions
+
+| Skill | Missing dimension | Overall | Rank |
+| --- | --- | --- | --- |
+| Skill A | Clarity | null | Unranked |
+| Skill B | Efficiency | null | Unranked |
+| Skill C | Safety | null | Unranked |
+
+The report still shows every available score and its evidence. It explains why each dimension is missing and that there is no complete overall ranking. It does not silently compare five-dimension averages.
 
 ## Variability and Fair Comparisons
 
@@ -390,10 +412,11 @@ Use fixed recorded evidence to test:
 - Quality for zero, positive, and negative lift.
 - Robustness for all-pass, all-fail, and mixed sequences.
 - Rubric arithmetic and invalid ratings.
-- Efficiency for equal, lower, higher, zero, and missing costs.
-- Insufficient successful-pair coverage.
-- Safety mappings, deduplication, missing backends, and partial status.
-- Null propagation, complete tie handling, and stable presentation.
+- Candidate Efficiency alternatives for equal, lower, higher, zero, and missing costs, failed baselines, and all-failure cases before choosing a formula.
+- Aggregation of numeric, partial, and null Safety component outputs; safety-specific mapping and backend tests remain owned by the safety design.
+- Null propagation, all-candidates-unranked output, mixed complete/incomplete candidates, complete tie handling, and stable presentation.
+- Retry-limit exhaustion, valid task failures that must not be retried, safe state restoration, and separate retry-cost records.
+- Existing runtime report serialization remains unchanged; proposed extensions are not presented as implemented fields.
 - Exact reproducibility of scoring over identical evidence.
 
 Calibrate judge anchors against independently reviewed golden cases. Real agent and LLM experiments remain separate from routine CI. Choose acceptance thresholds before observing the final validation set.
@@ -407,11 +430,14 @@ Calibrate judge anchors against independently reviewed golden cases. Real agent 
 | Robustness | Equal mixture of pairwise outcome agreement and inverse pairwise score difference. |
 | Clarity | Five existing criteria, equal weights, five anchored levels. |
 | Configuration Cleanliness | Four equally weighted, stage-aware properties. |
-| Efficiency | Equal resource weights; successful paired tasks; minimum 50% task coverage. |
-| Safety | Retain the existing provisional worst-finding mapping pending approval. |
-| Overall | Equal arithmetic mean; require all six numeric dimensions. |
+| Efficiency | Formula and success-conditioning remain open; compare alternatives before selecting eligibility or coverage rules. |
+| Safety | Consume the score and status defined by the teammate-owned safety design; no separate mapping here. |
+| Overall formula | Equal arithmetic mean remains proposed. |
+| Null handling | Team discussion agrees: any null means null overall and unranked; retain all available results. Documented in the accompanying `evaluate.md` revision; implementation pending. |
+| Partial Safety | Preserve current numeric, flagged fallback behaviour; clarify conflicting static-only wording with the safety-design owner. |
 | Ties | Complete the existing precedence; share ranks after all numeric ties. |
-| Invalid judge output | One bounded retry, then evaluation error. |
+| Invalid judge output | One bounded retry, then evaluation error; distinct from rerunning the agent. |
+| Transient runtime infrastructure failure | Proposed two additional attempts per logical run, fixed in advance; retain all logs and never retry valid task failure. |
 
 Before implementation, approve or revise these choices together, test their consequences on synthetic result tables, and reconcile them with `evaluate.md` and `evaluate-safety.md`. This draft does not make repository changes or settle decisions on behalf of the team.
 
