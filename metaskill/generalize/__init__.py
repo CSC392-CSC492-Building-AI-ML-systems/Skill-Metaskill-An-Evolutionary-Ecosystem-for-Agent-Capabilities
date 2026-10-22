@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 
-from metaskill.generalize import laya_pii
+from . import laya_pii  # relative: Hermes loads the plugin under its own package name
 
 # --- allowlist --- #
 _ALLOWED_EXT = {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
