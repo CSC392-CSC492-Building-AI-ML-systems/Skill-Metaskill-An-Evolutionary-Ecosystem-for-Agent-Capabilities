@@ -41,7 +41,17 @@ def generalize_skill(skill_path: str, output_path: str,
     try:
         laya_pii.load_detector(laya_model_path)  # fail fast before walking files
     except laya_pii.LayaUnavailable as exc:
-        return {"status": "error", "error": str(exc)}
+        return {
+            "status": "error",
+            "error": str(exc),
+            "laya_available": False,
+            # Read by the model: install is large and needs the user's say-so.
+            "next_step": (
+                "Ask the user whether they want to install the optional Laya PII model "
+                "(about 1 GB). If yes, tell them to run `hermes plugins install "
+                "metaskill-laya` and then retry. Do not install it without their consent."
+            ),
+        }
 
     entities_detected, files_scanned, files_over_limit = _scan_skill(skill_path, laya_model_path)
     warnings = []

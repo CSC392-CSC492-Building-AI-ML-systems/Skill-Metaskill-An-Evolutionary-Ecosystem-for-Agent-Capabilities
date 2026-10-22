@@ -35,7 +35,9 @@ METASKILL = {
                 "type": "boolean",
                 "description": (
                     "generalize only. Opt in to the local Laya Experts PII model for "
-                    "detection (~1GB, downloaded once, no API key). Off by default."
+                    "detection (~1GB, downloaded once, no API key). Off by default. "
+                    "If the result says laya is unavailable, ask the user before "
+                    "suggesting the install in next_step."
                 ),
             },
             "laya_model_path": {

@@ -90,6 +90,10 @@ def test_missing_laya_is_an_error_not_a_silent_fallback(monkeypatch, sample_skil
     assert data["status"] == "error"
     assert data["success"] is False
     assert "metaskill-laya" in data["error"]
+    assert data["laya_available"] is False
+    # The model is told to ask the user first, not to install on its own.
+    assert "Ask the user" in data["next_step"]
+    assert "hermes plugins install metaskill-laya" in data["next_step"]
 
 
 @pytest.mark.slow
