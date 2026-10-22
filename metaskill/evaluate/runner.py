@@ -6,7 +6,8 @@ fixtures, judges the result with judge.py, writes the full log to the report fol
 records a TestResult. Quality, robustness and efficiency are computed from those results.
 
 How an agent session is started is behind `Agent`, so tests use a fake one and no
-Hermes internals are imported here.
+Hermes internals are imported here. `exit_code` checks run their command through a
+`Sandbox` (sandbox.py), never on this machine.
 """
 
 from __future__ import annotations
@@ -31,7 +32,9 @@ from .judge import (
     Verdict,
     make_judge,
 )
-from .models import EvaluationConfig, JudgeType, Metrics, Skill, Task, TestResult, Variant
+from .models import (
+    CheckKind, EvaluationConfig, JudgeType, Metrics, Skill, Task, TestResult, Variant)
+from .sandbox import DockerSandbox, Sandbox
 from .tasks import load_tasks
 
 VARIANTS = (Variant.WITH_SKILL, Variant.BASELINE)
@@ -76,21 +79,24 @@ def report_dir(config: EvaluationConfig, now: datetime | None = None) -> Path:
 
 
 def run_skill(skill: Skill, tasks_file: str | Path, agent: Agent, *,
-              config: EvaluationConfig, run_dir: Path, ctx: Any = None) -> RunnerResult:
+              config: EvaluationConfig, run_dir: Path, ctx: Any = None,
+              sandbox: Sandbox | None = None) -> RunnerResult:
     """Load the skill's tasks with tasks.py and run them (run_tasks)."""
     return run_tasks(skill, load_tasks(tasks_file), agent,
-                     config=config, run_dir=run_dir, ctx=ctx)
+                     config=config, run_dir=run_dir, ctx=ctx, sandbox=sandbox)
 
 
 def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
               config: EvaluationConfig, run_dir: Path, ctx: Any = None,
-              judges: Mapping[JudgeType, TaskJudge] | None = None) -> RunnerResult:
+              judges: Mapping[JudgeType, TaskJudge] | None = None,
+              sandbox: Sandbox | None = None) -> RunnerResult:
     """Run every task `config.runs_per_task` times per variant and judge each run.
 
-    `ctx` is the Hermes plugin context, needed only for LLM checks. `judges` replaces
-    the judges built from it, for tests. Logs go to `run_dir/[skill]/logs/`.
+    `ctx` is the Hermes plugin context, needed only for LLM checks. `sandbox` runs the
+    commands of `exit_code` checks; None means a `DockerSandbox`. `judges` replaces the
+    judges built from these, for tests. Logs go to `run_dir/[skill]/logs/`.
     """
-    pool = _Judges(ctx, config, judges)
+    pool = _Judges(ctx, config, judges, sandbox or DockerSandbox())
     result = RunnerResult(tests=[])
     log_dir = run_dir / skill.name / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -173,19 +179,24 @@ def _combine(verdicts: list[Verdict]) -> Verdict:
 
 class _Judges:
     """The judges for one runner call. The LLM judge is built once, and only if a task
-    needs it, so its record of models and tokens covers every run."""
+    needs it, so its record of models and tokens covers every run. The sandbox is asked
+    whether it can run only when a task has an `exit_code` check."""
 
     def __init__(self, ctx: Any, config: EvaluationConfig,
-                 given: Mapping[JudgeType, TaskJudge] | None):
-        self.ctx, self.config = ctx, config
+                 given: Mapping[JudgeType, TaskJudge] | None, sandbox: Sandbox):
+        self.ctx, self.config, self.sandbox = ctx, config, sandbox
         self.judges: dict[JudgeType, TaskJudge] = dict(given or {})
+        # An injected deterministic judge brings its own way of running commands.
+        self.own_deterministic = JudgeType.DETERMINISTIC not in self.judges
         self.llm: Judge | None = None
         self.llm_error = ""
+        self.sandbox_error: str | None = None  # None until the sandbox is asked
 
     def get(self, judge_type: JudgeType) -> TaskJudge:
         if judge_type not in self.judges:
             if judge_type is JudgeType.DETERMINISTIC:
-                self.judges[judge_type] = DeterministicJudge()
+                self.judges[judge_type] = DeterministicJudge(
+                    run_command=self.sandbox.run_command)
             else:
                 self.judges[judge_type] = make_judge(judge_type, ctx=self.ctx,
                                                      config=self.config)
@@ -195,15 +206,22 @@ class _Judges:
         return judge
 
     def unavailable(self, task: Task) -> str:
-        """Why the task's LLM checks cannot be judged, or "" if they can."""
-        if not any(c.judge is JudgeType.LLM for c in task.checks):
-            return ""
-        if not self.llm_error:
-            try:
-                self.get(JudgeType.LLM)
-            except JudgeUnavailable as e:
-                self.llm_error = f"JudgeUnavailable: {e}"
-        return self.llm_error
+        """Why some of the task's checks cannot be judged, or "" if all can."""
+        if any(c.judge is JudgeType.LLM for c in task.checks):
+            if not self.llm_error:
+                try:
+                    self.get(JudgeType.LLM)
+                except JudgeUnavailable as e:
+                    self.llm_error = f"JudgeUnavailable: {e}"
+            if self.llm_error:
+                return self.llm_error
+        if self.own_deterministic and any(c.kind is CheckKind.EXIT_CODE for c in task.checks):
+            if self.sandbox_error is None:
+                self.sandbox_error = self.sandbox.unavailable()
+            if self.sandbox_error:
+                return ("JudgeUnavailable: exit_code checks run in a sandbox, which cannot "
+                        f"run: {self.sandbox_error}")
+        return ""
 
 
 def _copy_fixtures(fixtures: list[Path], workdir: Path) -> None:

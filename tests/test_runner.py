@@ -75,6 +75,27 @@ def output_check(pattern):
     return Check(judge=JudgeType.DETERMINISTIC, kind=CheckKind.OUTPUT_MATCHES, expected=pattern)
 
 
+def exit_check(command="python test.py"):
+    return Check(judge=JudgeType.DETERMINISTIC, kind=CheckKind.EXIT_CODE, target=command)
+
+
+class FakeSandbox:
+    """Stands in for DockerSandbox: `code(workdir)` gives the exit code of each command."""
+
+    def __init__(self, code=lambda workdir: 0, reason=""):
+        self.code, self.reason = code, reason
+        self.asked, self.commands = 0, []
+
+    def unavailable(self):
+        self.asked += 1
+        return self.reason
+
+    def run_command(self, command, workdir, timeout):
+        self.commands.append((command, sorted(p.name for p in workdir.iterdir())))
+        code = self.code(workdir)
+        return code, "" if code == 0 else "AssertionError"
+
+
 def task(task_id="write-report", checks=None, fixtures=()):
     return Task(task_id=task_id, description="Write a report", prompt="Write report.txt",
                 checks=checks or [file_check()], fixtures=list(fixtures))
@@ -204,6 +225,60 @@ def test_a_broken_check_is_an_error_not_a_failed_run(skill, run_dir):
                        config=config(runs=1), run_dir=run_dir)
     assert result.tests == []
     assert result.errors[0].startswith("write-report with_skill r1: JudgeError")
+
+
+def test_exit_code_checks_run_in_the_sandbox(skill, run_dir):
+    sandbox = FakeSandbox(code=lambda workdir: 0 if (workdir / "report.txt").exists() else 1)
+    result = run_tasks(skill, [task(checks=[exit_check()])], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1), run_dir=run_dir, sandbox=sandbox)
+    with_skill, baseline = result.tests
+    assert with_skill.passed and not baseline.passed
+    assert baseline.reason == "`python test.py` exited 1, expected 0: AssertionError"
+    # Run in the run's own folder, after the agent, before the folder is deleted.
+    assert sandbox.commands == [("python test.py", ["report.txt"]), ("python test.py", [])]
+    assert sandbox.asked == 1 and result.errors == []
+
+
+def test_without_a_sandbox_exit_code_tasks_are_not_run(skill, run_dir):
+    agent = FakeAgent()
+    sandbox = FakeSandbox(reason="Docker is not installed")
+    result = run_tasks(skill, [task(checks=[exit_check()]), task("other")], agent,
+                       config=config(runs=2), run_dir=run_dir, sandbox=sandbox)
+    assert [t.task_id for t in result.tests] == ["other"] * 4
+    assert len(result.errors) == 4
+    assert result.errors[0] == ("write-report with_skill r1: JudgeUnavailable: exit_code checks "
+                                "run in a sandbox, which cannot run: Docker is not installed")
+    assert len(agent.calls) == 4  # only the other task ran
+    assert sandbox.asked == 1 and sandbox.commands == []
+
+
+def test_sandbox_is_not_asked_without_exit_code_checks(skill, run_dir):
+    sandbox = FakeSandbox()
+    run_tasks(skill, [task(checks=[file_check(), output_check("done")])], FakeAgent(),
+              config=config(runs=1), run_dir=run_dir, sandbox=sandbox)
+    assert sandbox.asked == 0 and sandbox.commands == []
+
+
+def test_default_sandbox_is_docker_and_never_the_host(skill, run_dir, monkeypatch):
+    from metaskill.evaluate import runner
+    from metaskill.evaluate.sandbox import DockerSandbox
+
+    built = []
+
+    class NoDocker(DockerSandbox):
+        def __init__(self):
+            super().__init__()
+            built.append(self)
+
+        def unavailable(self):
+            return "Docker is not installed"
+
+    monkeypatch.setattr(runner, "DockerSandbox", NoDocker)
+    agent = FakeAgent()
+    result = run_tasks(skill, [task(checks=[exit_check("touch ran")])], agent,
+                       config=config(runs=1), run_dir=run_dir)
+    assert len(built) == 1 and result.tests == [] and agent.calls == []
+    assert "Docker is not installed" in result.errors[0]
 
 
 def test_judges_can_be_injected(skill, run_dir):
