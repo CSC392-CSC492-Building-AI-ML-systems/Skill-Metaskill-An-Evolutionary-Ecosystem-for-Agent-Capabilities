@@ -2,11 +2,11 @@
   "type": "object",
   "properties": {
     "organization": {
-      "type": "string"
+      "type": "string",
+      "pattern": "\\S"
     }
   },
   "required": [
     "organization"
   ]
 }
-

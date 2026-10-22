@@ -5,7 +5,7 @@ import json
 def expected_report(tickets, organization):
     """Compute the contract result; raise for invalid evaluator configuration."""
     if not isinstance(organization, str) or not organization.strip():
-        raise ValueError("organization must be a nonempty string")
+        raise ValueError("organization must contain a non-whitespace character")
     if not isinstance(tickets, list):
         return {"error": "invalid_input"}
     totals = {}
@@ -64,4 +64,3 @@ def assess_output(text, expected):
     if not _same(actual, expected):
         return False, "Output differs from the reviewed expected JSON."
     return True, "Output matches the reviewed expected JSON."
-

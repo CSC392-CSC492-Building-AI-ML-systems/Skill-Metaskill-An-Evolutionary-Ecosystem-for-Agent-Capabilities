@@ -14,7 +14,7 @@ Use the same tasks, full success contract, configuration, model, tools, limits, 
 
 ## Pilot task and checks
 
-[The ticket-summary pilot](../../metaskill/evaluate/golden/synthetic/ticket-summary/README.md) has eight hand-authored examples covering totals, cancellation, sorting, empty lists, invalid types, and exact team names. Expected JSON is distinct from runtime output and remains evaluator-only.
+[The ticket-summary pilot](../../metaskill/evaluate/golden/synthetic/ticket-summary/README.md) has eight hand-authored input scenarios, explicitly scheduled across five candidate variants and two profiles (80 logical cases), covering totals, cancellation, sorting, empty lists, invalid types, and exact team names. Expected JSON is distinct from runtime output and remains evaluator-only.
 
 Its trusted semantic verifier accepts object-key reordering but rejects wrong counts/totals, missing or extra output fields, duplicate keys, Boolean/integer substitution, and explanatory text outside the JSON. Each case currently has one all-or-nothing content assertion: pass yields task score 1, fail yields 0. This pilot does not adopt the scoring draft's richer partial-credit proposal.
 
@@ -35,4 +35,3 @@ Missing logical runs after bounded infrastructure retries leave Quality unscored
 Before implementation, agree whether absent baseline permits absolute success reporting without a Quality score; do not silently assume zero baseline success. Validate scoring on recorded all-pass, all-fail, positive/negative-lift, and invalid/incomplete run matrices once the interface is agreed.
 
 The existing offline pilot tests validate gold consistency and verifier behaviour. They do not measure agent pass rates, lift, robustness, or Quality scores. Human review and live runs remain pending.
-

@@ -4,3 +4,5 @@ Input is a JSON array of tickets. Each ticket must have a string team containing
 
 This public task contract is provided to both baseline and with-skill runs. Gold answers and annotations stay outside the agent workspace.
 
+
+Organization configuration must contain at least one non-whitespace character and is preserved exactly, without trimming. Missing or invalid organization configuration returns exactly {"error":"invalid_config"} before ticket validation. In this pilot, whitespace follows Python str.isspace semantics; cross-validator Unicode whitespace compatibility must be reviewed before non-ASCII configuration cases are added.

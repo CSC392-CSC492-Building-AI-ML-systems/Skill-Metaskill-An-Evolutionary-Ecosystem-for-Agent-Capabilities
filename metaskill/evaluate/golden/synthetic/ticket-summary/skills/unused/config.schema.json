@@ -4,7 +4,8 @@
     "organization": {
       "type": "string",
       "minLength": 1,
-      "description": "Organization label to include in the report."
+      "description": "Organization label to include in the report.",
+      "pattern": "\\S"
     },
     "legacy_region": {
       "type": "string",
@@ -16,4 +17,3 @@
   ],
   "additionalProperties": false
 }
-

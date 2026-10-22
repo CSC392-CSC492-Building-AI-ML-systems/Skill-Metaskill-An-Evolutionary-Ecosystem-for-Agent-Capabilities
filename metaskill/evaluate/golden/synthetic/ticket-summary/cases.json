@@ -1,82 +1,809 @@
 {
-  "schema_version": "pilot-0.1",
+  "schema_version": "pilot-0.2",
   "review_status": "draft",
   "reviewer": null,
   "case_family": "ticket-summary",
-  "notes": "Hand-authored expected outputs; no live agent results. Human independent review required.",
+  "notes": "Draft: eight input scenarios x five candidate skills x two profiles. Beta answers derive from Alpha labels by changing only organization; neither set is independently reviewed. Each logical case is planned for baseline and with-skill runs, repeated three times; no live results exist.",
   "cases": [
     {
-      "case_id": "ticket-summary/normal",
+      "case_id": "ticket-summary/reference/alpha/normal",
       "input": "inputs/normal.json",
       "expected": "expected/normal.json",
       "description": "Aggregation, ordering, and cancelled exclusion",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/normal"
     },
     {
-      "case_id": "ticket-summary/empty",
+      "case_id": "ticket-summary/reference/alpha/empty",
       "input": "inputs/empty.json",
       "expected": "expected/empty.json",
       "description": "Empty list",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/empty"
     },
     {
-      "case_id": "ticket-summary/cancelled-only",
+      "case_id": "ticket-summary/reference/alpha/cancelled-only",
       "input": "inputs/cancelled-only.json",
       "expected": "expected/cancelled-only.json",
       "description": "No retained tickets",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/cancelled-only"
     },
     {
-      "case_id": "ticket-summary/invalid-minutes",
+      "case_id": "ticket-summary/reference/alpha/invalid-minutes",
       "input": "inputs/invalid-minutes.json",
       "expected": "expected/invalid-minutes.json",
       "description": "Negative duration",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-minutes"
     },
     {
-      "case_id": "ticket-summary/invalid-cancelled",
+      "case_id": "ticket-summary/reference/alpha/invalid-cancelled",
       "input": "inputs/invalid-cancelled.json",
       "expected": "expected/invalid-cancelled.json",
       "description": "Validate excluded records too",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-cancelled"
     },
     {
-      "case_id": "ticket-summary/invalid-root",
+      "case_id": "ticket-summary/reference/alpha/invalid-root",
       "input": "inputs/invalid-root.json",
       "expected": "expected/invalid-root.json",
       "description": "Wrong root type",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-root"
     },
     {
-      "case_id": "ticket-summary/boolean-minutes",
+      "case_id": "ticket-summary/reference/alpha/boolean-minutes",
       "input": "inputs/boolean-minutes.json",
       "expected": "expected/boolean-minutes.json",
       "description": "Boolean is not an integer duration",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/boolean-minutes"
     },
     {
-      "case_id": "ticket-summary/case-sensitive",
+      "case_id": "ticket-summary/reference/alpha/case-sensitive",
       "input": "inputs/case-sensitive.json",
       "expected": "expected/case-sensitive.json",
       "description": "Exact names, zero duration, sorting",
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
-      "check": "json_semantic_equality"
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected-beta/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/normal"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected-beta/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/empty"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected-beta/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected-beta/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected-beta/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected-beta/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected-beta/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/reference/beta/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected-beta/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/beta.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/normal"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/empty"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/alpha/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected-beta/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/normal"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected-beta/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/empty"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected-beta/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected-beta/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected-beta/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected-beta/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected-beta/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/hardcoded/beta/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected-beta/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/beta.json",
+      "skill": "skills/hardcoded",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/normal"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/empty"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/alpha/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected-beta/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/normal"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected-beta/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/empty"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected-beta/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected-beta/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected-beta/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected-beta/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected-beta/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/undocumented/beta/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected-beta/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/beta.json",
+      "skill": "skills/undocumented",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/normal"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/empty"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/unused/alpha/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected-beta/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/normal"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected-beta/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/empty"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected-beta/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected-beta/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected-beta/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected-beta/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected-beta/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/unused/beta/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected-beta/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/beta.json",
+      "skill": "skills/unused",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/normal"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/empty"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/alpha/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/alpha/case-sensitive"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected-beta/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/normal"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected-beta/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/empty"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected-beta/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/cancelled-only"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected-beta/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-minutes"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected-beta/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-cancelled"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected-beta/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/invalid-root"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected-beta/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/boolean-minutes"
+    },
+    {
+      "case_id": "ticket-summary/wrong-totals/beta/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected-beta/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/beta.json",
+      "skill": "skills/wrong-totals",
+      "check": "json_semantic_equality",
+      "task_id": "ticket-summary/beta/case-sensitive"
     }
   ]
 }
-
