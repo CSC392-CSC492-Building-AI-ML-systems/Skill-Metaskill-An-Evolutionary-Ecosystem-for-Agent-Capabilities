@@ -1,0 +1,82 @@
+{
+  "schema_version": "pilot-0.1",
+  "review_status": "draft",
+  "reviewer": null,
+  "case_family": "ticket-summary",
+  "notes": "Hand-authored expected outputs; no live agent results. Human independent review required.",
+  "cases": [
+    {
+      "case_id": "ticket-summary/normal",
+      "input": "inputs/normal.json",
+      "expected": "expected/normal.json",
+      "description": "Aggregation, ordering, and cancelled exclusion",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    },
+    {
+      "case_id": "ticket-summary/empty",
+      "input": "inputs/empty.json",
+      "expected": "expected/empty.json",
+      "description": "Empty list",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    },
+    {
+      "case_id": "ticket-summary/cancelled-only",
+      "input": "inputs/cancelled-only.json",
+      "expected": "expected/cancelled-only.json",
+      "description": "No retained tickets",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    },
+    {
+      "case_id": "ticket-summary/invalid-minutes",
+      "input": "inputs/invalid-minutes.json",
+      "expected": "expected/invalid-minutes.json",
+      "description": "Negative duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    },
+    {
+      "case_id": "ticket-summary/invalid-cancelled",
+      "input": "inputs/invalid-cancelled.json",
+      "expected": "expected/invalid-cancelled.json",
+      "description": "Validate excluded records too",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    },
+    {
+      "case_id": "ticket-summary/invalid-root",
+      "input": "inputs/invalid-root.json",
+      "expected": "expected/invalid-root.json",
+      "description": "Wrong root type",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    },
+    {
+      "case_id": "ticket-summary/boolean-minutes",
+      "input": "inputs/boolean-minutes.json",
+      "expected": "expected/boolean-minutes.json",
+      "description": "Boolean is not an integer duration",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    },
+    {
+      "case_id": "ticket-summary/case-sensitive",
+      "input": "inputs/case-sensitive.json",
+      "expected": "expected/case-sensitive.json",
+      "description": "Exact names, zero duration, sorting",
+      "profile": "profiles/alpha.json",
+      "skill": "skills/reference",
+      "check": "json_semantic_equality"
+    }
+  ]
+}
+

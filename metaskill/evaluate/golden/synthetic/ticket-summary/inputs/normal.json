@@ -1,0 +1,23 @@
+[
+  {
+    "team": "B",
+    "status": "open",
+    "minutes": 10
+  },
+  {
+    "team": "A",
+    "status": "closed",
+    "minutes": 25
+  },
+  {
+    "team": "A",
+    "status": "cancelled",
+    "minutes": 999
+  },
+  {
+    "team": "A",
+    "status": "open",
+    "minutes": 5
+  }
+]
+

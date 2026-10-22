@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "organization": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Organization label to include in the report."
+    },
+    "legacy_region": {
+      "type": "string",
+      "description": "Legacy setting; currently has no consumer."
+    }
+  },
+  "required": [
+    "organization"
+  ],
+  "additionalProperties": false
+}
+
