@@ -10,6 +10,14 @@ ln -s "$PWD" ~/.hermes/plugins/metaskill
 hermes plugins enable metaskill
 ```
 
+`evaluate` also needs [Docker](https://docs.docker.com/get-started/get-docker/), installed and running, to run task checks in a sandbox, and the sandbox image:
+
+```bash
+docker pull python:3.12-slim
+```
+
+`generalize` does not need Docker. If something is missing, the plugin lists it before evaluating ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
+
 ## Layout
 
 | Path | Purpose |

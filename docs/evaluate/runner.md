@@ -131,7 +131,7 @@ The sandbox is asked `unavailable()` once per runner call, before the first task
 
 Also `--cap-drop ALL`, `no-new-privileges`, and limits on memory (512 MB), CPUs (1) and processes (256). On Linux and macOS the command runs as the user's own uid, so the runner can delete what it wrote.
 
-- **The image must be pulled first** (`docker pull python:3.12-slim`). It is never pulled during a check (`--pull never`), which would need the network and count against the check's timeout. If it is missing, `unavailable()` says to pull it.
+- **Docker is required for `evaluate`**, and the image must be pulled first (`docker pull python:3.12-slim`). Evaluate lists both before it starts if they are missing ([dependencies.md](dependencies.md)). The image is never pulled during a check (`--pull never`), which would need the network and count against the check's timeout. `check()` says what is wrong (`not-installed`, `not-running` or `no-image`); `unavailable()` gives the same as a message.
 - **The exit code is read from the container** (`docker inspect`), not from `docker run`, whose own failures exit with 125. Otherwise a command could exit 125 to look like a Docker failure and leave itself unjudged. A real Docker failure (the container did not start, or Docker reports an error) raises `JudgeError`.
 - The check's timeout includes the container's start, about a second.
 

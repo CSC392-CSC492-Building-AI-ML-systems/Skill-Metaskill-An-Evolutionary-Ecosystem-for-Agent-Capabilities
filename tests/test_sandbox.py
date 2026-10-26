@@ -6,7 +6,7 @@ import pytest
 
 from metaskill.evaluate import sandbox as sandbox_module
 from metaskill.evaluate.judge import JudgeError
-from metaskill.evaluate.sandbox import SANDBOX_PATH, WORKDIR, DockerSandbox
+from metaskill.evaluate.sandbox import SANDBOX_PATH, WORKDIR, DockerSandbox, Problem
 
 
 class FakeProcess:
@@ -141,6 +141,18 @@ def test_available_when_the_image_is_there():
 ])
 def test_unavailable_says_why(inspect, reason):
     assert reason in FakeDocker(inspect_image=inspect).unavailable()
+
+
+@pytest.mark.parametrize("inspect, problem", [
+    (FileNotFoundError("docker"), Problem.NOT_INSTALLED),
+    (subprocess.TimeoutExpired("docker", 30), Problem.NOT_RUNNING),
+    (SimpleNamespace(returncode=1, stdout="", stderr="Error: No such image: x"), Problem.NO_IMAGE),
+    (SimpleNamespace(returncode=1, stdout="", stderr="permission denied on docker.sock"),
+     Problem.NOT_RUNNING),
+])
+def test_check_says_what_kind_of_problem(inspect, problem):
+    assert FakeDocker(inspect_image=inspect).check()[0] is problem
+    assert FakeDocker().check() is None
 
 
 # --- Real Docker, where it is installed -------------------------------------------

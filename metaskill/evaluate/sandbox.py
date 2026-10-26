@@ -17,12 +17,14 @@ import os
 import subprocess
 import tempfile
 import uuid
+from enum import StrEnum
 from pathlib import Path
 from typing import IO, Protocol
 
 from .judge import JudgeError
 
 DEFAULT_IMAGE = "python:3.12-slim"
+DOCKER_INSTALL_URL = "https://docs.docker.com/get-started/get-docker/"
 WORKDIR = "/work"  # where the run's folder is mounted in the container
 # PATH inside the container. It never includes the run's folder, so a `python` the run
 # planted there is not the one that runs.
@@ -46,6 +48,15 @@ class Sandbox(Protocol):
         ...
 
 
+class Problem(StrEnum):
+    """Why DockerSandbox cannot run, so the install prompt can say what to do
+    (dependencies.py)."""
+
+    NOT_INSTALLED = "not-installed"  # no docker executable: the user installs Docker
+    NOT_RUNNING = "not-running"  # installed, but Docker does not answer or refuses us
+    NO_IMAGE = "no-image"  # Docker works, but the sandbox image is not pulled
+
+
 class DockerSandbox:
     """Runs each command in a new Docker container, removed afterwards.
 
@@ -59,19 +70,32 @@ class DockerSandbox:
         self.docker = docker  # the docker executable
         self.memory, self.cpus, self.pids = memory, cpus, pids
 
-    def unavailable(self) -> str:
+    @property
+    def pull_command(self) -> str:
+        return f"docker pull {self.image}"
+
+    def check(self) -> tuple[Problem, str] | None:
+        """What stops commands from running, with a message, or None if nothing does."""
         try:
             result = self._docker("image", "inspect", "--format", "{{.Id}}", self.image)
         except FileNotFoundError:
-            return "Docker is not installed (exit_code checks run in a Docker container)"
+            return (Problem.NOT_INSTALLED,
+                    "Docker is not installed (exit_code checks run in a Docker container)")
         except subprocess.TimeoutExpired:
-            return "Docker did not answer"
+            return Problem.NOT_RUNNING, "Docker did not answer"
         if result.returncode == 0:
-            return ""
+            return None
         error = result.stderr.strip()
         if "no such image" in error.lower():
-            return f"the sandbox image is not pulled; run `docker pull {self.image}`"
-        return f"Docker is not usable: {error[-200:]}"
+            return (Problem.NO_IMAGE,
+                    f"the sandbox image is not pulled; run `{self.pull_command}`")
+        # Usually the Docker daemon is not started; on Linux, also a user without access
+        # to Docker's socket. Either way Docker's own message says which.
+        return Problem.NOT_RUNNING, f"Docker is not usable: {error[-200:]}"
+
+    def unavailable(self) -> str:
+        problem = self.check()
+        return problem[1] if problem else ""
 
     def run_command(self, command: str, workdir: Path,
                     timeout: float) -> tuple[int | None, str]:
