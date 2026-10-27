@@ -1,6 +1,6 @@
 import json
 import subprocess
-from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -9,13 +9,17 @@ from metaskill.evaluate.judge import JudgeError
 from metaskill.evaluate.sandbox import SANDBOX_PATH, WORKDIR, DockerSandbox, Problem
 
 
+def completed(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(["docker"], returncode, stdout, stderr)
+
+
 class FakeProcess:
     def __init__(self, hangs=False):
         self.hangs, self.killed, self.done = hangs, False, not hangs
 
     def wait(self, timeout=None):
         if self.hangs and not self.killed:
-            raise subprocess.TimeoutExpired("docker", timeout)
+            raise subprocess.TimeoutExpired("docker", timeout or 0)
         self.done = True
 
     def poll(self):
@@ -33,25 +37,26 @@ class FakeDocker(DockerSandbox):
         super().__init__()
         self.state = {"ExitCode": 0, "Error": ""} if state is None else state
         self.stderr, self.hangs, self.inspect_image = stderr, hangs, inspect_image
-        self.calls, self.started, self.process = [], [], None
+        self.calls, self.started = [], []
+        self.process: FakeProcess | None = None
 
     def _docker(self, *args):
         self.calls.append(args)
         if args[:2] == ("image", "inspect"):
             if isinstance(self.inspect_image, Exception):
                 raise self.inspect_image
-            return self.inspect_image or SimpleNamespace(returncode=0, stdout="sha256:x", stderr="")
+            return self.inspect_image or completed(stdout="sha256:x")
         if args[:2] == ("container", "inspect"):
             if self.state is False:
-                return SimpleNamespace(returncode=1, stdout="", stderr="No such container")
-            return SimpleNamespace(returncode=0, stdout=json.dumps(self.state), stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+                return completed(1, stderr="No such container")
+            return completed(stdout=json.dumps(self.state))
+        return completed()
 
     def _start(self, args, stderr):
         self.started.append(args)
         stderr.write(self.stderr)
         self.process = FakeProcess(self.hangs)
-        return self.process
+        return cast("subprocess.Popen[bytes]", self.process)
 
 
 def removed(sandbox):
@@ -105,6 +110,7 @@ def test_docker_failures_are_judge_errors(tmp_path):
 def test_timeout_kills_the_container(tmp_path):
     sandbox = FakeDocker(hangs=True, stderr=b"still going")
     assert sandbox.run_command("sleep 999", tmp_path, 0.1) == (None, "still going")
+    assert sandbox.process is not None
     assert len(removed(sandbox)) == 1 and sandbox.process.killed
 
 
@@ -134,9 +140,9 @@ def test_available_when_the_image_is_there():
 @pytest.mark.parametrize("inspect, reason", [
     (FileNotFoundError("docker"), "Docker is not installed"),
     (subprocess.TimeoutExpired("docker", 30), "Docker did not answer"),
-    (SimpleNamespace(returncode=1, stdout="", stderr="Error: No such image: python:3.12-slim"),
+    (completed(1, stderr="Error: No such image: python:3.12-slim"),
      "run `docker pull python:3.12-slim`"),
-    (SimpleNamespace(returncode=1, stdout="", stderr="Cannot connect to the Docker daemon"),
+    (completed(1, stderr="Cannot connect to the Docker daemon"),
      "Docker is not usable: Cannot connect to the Docker daemon"),
 ])
 def test_unavailable_says_why(inspect, reason):
@@ -146,12 +152,13 @@ def test_unavailable_says_why(inspect, reason):
 @pytest.mark.parametrize("inspect, problem", [
     (FileNotFoundError("docker"), Problem.NOT_INSTALLED),
     (subprocess.TimeoutExpired("docker", 30), Problem.NOT_RUNNING),
-    (SimpleNamespace(returncode=1, stdout="", stderr="Error: No such image: x"), Problem.NO_IMAGE),
-    (SimpleNamespace(returncode=1, stdout="", stderr="permission denied on docker.sock"),
+    (completed(1, stderr="Error: No such image: x"), Problem.NO_IMAGE),
+    (completed(1, stderr="permission denied on docker.sock"),
      Problem.NOT_RUNNING),
 ])
 def test_check_says_what_kind_of_problem(inspect, problem):
-    assert FakeDocker(inspect_image=inspect).check()[0] is problem
+    found = FakeDocker(inspect_image=inspect).check()
+    assert found is not None and found[0] is problem
     assert FakeDocker().check() is None
 
 
