@@ -15,6 +15,9 @@ from typing import Any
 
 # Used for both the run folder name and meta.timestamp, e.g. 2026-10-14-T15-30-02.
 TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
+# A size Docker's tmpfs takes, e.g. 16m. Nothing else: it goes into the mount's options,
+# so a comma would add options of its own.
+DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
 
 
 class Dimension(StrEnum):
@@ -140,6 +143,8 @@ class EvaluationConfig:
         default_factory=lambda: {d: 1 / len(Dimension) for d in Dimension})
     # [OPEN] truncation length for TestResult.output (evaluate.md, section 2.1).
     output_max_chars: int = 2000
+    # Size of each run's folder in the sandbox (runner.md 2.6); fixtures must fit too.
+    sandbox_disk: str = "16m"
     output_dir: Path = Path("evaluation-reports")  # each run writes [timestamp]/ here
 
     def __post_init__(self) -> None:
@@ -152,6 +157,9 @@ class EvaluationConfig:
         if self.judge_max_chars < 1:
             raise ValueError(
                 f"judge_max_chars must be >= 1, got {self.judge_max_chars}")
+        if not isinstance(self.sandbox_disk, str) or not DISK_SIZE.fullmatch(self.sandbox_disk):
+            raise ValueError(
+                f"sandbox_disk must be a size like 16m, got {self.sandbox_disk!r}")
         for dimension, weight in self.weights.items():
             _check_unit(f"weights[{dimension}]", weight)
 
@@ -188,6 +196,7 @@ class EvaluationConfig:
             "safety_tier": self.safety_tier.value,
             "weights": {d.value: w for d, w in self.weights.items()},
             "output_max_chars": self.output_max_chars,
+            "sandbox_disk": self.sandbox_disk,
             "output_dir": str(self.output_dir),
         }
 
@@ -202,6 +211,7 @@ class EvaluationConfig:
             safety_tier=SafetyTier(
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             output_max_chars=data.get("output_max_chars", 2000),
+            sandbox_disk=data.get("sandbox_disk", "16m"),
             output_dir=Path(data.get("output_dir", "evaluation-reports")),
         )
         if "weights" in data:

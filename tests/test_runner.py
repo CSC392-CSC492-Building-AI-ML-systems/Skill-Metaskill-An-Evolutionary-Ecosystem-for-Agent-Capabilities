@@ -1,10 +1,13 @@
 import json
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from metaskill.evaluate import runner
 from metaskill.evaluate.judge import Judge, TokenUsage
 from metaskill.evaluate.models import (
     Check,
@@ -22,6 +25,7 @@ from metaskill.evaluate.runner import (
     run_tasks,
     timestamp,
 )
+from metaskill.evaluate.sandbox import CommandResult
 
 
 class FakeAgent:
@@ -32,9 +36,10 @@ class FakeAgent:
         self.act = act or (lambda prompt, skill, workdir: AgentRun(output="done"))
         self.calls = []
 
-    def run(self, prompt, skill, workdir):
+    def run(self, prompt, skill, workspace):
+        workdir = workspace.path
         self.calls.append(SimpleNamespace(
-            skill=skill.name if skill else None, workdir=workdir,
+            skill=skill.name if skill else None, workdir=workdir, root=workspace.root,
             files=sorted(p.name for p in workdir.iterdir())))
         return self.act(prompt, skill, workdir)
 
@@ -48,6 +53,65 @@ class FakeLlm:
         return SimpleNamespace(provider="fake", model="judge-model", parsed=reply,
                                content_type="json",
                                usage=SimpleNamespace(input_tokens=50, output_tokens=5))
+
+
+class FakeWorkspace:
+    """A workspace that is a folder on this machine. Nothing runs in it: commands get
+    their exit code from the sandbox's `code(folder)`."""
+
+    root = "/work"
+    skill_dir = "/tmp/skill"
+
+    def __init__(self, sandbox):
+        self.sandbox, self.path = sandbox, Path(tempfile.mkdtemp(prefix="fake-workspace-"))
+        self.closed = False
+
+    def run_command(self, command, timeout, input=None):
+        self.sandbox.commands.append((command, sorted(p.name for p in self.path.iterdir())))
+        code = self.sandbox.code(self.path)
+        return CommandResult(code, "", "" if code == 0 else "AssertionError")
+
+    def put(self, paths, folder):
+        for path in paths:
+            if path.is_dir():
+                shutil.copytree(path, self.path / path.name)
+            else:
+                shutil.copy2(path, self.path / path.name)
+
+    def export(self, dest):
+        shutil.copytree(self.path, dest, dirs_exist_ok=True)
+
+    def close(self):
+        shutil.rmtree(self.path, ignore_errors=True)
+        self.closed = True
+
+
+class FakeSandbox:
+    """Stands in for DockerSandbox: `code(workdir)` gives the exit code of each command."""
+
+    def __init__(self, code=lambda workdir: 0, reason="", disk="16m"):
+        self.code, self.reason, self.disk = code, reason, disk
+        self.asked, self.commands, self.opened = 0, [], []
+
+    def unavailable(self):
+        self.asked += 1
+        return self.reason
+
+    def open(self, fixtures):
+        workspace = FakeWorkspace(self)
+        self.opened.append(workspace)
+        try:
+            workspace.put(fixtures, workspace.root)
+        except BaseException:
+            workspace.close()
+            raise
+        return workspace
+
+
+@pytest.fixture(autouse=True)
+def no_docker(monkeypatch):
+    """Runs without a `sandbox` get a FakeSandbox, never Docker or this machine."""
+    monkeypatch.setattr(runner, "DockerSandbox", FakeSandbox)
 
 
 @pytest.fixture
@@ -77,23 +141,6 @@ def output_check(pattern):
 
 def exit_check(command="python test.py"):
     return Check(judge=JudgeType.DETERMINISTIC, kind=CheckKind.EXIT_CODE, target=command)
-
-
-class FakeSandbox:
-    """Stands in for DockerSandbox: `code(workdir)` gives the exit code of each command."""
-
-    def __init__(self, code=lambda workdir: 0, reason=""):
-        self.code, self.reason = code, reason
-        self.asked, self.commands = 0, []
-
-    def unavailable(self):
-        self.asked += 1
-        return self.reason
-
-    def run_command(self, command, workdir, timeout):
-        self.commands.append((command, sorted(p.name for p in workdir.iterdir())))
-        code = self.code(workdir)
-        return code, "" if code == 0 else "AssertionError"
 
 
 def task(task_id="write-report", checks=None, fixtures=()):
@@ -136,17 +183,20 @@ def test_runs_are_judged_and_measured(skill, run_dir):
     assert result.errors == [] and result.judge_model == ""
 
 
-def test_each_run_gets_a_fresh_folder_with_the_fixtures(skill, run_dir, tmp_path):
+def test_each_run_gets_a_fresh_workspace_with_the_fixtures(skill, run_dir, tmp_path):
     (tmp_path / "data.csv").write_text("a,b\n", encoding="utf-8")
     (tmp_path / "inputs").mkdir()
     (tmp_path / "inputs" / "x.txt").write_text("x", encoding="utf-8")
     fixtures = [tmp_path / "data.csv", tmp_path / "inputs"]
-    agent = FakeAgent(writes_report_with_skill)
-    run_tasks(skill, [task(fixtures=fixtures)], agent, config=config(runs=2), run_dir=run_dir)
+    agent, sandbox = FakeAgent(writes_report_with_skill), FakeSandbox()
+    run_tasks(skill, [task(fixtures=fixtures)], agent, config=config(runs=2), run_dir=run_dir,
+              sandbox=sandbox)
 
     assert all(c.files == ["data.csv", "inputs"] for c in agent.calls)  # no report.txt left over
+    assert all(c.root == "/work" for c in agent.calls)
     assert len({c.workdir for c in agent.calls}) == 4
-    assert not any(c.workdir.exists() for c in agent.calls)
+    assert sandbox.asked == 1 and len(sandbox.opened) == 4
+    assert all(w.closed for w in sandbox.opened)
 
 
 def test_checks_are_combined(skill, run_dir):
@@ -162,10 +212,12 @@ def test_agent_failure_is_a_failed_run(skill, run_dir):
     def crash(prompt, skill, workdir):
         raise RuntimeError("session died")
 
+    sandbox = FakeSandbox()
     result = run_tasks(skill, [task()], FakeAgent(crash), config=config(runs=1),
-                       run_dir=run_dir)
+                       run_dir=run_dir, sandbox=sandbox)
     assert all(not t.passed and t.score == 0.0 for t in result.tests)
     assert result.tests[0].reason == "agent failed: RuntimeError: session died"
+    assert all(w.closed for w in sandbox.opened)
 
 
 # --- Logs and output --------------------------------------------------------
@@ -221,53 +273,78 @@ def test_llm_judge_is_built_once_and_reports_its_model(skill, run_dir):
 
 
 def test_a_broken_check_is_an_error_not_a_failed_run(skill, run_dir):
+    sandbox = FakeSandbox()
     result = run_tasks(skill, [task(checks=[output_check("(")])], FakeAgent(),
-                       config=config(runs=1), run_dir=run_dir)
+                       config=config(runs=1), run_dir=run_dir, sandbox=sandbox)
     assert result.tests == []
     assert result.errors[0].startswith("write-report with_skill r1: JudgeError")
+    assert all(w.closed for w in sandbox.opened)
 
 
-def test_exit_code_checks_run_in_the_sandbox(skill, run_dir):
+def test_a_run_that_cannot_copy_its_fixtures_is_an_error_and_the_rest_still_run(
+        skill, run_dir, tmp_path):
+    (tmp_path / "gone.txt").write_text("x", encoding="utf-8")
+    broken = task("broken", fixtures=[tmp_path / "gone.txt"])
+    (tmp_path / "gone.txt").unlink()  # removed after the task file was loaded
+    result = run_tasks(skill, [broken, task("fine")], FakeAgent(), config=config(runs=1),
+                       run_dir=run_dir)
+    assert [t.task_id for t in result.tests] == ["fine", "fine"]
+    assert result.errors[0].startswith("broken with_skill r1: FileNotFoundError")
+
+
+@pytest.mark.parametrize("name", ["../escape", "/abs", "C:\\abs", "", ".hidden", 123])
+def test_a_skill_name_that_is_not_a_folder_name_is_refused(skill, run_dir, name):
+    skill.name = name
+    with pytest.raises(ValueError, match="skill name"):
+        run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir)
+    assert not run_dir.exists()
+
+
+def test_exit_code_checks_run_in_the_runs_workspace(skill, run_dir):
     sandbox = FakeSandbox(code=lambda workdir: 0 if (workdir / "report.txt").exists() else 1)
     result = run_tasks(skill, [task(checks=[exit_check()])], FakeAgent(writes_report_with_skill),
                        config=config(runs=1), run_dir=run_dir, sandbox=sandbox)
     with_skill, baseline = result.tests
     assert with_skill.passed and not baseline.passed
     assert baseline.reason == "`python test.py` exited 1, expected 0: AssertionError"
-    # Run in the run's own folder, after the agent, before the folder is deleted.
+    # Run in the workspace the agent ran in, after the agent, before it is closed.
     assert sandbox.commands == [("python test.py", ["report.txt"]), ("python test.py", [])]
-    assert sandbox.asked == 1 and result.errors == []
+    assert result.errors == []
 
 
-def test_without_a_sandbox_exit_code_tasks_are_not_run(skill, run_dir):
+def test_checks_read_the_folder_as_the_agent_left_it(skill, run_dir):
+    def deletes_report(workdir):
+        (workdir / "report.txt").unlink()
+        return 0
+
+    sandbox = FakeSandbox(code=deletes_report)
+    result = run_tasks(skill, [task(checks=[exit_check("rm report.txt"), file_check()])],
+                       FakeAgent(writes_report_with_skill), config=config(runs=1),
+                       run_dir=run_dir, sandbox=sandbox)
+    assert result.tests[0].passed  # copied out before the exit_code check ran
+
+
+def test_without_a_sandbox_nothing_runs(skill, run_dir):
     agent = FakeAgent()
     sandbox = FakeSandbox(reason="Docker is not installed")
     result = run_tasks(skill, [task(checks=[exit_check()]), task("other")], agent,
                        config=config(runs=2), run_dir=run_dir, sandbox=sandbox)
-    assert [t.task_id for t in result.tests] == ["other"] * 4
-    assert len(result.errors) == 4
-    assert result.errors[0] == ("write-report with_skill r1: JudgeUnavailable: exit_code checks "
-                                "run in a sandbox, which cannot run: Docker is not installed")
-    assert len(agent.calls) == 4  # only the other task ran
-    assert sandbox.asked == 1 and sandbox.commands == []
-
-
-def test_sandbox_is_not_asked_without_exit_code_checks(skill, run_dir):
-    sandbox = FakeSandbox()
-    run_tasks(skill, [task(checks=[file_check(), output_check("done")])], FakeAgent(),
-              config=config(runs=1), run_dir=run_dir, sandbox=sandbox)
-    assert sandbox.asked == 0 and sandbox.commands == []
+    assert result.tests == [] and len(result.errors) == 8
+    assert result.errors[0] == (
+        "write-report with_skill r1: SandboxUnavailable: agent runs and exit_code checks "
+        "run in a sandbox, which cannot run: Docker is not installed")
+    assert agent.calls == [] and sandbox.opened == []
+    assert sandbox.asked == 1
 
 
 def test_default_sandbox_is_docker_and_never_the_host(skill, run_dir, monkeypatch):
-    from metaskill.evaluate import runner
     from metaskill.evaluate.sandbox import DockerSandbox
 
     built = []
 
     class NoDocker(DockerSandbox):
-        def __init__(self):
-            super().__init__()
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
             built.append(self)
 
         def unavailable(self):
@@ -276,9 +353,24 @@ def test_default_sandbox_is_docker_and_never_the_host(skill, run_dir, monkeypatc
     monkeypatch.setattr(runner, "DockerSandbox", NoDocker)
     agent = FakeAgent()
     result = run_tasks(skill, [task(checks=[exit_check("touch ran")])], agent,
-                       config=config(runs=1), run_dir=run_dir)
+                       config=config(runs=1, sandbox_disk="32m"), run_dir=run_dir)
     assert len(built) == 1 and result.tests == [] and agent.calls == []
+    assert built[0].disk == "32m"  # the run folder's size comes from the config
     assert "Docker is not installed" in result.errors[0]
+
+
+@pytest.mark.parametrize("disk", ["16m,suid", "16", "0m", "", 16])
+def test_sandbox_disk_must_be_a_plain_size(disk):
+    # It goes into the tmpfs mount's options, so nothing but a size is accepted.
+    with pytest.raises(ValueError, match="sandbox_disk"):
+        EvaluationConfig(sandbox_disk=disk)
+
+
+def test_sandbox_disk_round_trips_and_changes_the_hash():
+    custom = EvaluationConfig(sandbox_disk="64m")
+    assert EvaluationConfig.from_dict(custom.to_dict()).sandbox_disk == "64m"
+    assert EvaluationConfig.from_dict({}).sandbox_disk == "16m"
+    assert custom.hash() != EvaluationConfig().hash()
 
 
 def test_judges_can_be_injected(skill, run_dir):

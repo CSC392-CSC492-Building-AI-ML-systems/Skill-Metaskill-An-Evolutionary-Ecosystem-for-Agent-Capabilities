@@ -1,13 +1,13 @@
 """Task runner: runs each task n times with and without the skill (docs/evaluate.md 4).
 
 The only module that executes the agent. For every task, variant (`with_skill`,
-`baseline`) and run 1..n it gives the agent a fresh working folder with the task's
+`baseline`) and run 1..n it gives the agent a fresh sandboxed workspace with the task's
 fixtures, judges the result with judge.py, writes the full log to the report folder and
 records a TestResult. Quality, robustness and efficiency are computed from those results.
 
 How an agent session is started is behind `Agent`, so tests use a fake one and no
-Hermes internals are imported here. `exit_code` checks run their command through a
-`Sandbox` (sandbox.py), never on this machine.
+Hermes internals are imported here. Everything the agent runs, and the command of every
+`exit_code` check, runs in the run's `Workspace` (sandbox.py), never on this machine.
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ from .judge import (
     make_judge,
 )
 from .models import (
-    CheckKind, EvaluationConfig, JudgeType, Metrics, Skill, Task, TestResult, Variant)
-from .sandbox import DockerSandbox, Sandbox
-from .tasks import load_tasks
+    EvaluationConfig, JudgeType, Metrics, Skill, Task, TestResult, Variant)
+from .sandbox import DockerSandbox, Sandbox, Workspace
+from .tasks import SAFE_NAME, load_tasks
 
 VARIANTS = (Variant.WITH_SKILL, Variant.BASELINE)
 
@@ -51,9 +51,17 @@ class AgentRun:
 
 
 class Agent(Protocol):
-    """Starts one agent session. `skill` is None for the baseline run."""
+    """Starts one agent session. `skill` is None for the baseline run.
 
-    def run(self, prompt: str, skill: Skill | None, workdir: Path) -> AgentRun: ...
+    The session itself (its model calls) runs on this machine, but every command it
+    runs and every file it reads or writes goes through `workspace`, the run's sandbox,
+    whose `root` is its working folder. Skill files it needs there, such as bundled
+    scripts, it copies into `workspace.skill_dir` with `workspace.put`. The Hermes agent
+    does this with a terminal and file backend of its own that calls the workspace, not
+    with Hermes' Docker backend, so every isolation flag stays in sandbox.py.
+    """
+
+    def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun: ...
 
 
 @dataclass
@@ -92,11 +100,18 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
               sandbox: Sandbox | None = None) -> RunnerResult:
     """Run every task `config.runs_per_task` times per variant and judge each run.
 
-    `ctx` is the Hermes plugin context, needed only for LLM checks. `sandbox` runs the
-    commands of `exit_code` checks; None means a `DockerSandbox`. `judges` replaces the
-    judges built from these, for tests. Logs go to `run_dir/[skill]/logs/`.
+    `ctx` is the Hermes plugin context, needed only for LLM checks. `sandbox` opens the
+    workspace each run happens in, and runs its `exit_code` commands; None means a
+    `DockerSandbox` whose run folders are `config.sandbox_disk` in size. `judges`
+    replaces the judges built from these, for tests. Logs go to `run_dir/[skill]/logs/`.
+
+    Raises ValueError if the skill's name cannot be a folder name: it comes from the
+    skill's own frontmatter, so `../x` or an absolute path would put the logs elsewhere.
     """
-    pool = _Judges(ctx, config, judges, sandbox or DockerSandbox())
+    if not isinstance(skill.name, str) or not SAFE_NAME.fullmatch(skill.name):
+        raise ValueError(f"skill name {skill.name!r} may only contain letters, digits, "
+                         "'_', '.' and '-'")
+    pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
     result = RunnerResult(tests=[])
     log_dir = run_dir / skill.name / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +128,10 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
                 try:
                     result.tests.append(
                         _run_once(skill, task, variant, n, agent, pool, config, run_dir))
-                except (JudgeError, JudgeUnavailable) as e:
+                # JudgeError also covers a workspace that could not be made or copied
+                # out. OSError: writing the log failed. Either costs this run, not the
+                # runs already made.
+                except (JudgeError, JudgeUnavailable, OSError) as e:
                     result.errors.append(f"{label}: {type(e).__name__}: {e}")
 
     if pool.llm is not None:
@@ -124,14 +142,13 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
 
 def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
               pool: _Judges, config: EvaluationConfig, run_dir: Path) -> TestResult:
-    """One session in a fresh folder, judged against every check of the task."""
-    workdir = Path(tempfile.mkdtemp(prefix=f"metaskill-{task.task_id}-"))
+    """One session in a fresh workspace, judged against every check of the task."""
+    workspace = pool.sandbox.open(task.fixtures)
     try:
-        _copy_fixtures(task.fixtures, workdir)
         start = time.monotonic()
         try:
             run = agent.run(task.prompt, skill if variant is Variant.WITH_SKILL else None,
-                            workdir)
+                            workspace)
             failure = ""
         except Exception as e:  # the agent failing is an outcome, not a runner error
             run, failure = AgentRun(output=""), f"agent failed: {type(e).__name__}: {e}"
@@ -140,10 +157,9 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         if failure:
             verdict = Verdict(passed=False, score=0.0, reason=failure, evidence=None)
         else:
-            output = RunOutput(text=run.output, workdir=workdir)
-            verdict = _combine([pool.get(c.judge).judge(task, c, output) for c in task.checks])
+            verdict = _judge(task, run, workspace, pool)
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        workspace.close()
 
     log = f"{skill.name}/logs/{task.task_id}-{variant.value}-r{n}.txt"
     metrics = Metrics(tokens=run.tokens, seconds=round(seconds, 3), tool_calls=run.tool_calls)
@@ -164,6 +180,21 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
     )
 
 
+def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Verdict:
+    """Every check of the task on the run. The judges read a copy of the workspace's
+    folder, made once, before any check runs; `exit_code` commands run in the workspace
+    itself, where the agent ran."""
+    workdir = Path(tempfile.mkdtemp(prefix=f"metaskill-{task.task_id}-"))
+    try:
+        workspace.export(workdir)
+        output = RunOutput(text=run.output, workdir=workdir)
+        pool.workspace = workspace
+        return _combine([pool.get(c.judge).judge(task, c, output) for c in task.checks])
+    finally:
+        pool.workspace = None
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def _combine(verdicts: list[Verdict]) -> Verdict:
     """One verdict for a run: passed only if every check passed, score the mean."""
     if len(verdicts) == 1:
@@ -180,23 +211,30 @@ def _combine(verdicts: list[Verdict]) -> Verdict:
 class _Judges:
     """The judges for one runner call. The LLM judge is built once, and only if a task
     needs it, so its record of models and tokens covers every run. The sandbox is asked
-    whether it can run only when a task has an `exit_code` check."""
+    once whether it can run, since every run happens in it."""
 
     def __init__(self, ctx: Any, config: EvaluationConfig,
                  given: Mapping[JudgeType, TaskJudge] | None, sandbox: Sandbox):
         self.ctx, self.config, self.sandbox = ctx, config, sandbox
         self.judges: dict[JudgeType, TaskJudge] = dict(given or {})
-        # An injected deterministic judge brings its own way of running commands.
-        self.own_deterministic = JudgeType.DETERMINISTIC not in self.judges
         self.llm: Judge | None = None
         self.llm_error = ""
         self.sandbox_error: str | None = None  # None until the sandbox is asked
+        self.workspace: Workspace | None = None  # the run being judged
+
+    def run_command(self, command: str, workdir: Path,
+                    timeout: float) -> tuple[int | None, str]:
+        """judge.CommandRunner for `exit_code` checks: runs the command in the workspace
+        of the run being judged, not in workdir, the copy the other checks read."""
+        if self.workspace is None:
+            raise JudgeError("an exit_code check ran outside a run")
+        result = self.workspace.run_command(command, timeout)
+        return result.exit_code, result.stderr
 
     def get(self, judge_type: JudgeType) -> TaskJudge:
         if judge_type not in self.judges:
             if judge_type is JudgeType.DETERMINISTIC:
-                self.judges[judge_type] = DeterministicJudge(
-                    run_command=self.sandbox.run_command)
+                self.judges[judge_type] = DeterministicJudge(run_command=self.run_command)
             else:
                 self.judges[judge_type] = make_judge(judge_type, ctx=self.ctx,
                                                      config=self.config)
@@ -206,7 +244,12 @@ class _Judges:
         return judge
 
     def unavailable(self, task: Task) -> str:
-        """Why some of the task's checks cannot be judged, or "" if all can."""
+        """Why the task cannot be run in the sandbox or judged, or "" if it can."""
+        if self.sandbox_error is None:
+            self.sandbox_error = self.sandbox.unavailable()
+        if self.sandbox_error:
+            return ("SandboxUnavailable: agent runs and exit_code checks run in a sandbox, "
+                    f"which cannot run: {self.sandbox_error}")
         if any(c.judge is JudgeType.LLM for c in task.checks):
             if not self.llm_error:
                 try:
@@ -215,22 +258,7 @@ class _Judges:
                     self.llm_error = f"JudgeUnavailable: {e}"
             if self.llm_error:
                 return self.llm_error
-        if self.own_deterministic and any(c.kind is CheckKind.EXIT_CODE for c in task.checks):
-            if self.sandbox_error is None:
-                self.sandbox_error = self.sandbox.unavailable()
-            if self.sandbox_error:
-                return ("JudgeUnavailable: exit_code checks run in a sandbox, which cannot "
-                        f"run: {self.sandbox_error}")
         return ""
-
-
-def _copy_fixtures(fixtures: list[Path], workdir: Path) -> None:
-    for fixture in fixtures:
-        target = workdir / fixture.name
-        if fixture.is_dir():
-            shutil.copytree(fixture, target)
-        else:
-            shutil.copy2(fixture, target)
 
 
 def _truncate(output: str, max_chars: int, log: str) -> str:

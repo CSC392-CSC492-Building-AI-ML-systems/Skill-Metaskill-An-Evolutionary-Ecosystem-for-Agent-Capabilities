@@ -63,6 +63,7 @@ Settings for one `evaluate` or `rank` call.
 | `safety_tier` | `static` | Safety scan depth |
 | `weights` | equal, `1/6` each | Weight of each dimension in `overall`; each must be in `[0, 1]`. **[OPEN]** evaluate.md, open question 1 |
 | `output_max_chars` | `2000` | Truncation length for `TestResult.output`. **[OPEN]** |
+| `sandbox_disk` | `16m` | Size of each run's folder in the sandbox ([runner.md](runner.md) 2.6); the task's fixtures must fit in it too. A number and `k`, `m` or `g`, nothing else, since it goes into the volume's mount options |
 | `output_dir` | `evaluation-reports` | Each run writes `[timestamp]/` here |
 
 - `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, since the output location does not affect scores. The result becomes `ReportMeta.config`.

@@ -95,8 +95,7 @@ _INVISIBLE = re.compile(
 def strip_hidden(text: str) -> str:
     """text without HTML comments or invisible characters. A comment is replaced by its
     line breaks, so line numbers still match the file on disk."""
-    text = _HTML_COMMENT.sub(
-        lambda m: "\n" * m.group(0).count("\n"), _normalize(text))
+    text = _HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), _normalize(text))
     return _INVISIBLE.sub("", text)
 
 
@@ -118,8 +117,7 @@ def mark_hidden(text: str) -> str:
 
     text = _TAG_RUN.sub(tags, _normalize(text))
     return _INVISIBLE.sub(
-        lambda m: m.group(0) if m.group(
-            0) in _JOINERS else f"⟦U+{ord(m.group(0)):04X}⟧",
+        lambda m: m.group(0) if m.group(0) in _JOINERS else f"⟦U+{ord(m.group(0)):04X}⟧",
         text)
 
 
@@ -140,8 +138,7 @@ def _read_sources(skill: Skill, *, keep_hidden: bool = False,
     # skill.body was read through any link, so check that SKILL.md itself is the skill's.
     skill_md = Path(skill.path) / "SKILL.md"
     if skill_md.is_symlink() and not skill_md.resolve().is_relative_to(root):
-        raise JudgeError(
-            "SKILL.md links to a file outside the skill; it was not sent")
+        raise JudgeError("SKILL.md links to a file outside the skill; it was not sent")
     if skill_md.is_file() and skill_md.stat().st_nlink > 1:
         raise JudgeError("SKILL.md is a hard link, so it may be a file outside the skill; "
                          "it was not sent")
@@ -308,8 +305,7 @@ class Criterion:
 
     def __post_init__(self) -> None:
         if len(self.levels) < 2:
-            raise ValueError(
-                f"criterion {self.name} needs at least two levels")
+            raise ValueError(f"criterion {self.name} needs at least two levels")
 
 
 @dataclass
@@ -370,10 +366,8 @@ class ReviewResult:
 
     findings: list[Finding]
     dropped: list[DroppedAnswer] = field(default_factory=list)
-    # files not sent: over max_chars
-    skipped: list[str] = field(default_factory=list)
-    usage: TokenUsage = field(
-        default_factory=TokenUsage)  # this review's calls
+    skipped: list[str] = field(default_factory=list)  # files not sent: over max_chars
+    usage: TokenUsage = field(default_factory=TokenUsage)  # this review's calls
 
 
 class TaskJudge(Protocol):
@@ -410,18 +404,15 @@ class Judge:
         self.model = model
         self.retries = retries  # extra calls when a reply does not fit its schema
         self.max_chars = max_chars  # characters of a skill sent to the judge
-        # (provider, model) of every reply
-        self.used: set[tuple[str, str]] = set()
-        # by purpose: rate, review, check, ...
-        self.usage: dict[str, TokenUsage] = {}
+        self.used: set[tuple[str, str]] = set()  # (provider, model) of every reply
+        self.usage: dict[str, TokenUsage] = {}  # by purpose: rate, review, check, ...
 
     @classmethod
     def from_context(cls, ctx: Any, config: EvaluationConfig) -> Judge:
         """Build the judge from the plugin context passed to register(ctx)."""
         llm = getattr(ctx, "llm", None)
         if llm is None:
-            raise JudgeUnavailable(
-                "this Hermes version has no plugin LLM access (ctx.llm)")
+            raise JudgeUnavailable("this Hermes version has no plugin LLM access (ctx.llm)")
         # register(ctx) only registers JUDGE_TASK where Hermes supports auxiliary tasks.
         task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
         return cls(llm, task=task, provider=config.judge_provider,
@@ -478,10 +469,8 @@ class Judge:
                                         temperature, max_tokens, timeout)
                 self.used.add((result.provider, result.model))
                 reply_usage = getattr(result, "usage", None)
-                usage.input_tokens += int(getattr(reply_usage,
-                                          "input_tokens", 0) or 0)
-                usage.output_tokens += int(getattr(reply_usage,
-                                           "output_tokens", 0) or 0)
+                usage.input_tokens += int(getattr(reply_usage, "input_tokens", 0) or 0)
+                usage.output_tokens += int(getattr(reply_usage, "output_tokens", 0) or 0)
                 parsed = result.parsed if result.content_type == "json" else None
                 problems = (schema_problems(parsed, schema) if isinstance(parsed, dict)
                             else ["the reply was not a JSON object"])
@@ -540,8 +529,7 @@ class Judge:
         by_name = {c.name: c for c in criteria}
         rubric = "\n\n".join(
             f"## {c.name}\n{c.question}\nLevels, worst to best:\n"
-            + "\n".join(f"{i}. {anchor}" for i,
-                        anchor in enumerate(c.levels, 1))
+            + "\n".join(f"{i}. {anchor}" for i, anchor in enumerate(c.levels, 1))
             for c in criteria)
         task = (
             f"{instructions}\n\n# Rubric\n\n{rubric}\n\n"
@@ -594,8 +582,7 @@ class Judge:
         Unlike rate(), the judge sees hidden text, marked as hidden (mark_hidden): it is
         where an instruction the user would not notice is most likely to be.
         """
-        listing = "\n".join(
-            f"- `{name}`: {meaning}" for name, meaning in categories.items())
+        listing = "\n".join(f"- `{name}`: {meaning}" for name, meaning in categories.items())
         task = (
             f"{instructions}\n\n# Categories\n\n{listing}\n\n"
             "Report each problem in the skill below as one finding. Report nothing for "
@@ -610,16 +597,14 @@ class Judge:
             "quote": {"type": "string"},
         }))})
         sources, skipped = self._material(skill, keep_hidden=True)
-        data, usage = self._ask(task, _render(
-            sources), schema, "review", **options)
+        data, usage = self._ask(task, _render(sources), schema, "review", **options)
 
         result = ReviewResult(findings=[], skipped=skipped, usage=usage)
         for item in data.get("findings") if isinstance(data.get("findings"), list) else []:
             if not isinstance(item, dict):
                 result.dropped.append(DroppedAnswer(item, "not a JSON object"))
                 continue
-            category, severity = _text(
-                item, "category"), _text(item, "severity")
+            category, severity = _text(item, "category"), _text(item, "severity")
             location = locate(sources, item.get("quote"), _text(item, "file"))
             if category not in categories:
                 reason = f"unknown category {_plain(str(item.get('category')))[:60]!r}"
@@ -664,8 +649,7 @@ class Judge:
         cut = len(text) > self.max_chars
         if cut:
             text = text[-self.max_chars:]
-        items = "\n".join(f"{i}. {item}" for i,
-                          item in enumerate(checklist, 1))
+        items = "\n".join(f"{i}. {item}" for i, item in enumerate(checklist, 1))
         instructions = (
             f"An agent was given this task:\n\n{task.prompt}\n\n# Checklist\n\n{items}\n\n"
             "For every checklist item, say whether the agent output below meets it. "
@@ -698,8 +682,7 @@ class Judge:
         unmet = [n for n in range(1, len(checklist) + 1) if n not in met]
         if unmet:
             reason = "; ".join(
-                f"unmet: {checklist[n - 1]}" +
-                (f" ({reasons[n]})" if reasons.get(n) else "")
+                f"unmet: {checklist[n - 1]}" + (f" ({reasons[n]})" if reasons.get(n) else "")
                 for n in unmet)
         else:
             reason = "all checklist items met"
@@ -742,8 +725,7 @@ def schema_problems(value: Any, schema: dict[str, Any]) -> list[str]:
     _check_schema(value, schema, "", problems)
     if len(problems) > MAX_PROBLEMS_LISTED:
         extra = len(problems) - MAX_PROBLEMS_LISTED
-        problems = problems[:MAX_PROBLEMS_LISTED] + \
-            [f"and {extra} more problems"]
+        problems = problems[:MAX_PROBLEMS_LISTED] + [f"and {extra} more problems"]
     return problems
 
 
@@ -752,8 +734,7 @@ def _check_schema(value: Any, schema: dict[str, Any], path: str,
     where = path or "top level"
     expected = _TYPES.get(schema.get("type", ""))
     if expected is not None:
-        is_bool = isinstance(value, bool) and schema["type"] in (
-            "integer", "number")
+        is_bool = isinstance(value, bool) and schema["type"] in ("integer", "number")
         if not isinstance(value, expected) or is_bool:
             problems.append(f"at {where}: expected {schema['type']}")
             return
@@ -767,12 +748,10 @@ def _check_schema(value: Any, schema: dict[str, Any], path: str,
                 problems.append(f"at {where}: missing `{name}`")
         for name, sub in schema.get("properties", {}).items():
             if name in value:
-                _check_schema(
-                    value[name], sub, f"{path}/{name}" if path else name, problems)
+                _check_schema(value[name], sub, f"{path}/{name}" if path else name, problems)
     if isinstance(value, list) and "items" in schema:
         for i, item in enumerate(value):
-            _check_schema(
-                item, schema["items"], f"{path}/{i}" if path else str(i), problems)
+            _check_schema(item, schema["items"], f"{path}/{i}" if path else str(i), problems)
 
 
 class DeterministicJudge:
@@ -807,8 +786,7 @@ class DeterministicJudge:
             return self._exit_code(check, run)
         if check.kind is CheckKind.OUTPUT_MATCHES:
             return self._output_matches(check, run)
-        raise JudgeError(
-            f"task {task.task_id}: unknown check kind {check.kind}")
+        raise JudgeError(f"task {task.task_id}: unknown check kind {check.kind}")
 
     def _file_exists(self, check: Check, run: RunOutput) -> Verdict:
         if not check.target:
@@ -817,8 +795,7 @@ class DeterministicJudge:
         # is checked on the text, not on disk, where the run may have planted links.
         target = Path(os.path.normpath(check.target))
         if target.is_absolute() or target.drive or target.parts[:1] == ("..",):
-            raise JudgeError(
-                f"file_exists target {check.target} is outside the run folder")
+            raise JudgeError(f"file_exists target {check.target} is outside the run folder")
         # A link the run made that leads out of the folder does not count as the file.
         root = run.workdir.resolve()
         path = (root / target).resolve()
@@ -837,27 +814,26 @@ class DeterministicJudge:
             raise JudgeUnavailable(
                 f"`{check.target}` was not run: exit_code checks run files the agent run "
                 "could have changed, so they need a sandbox, and none is configured")
-        code, stderr = self.run_command(
-            check.target, run.workdir, self.timeout)
+        code, stderr = self.run_command(check.target, run.workdir, self.timeout)
         if code is None:
             return _binary(False, f"`{check.target}` timed out after {self.timeout:g}s")
         reason = f"`{check.target}` exited {code}, expected {expected}"
         if code != expected and stderr.strip():
-            reason += f": {stderr.strip()[-200:]}"
+            # stderr is the untrusted command's, so it is stored like text the judge wrote.
+            reason += f": {_plain(stderr.strip()[-200:])}"
         return _binary(code == expected, reason)
 
     def _output_matches(self, check: Check, run: RunOutput) -> Verdict:
         try:
             pattern = re.compile(check.expected, re.MULTILINE)
         except re.error as e:
-            raise JudgeError(
-                f"output_matches regex {check.expected!r} is invalid: {e}") from e
+            raise JudgeError(f"output_matches regex {check.expected!r} is invalid: {e}") from e
         found = _search(pattern.pattern, run.text, self.regex_timeout)
         if found is None:
             # A failure, not an error: otherwise a skill could leave itself unscored by
             # making its output slow to search.
             return _binary(False, f"searching the output for /{check.expected}/ timed out "
-                           f"after {self.regex_timeout:g}s")
+                                  f"after {self.regex_timeout:g}s")
         return _binary(
             found, f"output {'matches' if found else 'does not match'} /{check.expected}/")
 
@@ -887,8 +863,7 @@ def _search(pattern: str, text: str, timeout: float) -> bool | None:
     except OSError as e:
         raise JudgeError(f"could not start the regex search: {e}") from e
     if result.returncode not in (0, 1):
-        raise JudgeError(
-            f"the regex search failed: {result.stderr.strip()[-200:]}")
+        raise JudgeError(f"the regex search failed: {result.stderr.strip()[-200:]}")
     return result.returncode == 0
 
 
@@ -904,8 +879,7 @@ def make_judge(judge_type: JudgeType | str, *, ctx: Any = None,
     if judge_type is JudgeType.DETERMINISTIC:
         return DeterministicJudge(timeout=timeout, run_command=run_command)
     if ctx is None:
-        raise JudgeUnavailable(
-            "the LLM judge needs the plugin context (ctx.llm)")
+        raise JudgeUnavailable("the LLM judge needs the plugin context (ctx.llm)")
     return Judge.from_context(ctx, config or EvaluationConfig())
 
 

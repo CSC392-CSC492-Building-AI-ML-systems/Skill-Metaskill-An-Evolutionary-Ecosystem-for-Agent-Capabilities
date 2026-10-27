@@ -33,14 +33,14 @@ def require_dependencies(sandbox: DockerSandbox | None = None) -> None: ...  # r
 
 | Situation (`DockerSandbox.check()`) | Listed | Required |
 |---|---|---|
-| Docker not installed (`not-installed`) | `Docker` (by hand, `install_url`), then the image (`docker pull python:3.12-slim`) | Yes |
+| Docker not installed (`not-installed`) | `Docker` (by hand, `install_url`), then the image (`docker pull python:3.12-slim@sha256:...`, pinned in `sandbox.DEFAULT_IMAGE`) | Yes |
 | Docker installed but not answering or refusing access (`not-running`) | `Docker`, with Docker's own message as `reason`. The user starts Docker, or on Linux gets access to its socket | Yes |
 | Image not pulled (`no-image`) | The image, with its `docker pull` command | Yes |
 | Cisco's scanner not installed | `cisco-ai-skill-scanner`, with its `pip install` command | No: safety is scored by our own checks only, as `partial` |
 
 When Docker is not installed, the image is listed too, so the user sees both steps at once instead of one per attempt.
 
-The runner still checks the sandbox itself before each task with an `exit_code` check (runner.md 2.6). That is a second line of defence if Docker stops between this check and the run: those tasks are skipped, not run on the host.
+The runner still checks the sandbox itself once before running anything (runner.md 2.6). That is a second line of defence if Docker stops between this check and the run: no run starts, and nothing runs on the host.
 
 ## Open
 

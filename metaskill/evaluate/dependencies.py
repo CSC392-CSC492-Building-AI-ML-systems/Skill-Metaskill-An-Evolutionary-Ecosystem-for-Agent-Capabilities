@@ -28,7 +28,7 @@ class MissingDependencyError(RuntimeError):
 def missing_dependencies(sandbox: DockerSandbox | None = None) -> list[Dependency]:
     """Everything `evaluate` needs that is missing, required ones first.
 
-    Docker is required: exit_code checks run in it (runner.md 2.6). Cisco's scanner is
+    Docker is required: agent runs and exit_code checks run in it (runner.md 2.6). Cisco's scanner is
     not: without it, safety is scored by our own checks only, as `partial`.
     """
     return _sandbox(sandbox or DockerSandbox()) + safety.missing_dependencies()

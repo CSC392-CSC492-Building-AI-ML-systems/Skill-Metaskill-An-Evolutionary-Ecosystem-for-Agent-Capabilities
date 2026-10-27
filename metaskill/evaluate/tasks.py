@@ -2,7 +2,8 @@
 
 Tasks are human-written and stored in a JSON or YAML file: either a list of tasks or an
 object with a `tasks` list. Each task has the shape of `Task.to_dict()`. Fixture paths
-are relative to the folder the file is in.
+are relative to the folder the file is in, and must stay in it: fixtures are copied
+into the agent's folder, so one outside it could hand the agent any of the user's files.
 """
 
 from __future__ import annotations
@@ -14,8 +15,9 @@ from typing import Any
 
 from .models import Task
 
-# task_id becomes part of a log file name ([task_id]-[variant]-r[run].txt).
-_TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+# A name that becomes part of a path: task_id in a log file name
+# ([task_id]-[variant]-r[run].txt), and the skill's name in its log folder (runner.py).
+SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
 class TaskError(ValueError):
@@ -44,13 +46,17 @@ def load_tasks(path: str | Path) -> list[Task]:
             task = Task.from_dict(item)
         except (KeyError, TypeError, ValueError) as e:
             raise TaskError(f"{where}: {type(e).__name__}: {e}") from e
-        if not _TASK_ID.fullmatch(task.task_id):
+        if not SAFE_NAME.fullmatch(task.task_id):
             raise TaskError(f"{where}: task_id {task.task_id!r} may only contain "
                             "letters, digits, '_', '.' and '-'")
         if task.task_id in seen:
             raise TaskError(f"{where}: duplicate task_id {task.task_id!r}")
         seen.add(task.task_id)
         task.fixtures = [_fixture(path.parent, f, where) for f in task.fixtures]
+        names = [f.name for f in task.fixtures]
+        twice = sorted({n for n in names if names.count(n) > 1})
+        if twice:  # fixtures are copied by name, so one would replace the other
+            raise TaskError(f"{where}: two fixtures are named {twice[0]!r}")
         tasks.append(task)
     return tasks
 
@@ -73,7 +79,19 @@ def _parse(path: Path, text: str) -> Any:
 
 
 def _fixture(root: Path, fixture: Path, where: str) -> Path:
+    root = root.resolve()
     resolved = (root / fixture).resolve()
+    if not resolved.is_relative_to(root) or resolved == root:
+        raise TaskError(f"{where}: fixture {fixture} is outside the task file's folder")
     if not resolved.exists():
         raise TaskError(f"{where}: fixture {fixture} does not exist")
+    # Copying follows links, so a link in a fixture folder must not lead out of it. A
+    # hard link cannot be told apart from a file outside, so it is refused too.
+    for path in [resolved, *(resolved.rglob("*") if resolved.is_dir() else [])]:
+        if not path.resolve().is_relative_to(root):
+            raise TaskError(f"{where}: fixture {fixture} links to a file outside the "
+                            "task file's folder")
+        if path.is_file() and path.stat().st_nlink > 1:
+            raise TaskError(f"{where}: fixture {fixture} has a hard link, so it may be a "
+                            "file outside the task file's folder")
     return resolved

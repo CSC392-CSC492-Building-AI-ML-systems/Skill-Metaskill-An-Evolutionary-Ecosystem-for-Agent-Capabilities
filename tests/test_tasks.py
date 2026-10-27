@@ -16,9 +16,13 @@ TASK = {
 
 @pytest.fixture
 def folder(tmp_path):
-    (tmp_path / "files").mkdir()
-    (tmp_path / "files" / "a.txt").write_text("a", encoding="utf-8")
-    return tmp_path
+    """The task file's folder, inside tmp_path so a file can be put outside it."""
+    folder = tmp_path / "tasks"
+    for sub in ("files", "other"):
+        (folder / sub).mkdir(parents=True)
+        (folder / sub / "a.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "outside.txt").write_text("secret", encoding="utf-8")
+    return folder
 
 
 def write(folder, data, name="tasks.json"):
@@ -54,10 +58,37 @@ def test_loads_yaml(folder):
     ([TASK, TASK], "duplicate task_id"),
     ([{**TASK, "task_id": "../escape"}], "may only contain"),
     ([{**TASK, "fixtures": ["missing.txt"]}], "does not exist"),
+    ([{**TASK, "fixtures": ["../outside.txt"]}], "outside the task file's folder"),
+    ([{**TASK, "fixtures": ["."]}], "outside the task file's folder"),
+    ([{**TASK, "fixtures": ["files/a.txt", "other/a.txt"]}], "two fixtures are named 'a.txt'"),
 ])
 def test_rejects_unusable_task_files(folder, data, message):
     with pytest.raises(TaskError, match=message):
         load_tasks(write(folder, data))
+
+
+def test_absolute_fixture_outside_the_folder_is_refused(folder):
+    outside = str((folder.parent / "outside.txt").resolve())
+    with pytest.raises(TaskError, match="outside the task file's folder"):
+        load_tasks(write(folder, [{**TASK, "fixtures": [outside]}]))
+
+
+def test_link_in_a_fixture_folder_leading_out_is_refused(folder):
+    try:
+        (folder / "files" / "key").symlink_to(folder.parent / "outside.txt")
+    except OSError:
+        pytest.skip("this system cannot make symlinks")
+    with pytest.raises(TaskError, match="links to a file outside"):
+        load_tasks(write(folder, [{**TASK, "fixtures": ["files"]}]))
+
+
+def test_hard_linked_fixture_is_refused(folder):
+    try:
+        (folder / "files" / "key").hardlink_to(folder.parent / "outside.txt")
+    except OSError:
+        pytest.skip("this system cannot make hard links")
+    with pytest.raises(TaskError, match="hard link"):
+        load_tasks(write(folder, [{**TASK, "fixtures": ["files/key"]}]))
 
 
 def test_missing_file(tmp_path):
