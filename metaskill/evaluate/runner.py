@@ -144,9 +144,11 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
               pool: _Judges, config: EvaluationConfig, run_dir: Path) -> TestResult:
     """One session in a fresh workspace, judged against every check of the task."""
     workspace = pool.sandbox.open(task.fixtures)
+    left_out: list[str] = []
     try:
         if variant is Variant.WITH_SKILL:
-            _put_skill(skill, workspace)  # before the clock: copying is not the agent's time
+            # Before the clock: copying is not the agent's time.
+            left_out = _put_skill(skill, workspace)
         start = time.monotonic()
         try:
             run = agent.run(task.prompt, skill if variant is Variant.WITH_SKILL else None,
@@ -165,7 +167,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
 
     log = f"{skill.name}/logs/{task.task_id}-{variant.value}-r{n}.txt"
     metrics = Metrics(tokens=run.tokens, seconds=round(seconds, 3), tool_calls=run.tool_calls)
-    _write_log(run_dir / log, task, variant, n, run, metrics, verdict)
+    _write_log(run_dir / log, task, variant, n, run, metrics, verdict, left_out)
     return TestResult(
         task_id=task.task_id,
         description=task.description,
@@ -182,9 +184,10 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
     )
 
 
-def _put_skill(skill: Skill, workspace: Workspace) -> None:
-    """Copy the skill into workspace.skill_dir, laid out as on disk. The runner does
-    this rather than the agent, so every with_skill run starts from the same files.
+def _put_skill(skill: Skill, workspace: Workspace) -> list[str]:
+    """Copy the skill into workspace.skill_dir, laid out as on disk, and return the
+    files left out, for the log. The runner does this rather than the agent, so every
+    with_skill run starts from the same files.
 
     Links and hard links are left out, as for the judge (judge.skill_sources): either
     could be a file outside the skill, e.g. ~/.hermes/.env. If SKILL.md itself is one,
@@ -192,6 +195,7 @@ def _put_skill(skill: Skill, workspace: Workspace) -> None:
     """
     root = Path(skill.path).resolve()
     folders: dict[PurePosixPath, list[Path]] = {}
+    left_out: list[str] = []
     for rel in [Path("SKILL.md"), *skill.files]:
         path = Path(skill.path) / rel
         if (path.is_symlink() or not path.resolve().is_relative_to(root)
@@ -199,10 +203,12 @@ def _put_skill(skill: Skill, workspace: Workspace) -> None:
             if rel == Path("SKILL.md"):
                 raise JudgeError("SKILL.md is a link or hard link, so it may be a file "
                                  "outside the skill; it was not copied into the sandbox")
+            left_out.append(rel.as_posix())
             continue
         folders.setdefault(PurePosixPath(rel.parent.as_posix()), []).append(path)
     for folder, paths in folders.items():
         workspace.put(paths, str(PurePosixPath(workspace.skill_dir) / folder))
+    return left_out
 
 
 def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Verdict:
@@ -293,13 +299,15 @@ def _truncate(output: str, max_chars: int, log: str) -> str:
 
 
 def _write_log(path: Path, task: Task, variant: Variant, n: int, run: AgentRun,
-               metrics: Metrics, verdict: Verdict) -> None:
+               metrics: Metrics, verdict: Verdict, left_out: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"task: {task.task_id}\nvariant: {variant.value}\nrun: {n}\n"
         f"tokens: {metrics.tokens}\nseconds: {metrics.seconds}\n"
         f"tool_calls: {metrics.tool_calls}\n"
-        f"passed: {verdict.passed}\nscore: {verdict.score}\nreason: {verdict.reason}\n"
+        # Links in the skill are not copied; a run that needed one fails without them.
+        + (f"skill files left out (links): {', '.join(left_out)}\n" if left_out else "")
+        + f"passed: {verdict.passed}\nscore: {verdict.score}\nreason: {verdict.reason}\n"
         f"\n--- prompt ---\n{task.prompt}\n"
         f"\n--- output ---\n{run.output}\n"
         + (f"\n--- transcript ---\n{run.transcript}\n" if run.transcript else ""),

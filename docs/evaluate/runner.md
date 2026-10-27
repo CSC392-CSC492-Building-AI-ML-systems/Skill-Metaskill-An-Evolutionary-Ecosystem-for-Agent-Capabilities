@@ -72,7 +72,7 @@ class AgentRun:
 
 The session itself, its model calls, runs on this machine: it needs the user's provider and credentials, which never enter the sandbox. Everything it does runs in `workspace`: every command goes through `workspace.run_command`, every file it reads or writes is in `workspace.root`, and for a `with_skill` run the skill is already in `workspace.skill_dir` (`/tmp/skill`).
 
-**The runner copies the skill, not the agent**, so every `with_skill` run starts from the same files instead of whatever the agent chose to copy. `SKILL.md` and every bundled file in `skill.files` go into `/tmp/skill`, laid out as in the skill's folder and copied as bytes. Links and hard links are left out, as for the judge ([judge.md](judge.md)): either could be a file outside the skill, e.g. `~/.hermes/.env`. If `SKILL.md` itself is one, the run is an error (2.3), not a run without the skill. `baseline` runs get no skill files. `/tmp/skill` is outside `/work`, so the skill does not use up the run's space and the judges do not read it as the run's work.
+**The runner copies the skill, not the agent**, so every `with_skill` run starts from the same files instead of whatever the agent chose to copy. `SKILL.md` and every bundled file in `skill.files` go into `/tmp/skill`, laid out as in the skill's folder and copied as bytes. Links and hard links are left out, as for the judge ([judge.md](judge.md)): either could be a file outside the skill, e.g. `~/.hermes/.env`. The run's log lists them (`skill files left out (links): ...`), so a run that needed one does not fail without a hint. The skill has to fit in `/tmp` (64 MB), which is far above a normal skill. If `SKILL.md` itself is one, the run is an error (2.3), not a run without the skill. `baseline` runs get no skill files. `/tmp/skill` is outside `/work`, so the skill does not use up the run's space and the judges do not read it as the run's work.
 
 The Hermes implementation of `Agent` routes Hermes' terminal and file tools through the workspace with a backend of its own that calls `workspace.run_command`, not Hermes' own Docker backend, so every isolation flag stays in `sandbox.py`.
 
@@ -95,7 +95,7 @@ A run that cannot be judged is left out of `tests` and listed in `RunnerResult.e
 
 ### 2.4 Logs and output
 
-Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run].txt` (evaluate.md section 2). `[skill]` is the skill's name, which comes from the skill's own frontmatter, so it must be letters, digits, `_`, `.` and `-`, starting with a letter or digit, like a `task_id`; otherwise a name such as `../x` or an absolute path would put the logs outside `run_dir`. The log holds the metrics, the verdict, the prompt, the full output and the agent's transcript if it gave one.
+Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run].txt` (evaluate.md section 2). `[skill]` is the skill's name, which comes from the skill's own frontmatter, so it must be letters, digits, `_`, `.` and `-`, starting with a letter or digit, like a `task_id`; otherwise a name such as `../x` or an absolute path would put the logs outside `run_dir`. The log holds the metrics, any skill files left out of the sandbox (2.2), the verdict, the prompt, the full output and the agent's transcript if it gave one.
 
 `TestResult.output` is the output cut to `config.output_max_chars`, followed by the path to the full log, relative to the run folder: `... (full log: cleanup/logs/write-report-with_skill-r1.txt)`.
 

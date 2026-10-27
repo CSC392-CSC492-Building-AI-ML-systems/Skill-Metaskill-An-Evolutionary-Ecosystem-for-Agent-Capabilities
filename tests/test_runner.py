@@ -441,6 +441,12 @@ def test_links_in_the_skill_are_not_copied(skill, run_dir, tmp_path, make_link):
               sandbox=sandbox)
     assert sandbox.opened[0].skill == {
         "/tmp/skill": {"SKILL.md": (skill.path / "SKILL.md").read_bytes()}}
+    # The log says what was left out, so a run that needed it is not a mystery.
+    logs = run_dir / "cleanup" / "logs"
+    assert "skill files left out (links): notes.md\n" in (
+        logs / "write-report-with_skill-r1.txt").read_text(encoding="utf-8")
+    assert "left out" not in (logs / "write-report-baseline-r1.txt").read_text(
+        encoding="utf-8")
 
 
 def test_a_hard_linked_skill_md_is_a_run_error(skill, run_dir, tmp_path):
