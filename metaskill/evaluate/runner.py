@@ -18,7 +18,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .judge import (
@@ -55,10 +55,10 @@ class Agent(Protocol):
 
     The session itself (its model calls) runs on this machine, but every command it
     runs and every file it reads or writes goes through `workspace`, the run's sandbox,
-    whose `root` is its working folder. Skill files it needs there, such as bundled
-    scripts, it copies into `workspace.skill_dir` with `workspace.put`. The Hermes agent
-    does this with a terminal and file backend of its own that calls the workspace, not
-    with Hermes' Docker backend, so every isolation flag stays in sandbox.py.
+    whose `root` is its working folder. For a with_skill run the runner has already
+    copied the skill (SKILL.md and its bundled files) into `workspace.skill_dir`. The
+    Hermes agent reaches the workspace with a terminal and file backend of its own that
+    calls it, not with Hermes' Docker backend, so every isolation flag stays in sandbox.py.
     """
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun: ...
@@ -145,6 +145,8 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
     """One session in a fresh workspace, judged against every check of the task."""
     workspace = pool.sandbox.open(task.fixtures)
     try:
+        if variant is Variant.WITH_SKILL:
+            _put_skill(skill, workspace)  # before the clock: copying is not the agent's time
         start = time.monotonic()
         try:
             run = agent.run(task.prompt, skill if variant is Variant.WITH_SKILL else None,
@@ -178,6 +180,29 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         output=_truncate(run.output, config.output_max_chars, log),
         evidence=verdict.evidence,
     )
+
+
+def _put_skill(skill: Skill, workspace: Workspace) -> None:
+    """Copy the skill into workspace.skill_dir, laid out as on disk. The runner does
+    this rather than the agent, so every with_skill run starts from the same files.
+
+    Links and hard links are left out, as for the judge (judge.skill_sources): either
+    could be a file outside the skill, e.g. ~/.hermes/.env. If SKILL.md itself is one,
+    the run is an error rather than a run without the skill.
+    """
+    root = Path(skill.path).resolve()
+    folders: dict[PurePosixPath, list[Path]] = {}
+    for rel in [Path("SKILL.md"), *skill.files]:
+        path = Path(skill.path) / rel
+        if (path.is_symlink() or not path.resolve().is_relative_to(root)
+                or path.stat().st_nlink > 1):
+            if rel == Path("SKILL.md"):
+                raise JudgeError("SKILL.md is a link or hard link, so it may be a file "
+                                 "outside the skill; it was not copied into the sandbox")
+            continue
+        folders.setdefault(PurePosixPath(rel.parent.as_posix()), []).append(path)
+    for folder, paths in folders.items():
+        workspace.put(paths, str(PurePosixPath(workspace.skill_dir) / folder))
 
 
 def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Verdict:

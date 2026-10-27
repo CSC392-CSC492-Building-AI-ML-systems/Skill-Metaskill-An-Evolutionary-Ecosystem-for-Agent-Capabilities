@@ -47,8 +47,8 @@ result.tests                        # list[TestResult], the report's `tests`
 
 For each task, then each variant (`with_skill`, then `baseline`), then run `1..config.runs_per_task`:
 
-1. A new sandboxed workspace is opened (2.6) and the task's fixtures are copied into its folder, `/work` (files and folders, by name).
-2. The agent runs the task's `prompt` in that workspace, with the skill for `with_skill` and `skill=None` for `baseline`. The time is measured around this call.
+1. A new sandboxed workspace is opened (2.6) and the task's fixtures are copied into its folder, `/work` (files and folders, by name). For `with_skill`, the skill is copied into `/tmp/skill` (2.2).
+2. The agent runs the task's `prompt` in that workspace, with the skill for `with_skill` and `skill=None` for `baseline`. The time is measured around this call only, not the copying.
 3. The folder is copied out to a temporary folder on this machine, and every check of the task is judged (2.3). `exit_code` commands run in the workspace itself.
 4. The workspace and the copy are removed, and the full log is written (2.4).
 
@@ -70,7 +70,9 @@ class AgentRun:
     transcript: str = ""  # the full session, for the log
 ```
 
-The session itself, its model calls, runs on this machine: it needs the user's provider and credentials, which never enter the sandbox. Everything it does runs in `workspace`: every command goes through `workspace.run_command`, every file it reads or writes is in `workspace.root`, and skill files it needs there, such as bundled scripts, it copies into `workspace.skill_dir` (`/tmp/skill`) with `workspace.put`. They are kept out of `/work`, so they do not use up the run's space and the judges do not read them as the run's work.
+The session itself, its model calls, runs on this machine: it needs the user's provider and credentials, which never enter the sandbox. Everything it does runs in `workspace`: every command goes through `workspace.run_command`, every file it reads or writes is in `workspace.root`, and for a `with_skill` run the skill is already in `workspace.skill_dir` (`/tmp/skill`).
+
+**The runner copies the skill, not the agent**, so every `with_skill` run starts from the same files instead of whatever the agent chose to copy. `SKILL.md` and every bundled file in `skill.files` go into `/tmp/skill`, laid out as in the skill's folder and copied as bytes. Links and hard links are left out, as for the judge ([judge.md](judge.md)): either could be a file outside the skill, e.g. `~/.hermes/.env`. If `SKILL.md` itself is one, the run is an error (2.3), not a run without the skill. `baseline` runs get no skill files. `/tmp/skill` is outside `/work`, so the skill does not use up the run's space and the judges do not read it as the run's work.
 
 The Hermes implementation of `Agent` routes Hermes' terminal and file tools through the workspace with a backend of its own that calls `workspace.run_command`, not Hermes' own Docker backend, so every isolation flag stays in `sandbox.py`.
 
@@ -88,7 +90,7 @@ A run that cannot be judged is left out of `tests` and listed in `RunnerResult.e
 
 - **The LLM judge is unavailable** (`JudgeUnavailable`, e.g. no `ctx`): the task's runs are not started at all, since they could not be judged.
 - **The sandbox cannot run** (e.g. Docker is not installed): no run is started, since every run happens in it. The error says why, e.g. `SandboxUnavailable: agent runs and exit_code checks run in a sandbox, which cannot run: Docker is not installed (...)`.
-- **The judge failed** (`JudgeError`), or a check is broken (e.g. an invalid regex): the run is listed with the error. So is a workspace that could not be opened, could not take the fixtures (e.g. they are over `config.sandbox_disk`), or could not be copied out.
+- **The judge failed** (`JudgeError`), or a check is broken (e.g. an invalid regex): the run is listed with the error. So is a workspace that could not be opened, could not take the fixtures (e.g. they are over `config.sandbox_disk`) or the skill (e.g. a hard-linked `SKILL.md`), or could not be copied out.
 - **A file operation failed** (`OSError`, e.g. a fixture removed after the task file was loaded, or the log could not be written): the same. The runs before and after it still count.
 
 ### 2.4 Logs and output

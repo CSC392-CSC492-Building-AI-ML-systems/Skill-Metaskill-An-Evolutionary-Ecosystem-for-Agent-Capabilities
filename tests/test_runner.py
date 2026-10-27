@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import tempfile
 from datetime import datetime
@@ -57,14 +58,15 @@ class FakeLlm:
 
 class FakeWorkspace:
     """A workspace that is a folder on this machine. Nothing runs in it: commands get
-    their exit code from the sandbox's `code(folder)`."""
+    their exit code from the sandbox's `code(folder)`. What goes anywhere but root is
+    recorded in `skill`, as {folder: file contents}."""
 
     root = "/work"
     skill_dir = "/tmp/skill"
 
     def __init__(self, sandbox):
         self.sandbox, self.path = sandbox, Path(tempfile.mkdtemp(prefix="fake-workspace-"))
-        self.closed = False
+        self.closed, self.skill = False, {}
 
     def run_command(self, command, timeout, input=None):
         self.sandbox.commands.append((command, sorted(p.name for p in self.path.iterdir())))
@@ -72,6 +74,10 @@ class FakeWorkspace:
         return CommandResult(code, "", "" if code == 0 else "AssertionError")
 
     def put(self, paths, folder):
+        if folder != self.root:
+            self.skill.setdefault(folder, {}).update(
+                {p.name: p.read_bytes() for p in paths})
+            return
         for path in paths:
             if path.is_dir():
                 shutil.copytree(path, self.path / path.name)
@@ -395,3 +401,59 @@ def test_run_skill_loads_the_task_file(skill, run_dir, tmp_path):
     result = run_skill(skill, tasks_file, FakeAgent(writes_report_with_skill),
                        config=config(runs=1), run_dir=run_dir)
     assert [t.passed for t in result.tests] == [True, False]
+
+
+# --- The skill's files ---------------------------------------------------------
+
+
+def test_with_skill_runs_get_the_skill_in_skill_dir_and_baselines_none(skill, run_dir):
+    (skill.path / "scripts").mkdir()
+    (skill.path / "scripts" / "go.sh").write_bytes(b"exit 0\n")
+    (skill.path / "notes.md").write_bytes(b"\x00binary")  # copied as bytes, not text
+    skill.files = [Path("notes.md"), Path("scripts/go.sh")]
+    sandbox = FakeSandbox()
+    run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
+              sandbox=sandbox)
+    with_skill, baseline = sandbox.opened
+    skill_md = (skill.path / "SKILL.md").read_bytes()
+    assert with_skill.skill == {
+        "/tmp/skill": {"SKILL.md": skill_md, "notes.md": b"\x00binary"},
+        "/tmp/skill/scripts": {"go.sh": b"exit 0\n"},
+    }
+    assert baseline.skill == {}
+
+
+@pytest.mark.parametrize("make_link", [
+    lambda secret, link: link.symlink_to(secret),
+    lambda secret, link: os.link(secret, link),
+], ids=["symlink", "hard link"])
+def test_links_in_the_skill_are_not_copied(skill, run_dir, tmp_path, make_link):
+    # Either could be a file outside the skill, e.g. ~/.hermes/.env.
+    secret = tmp_path / "secret.env"
+    secret.write_text("KEY=x", encoding="utf-8")
+    try:
+        make_link(secret, skill.path / "notes.md")
+    except OSError:
+        pytest.skip("cannot create this link here")
+    skill.files = [Path("notes.md")]
+    sandbox = FakeSandbox()
+    run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
+              sandbox=sandbox)
+    assert sandbox.opened[0].skill == {
+        "/tmp/skill": {"SKILL.md": (skill.path / "SKILL.md").read_bytes()}}
+
+
+def test_a_hard_linked_skill_md_is_a_run_error(skill, run_dir, tmp_path):
+    (skill.path / "SKILL.md").unlink()
+    secret = tmp_path / "secret.env"
+    secret.write_text("KEY=x", encoding="utf-8")
+    try:
+        os.link(secret, skill.path / "SKILL.md")
+    except OSError:
+        pytest.skip("cannot create hard links here")
+    agent, sandbox = FakeAgent(), FakeSandbox()
+    result = run_tasks(skill, [task()], agent, config=config(runs=1), run_dir=run_dir,
+                       sandbox=sandbox)
+    assert [t.variant for t in result.tests] == [Variant.BASELINE]
+    assert "SKILL.md is a link or hard link" in result.errors[0]
+    assert all(w.closed for w in sandbox.opened) and len(agent.calls) == 1
