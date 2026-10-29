@@ -30,9 +30,12 @@ Evaluation is based off the following criteria:
 
 | Rank | Skill | Overall | Quality | Robustness | Clarity | Config Cleanliness | Efficiency | Safety |
 |---|---|---|---|---|---|---|---|---|
-| 1 | gcp-file-transfer | 0.86 | 0.90 | 0.85 | 0.80 | 0.90 | 0.85 | 0.95 |
-| 2 | s3-sync | 0.78 | 0.80 | 0.75 | 0.85 | 0.70 | 0.80 | 0.80 |
-| 3 | log-cleanup | 0.61 | 0.70 | 0.60 | 0.65 | 0.80 | 0.75 | 0.30 |
+| 1 | gcp-file-transfer | 0.88 | 0.90 | 0.85 | 0.80 | 0.90 | 0.85 | 0.95 |
+| 2 | s3-sync | 0.79 | 0.80 | 0.75 | 0.85 | 0.70 | 0.80 | 0.80 |
+| 3 | log-cleanup | 0.58 | 0.70 | 0.60 | 0.65 | 0.80 | 0.75 | 0.30 |
+| - | ftp-mirror | (0.82) | 0.85 | 0.80 | - | 0.75 | 0.80 | 0.85 |
+
+`overall` is the weighted mean of section 5.1. A skill with a dimension that was not scored (`-`) is not ranked: it is listed below the ranked skills, with its mean over the scored dimensions in parentheses (section 5.2). The table is followed by notes per skill and a recommendation.
 
 Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their own files, with further details, as outlined in section 2.1.
 
@@ -84,7 +87,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `detail` | What was missing or went wrong when `status` is not `ok`; empty otherwise |
 
 - A `skipped` or `error` dimension scores `null`, not `0`, so a skill is not penalized for a missing key or backend.
-- **[OPEN]** How `overall` and `rank` treat a `null` score: leave the dimension out of `overall`, or refuse to rank the skill. To be decided during implementation.
+- A skill with a `null` dimension has `overall: null` and is not ranked. It is listed below the ranked skills, with a note on how it did on the dimensions that were scored (section 5.2).
 
 **Test results (`tests`).** One record per task, per variant, per run. Each record feeds Quality, Robustness and Efficiency at once, so it is not tagged with a dimension.
 
@@ -150,7 +153,7 @@ Example (abridged):
   },
   "skills": [{
     "name": "gcp-file-transfer",
-    "scores": { "overall": 0.77, "quality": 0.90, "robustness": 0.85, "clarity": 0.80,
+    "scores": { "overall": 0.71, "quality": 0.90, "robustness": 0.85, "clarity": 0.80,
                 "config_cleanliness": 0.90, "efficiency": 0.85, "safety": 0.30 },
     "lift": 0.40,
     "dimensions": {
@@ -195,7 +198,7 @@ Example (abridged):
 }
 ```
 
-- **[OPEN]** Maximum length of `output` before truncation.
+- `output` is cut to `output_max_chars` characters (default 2,000, set in the config), followed by the path to the full log, which always has the whole output ([evaluate/runner.md](evaluate/runner.md) 2.4).
 
 ## 3. Scoring dimensions
 
@@ -281,11 +284,35 @@ To account for this, tests will be ran `n` times (we default to 3), and account 
 
 ## 5. Ranking
 
-- Rank by `overall`, with ties broken by lift, then safety, followed by quality, robustness, clarity, etc...
+Code: `rank.py`, documented in [evaluate/rank.md](evaluate/rank.md).
+
+### 5.1 Overall score
+
+`overall` is a weighted mean of the six dimensions. The weights set the priority **safety > quality and robustness > clarity and efficiency > configuration cleanliness**:
+
+| Dimension | Weight |
+|---|---|
+| Safety | 4 |
+| Quality | 3 |
+| Robustness | 3 |
+| Clarity | 2 |
+| Efficiency | 2 |
+| Configuration Cleanliness | 1 |
+
+```
+overall = sum(weight[d] * score[d]) / sum(weight[d])     # divided by 15 with the defaults
+```
+
+The weights are relative, not fractions: they are divided by their sum, so only their ratios matter. They live in `EvaluationConfig.weights` and are part of the config hash, so a report records which weights produced it.
+
+### 5.2 Ordering
+
+- Rank by `overall`, with ties broken by lift, then by the dimensions in weight order: safety, quality, robustness, clarity, efficiency, configuration cleanliness. A full tie is broken by name, so the same input always gives the same order.
+- **Skills with a `null` dimension are not ranked.** They have no `overall`, and are listed below every ranked skill, ordered among themselves the same way by their mean over the scored dimensions (left-out dimensions are dropped from both the sum and the weight total). Each gets a note saying which dimensions are missing and why, that mean, where it would place among the ranked skills on it, and its best and worst dimension. The placing is only indicative: it compares a mean over fewer dimensions with full ones.
 - Every ranking is fresh (section 2): all skills are evaluated in the same run, so they share the same config, judge model, safety tier, scanner version and own-checks version. Results from earlier reports are never mixed in.
 - A skill whose safety status is `partial` because a `deep` scan fell back to `static` is still ranked, but flagged in the output, since its safety score is not comparable with skills scanned at `deep`.
-- A critical safety finding results in a low safety score. It does not remove the skill from the ranking.
-- Output includes as well, a recommendation of which skill to use based off their scores.
+- A critical safety finding results in a low safety score. It does not remove the skill from the ranking, but it is noted, and a recommendation of that skill says to check it.
+- Output includes as well, a recommendation of which skill to use based off their scores: the top ranked skill, or, if no skill could be ranked, the best on its scored dimensions, with a warning to rerun the missing ones.
 
 
 ## 6. Module layout
@@ -310,7 +337,7 @@ metaskill/evaluate/
   safety/            # 3.6: scanner adapter, own checks, LLM review
                      #   (layout in evaluate-safety.md)
 
-  rank.py            # Overall score, comparison and ordering
+  rank.py            # 5: overall score, comparison and ordering
 ```
 
 Dependencies:
@@ -340,12 +367,15 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 - LLM judges are biased toward verbose, well-formatted text. Rubric anchors and mandatory quote-evidence mitigate but do not remove this.
 - Certain categories are dependent on the quality of the task (i.e. robustness).
 - Scores are only comparable within one config and judge model. Multiple different judges may cause noise to appear in scoring.
-- Task runs dominate cost. Each skill needs `tasks × runs` agent sessions with the skill and the same number without it. Skills evaluated on the same tasks in one run can share the baseline, so ranking `k` of them costs `(k + 1) × tasks × runs` sessions instead of `2k × tasks × runs`. **[OPEN]** Whether to share baselines; to be decided as the runner is built.
+- Task runs dominate cost. Each skill needs `tasks × runs` agent sessions with the skill and the same number without it. Skills evaluated on the same tasks in one run could share the baseline, so ranking `k` of them would cost `(k + 1) × tasks × runs` sessions instead of `2k × tasks × runs`. The runner as built does not share them: `run_skill` runs each skill's own baseline ([evaluate/runner.md](evaluate/runner.md) 2.1), which keeps every skill's lift independent of which other skills are in the call. Sharing is a possible later optimisation.
 
 ## 10. Open questions
 
-1. Weighted-mean `overall`: Is it the best scoring system?
-2. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
-3. Whether a skill with a CRITICAL safety finding is still executed by `runner.py`. Section 5 keeps it in the ranking, but running it means letting an agent follow instructions already flagged as harmful. Options: skip its task runs (and score Quality, Robustness and Efficiency as skipped), run it only in a sandbox, or run it as normal.
-4. How `overall` and `rank` treat a skipped (`null`) dimension (2.1).
-5. Whether skills evaluated on the same tasks share one baseline run (9).
+1. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
+
+### Answered
+
+- **Weighted-mean `overall`.** Kept, with weights safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1 (section 5.1).
+- **Skills with a CRITICAL safety finding.** They are run like every other skill, since every agent run happens only in the sandbox ([evaluate/runner.md](evaluate/runner.md) 2.6): no network, nothing of this machine mounted, limits on disk, memory and processes. The finding lowers the safety score and is noted in the ranking (section 5.2).
+- **A skipped (`null`) dimension.** The skill is not ranked; it is listed below the ranked skills with a note on how it did on the scored dimensions (sections 2.1 and 5.2).
+- **Sharing one baseline between skills.** Not shared: each skill runs its own baseline (section 9).

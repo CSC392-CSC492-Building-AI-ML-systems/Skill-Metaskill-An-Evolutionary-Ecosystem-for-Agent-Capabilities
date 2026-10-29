@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -67,6 +68,18 @@ class Status(StrEnum):
     PARTIAL = "partial"  # ran with less than was asked for, e.g. a fallback
     SKIPPED = "skipped"  # not run, e.g. no API key
     ERROR = "error"
+
+
+# Weight of each dimension in overall (evaluate.md 5.1): safety first, then quality and
+# robustness, then clarity and efficiency, then configuration cleanliness.
+DEFAULT_WEIGHTS: dict[Dimension, float] = {
+    Dimension.SAFETY: 4,
+    Dimension.QUALITY: 3,
+    Dimension.ROBUSTNESS: 3,
+    Dimension.CLARITY: 2,
+    Dimension.EFFICIENCY: 2,
+    Dimension.CONFIG_CLEANLINESS: 1,
+}
 
 
 def _check_unit(name: str, value: float) -> None:
@@ -138,9 +151,10 @@ class EvaluationConfig:
     # Characters of a skill the judge is sent; larger skills are cut (judge.md 2.3).
     judge_max_chars: int = 100_000
     safety_tier: SafetyTier = SafetyTier.STATIC
-    # [OPEN] weighting of overall (evaluate.md, open question 1). Equal weights for now.
+    # Relative weight of each dimension in overall (evaluate.md 5.1); overall divides by
+    # their sum. A dimension left out weighs 0.
     weights: dict[Dimension, float] = field(
-        default_factory=lambda: {d: 1 / len(Dimension) for d in Dimension})
+        default_factory=lambda: dict(DEFAULT_WEIGHTS))
     # [OPEN] truncation length for TestResult.output (evaluate.md, section 2.1).
     output_max_chars: int = 2000
     # Size of each run's folder in the sandbox (runner.md 2.6); fixtures must fit too.
@@ -161,7 +175,11 @@ class EvaluationConfig:
             raise ValueError(
                 f"sandbox_disk must be a size like 16m, got {self.sandbox_disk!r}")
         for dimension, weight in self.weights.items():
-            _check_unit(f"weights[{dimension}]", weight)
+            if not 0.0 <= weight < math.inf:
+                raise ValueError(
+                    f"weights[{dimension}] must be >= 0 and finite, got {weight}")
+        if not sum(self.weights.values()) > 0:
+            raise ValueError("at least one weight must be above 0")
 
     def hash(self) -> str:
         """Hash of the settings that affect scores; becomes ReportMeta.config.
@@ -559,8 +577,8 @@ class DimensionStatus:
 class Scores:
     """Return type of the overall scoring function.
 
-    None means the dimension was skipped or failed. [OPEN] how overall treats it
-    (evaluate.md, section 2.1).
+    None means the dimension was skipped or failed. overall is then None too, and the
+    skill is listed below the ranked ones (evaluate.md 5.2). Built by rank.make_scores.
     """
 
     overall: float | None
