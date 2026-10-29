@@ -819,7 +819,8 @@ class DeterministicJudge:
             return _binary(False, f"`{check.target}` timed out after {self.timeout:g}s")
         reason = f"`{check.target}` exited {code}, expected {expected}"
         if code != expected and stderr.strip():
-            reason += f": {stderr.strip()[-200:]}"
+            # stderr is the untrusted command's, so it is stored like text the judge wrote.
+            reason += f": {_plain(stderr.strip()[-200:])}"
         return _binary(code == expected, reason)
 
     def _output_matches(self, check: Check, run: RunOutput) -> Verdict:
