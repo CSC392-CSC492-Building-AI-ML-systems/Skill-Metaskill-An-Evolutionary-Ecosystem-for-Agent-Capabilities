@@ -56,7 +56,7 @@ The order does not depend on the order of the input, and the same input always g
 
 ## 3. Notes
 
-- **Not ranked.** Which dimensions are missing, with their status and detail when the result has them (`clarity (skipped: no API key)`), the mean over the scored dimensions, where that mean would place it among the ranked skills, and its best and worst dimension. The placing is indicative only: the ranked skills' `overall` also counts the dimensions this skill is missing.
+- **Not ranked.** Which dimensions are missing, with their status and detail when the result has them (`clarity (skipped: no API key)`), the mean over the scored dimensions, where that mean would place it among the ranked skills, and its best and worst dimension. The placing is indicative only: the ranked skills' `overall` also counts the dimensions this skill is missing. **[OPEN]** Whether to keep it ([evaluate.md](../evaluate.md), open question 2).
 - **Partial safety.** The safety status is `partial`, e.g. a `deep` scan that fell back to `static`. The skill is still ranked, but its safety score is not comparable with full scans.
 - **CRITICAL safety findings.** How many, and where. The skill stays in the ranking (evaluate.md 5.2).
 
