@@ -308,7 +308,7 @@ The weights are relative, not fractions: they are divided by their sum, so only 
 ### 5.2 Ordering
 
 - Rank by `overall`, with ties broken by lift, then by the dimensions in weight order: safety, quality, robustness, clarity, efficiency, configuration cleanliness. A full tie is broken by name, so the same input always gives the same order.
-- **Skills with a `null` dimension are not ranked.** They have no `overall`, and are listed below every ranked skill, ordered among themselves the same way by their mean over the scored dimensions (left-out dimensions are dropped from both the sum and the weight total). Each gets a note saying which dimensions are missing and why, that mean, where it would place among the ranked skills on it, and its best and worst dimension. The placing is only indicative: it compares a mean over fewer dimensions with full ones.
+- **Skills with a `null` dimension are not ranked.** They have no `overall`, and are listed below every ranked skill, ordered among themselves the same way by their mean over the scored dimensions (left-out dimensions are dropped from both the sum and the weight total). Each gets a note saying which dimensions are missing and why, that mean, where it would place among the ranked skills on it, and its best and worst dimension. The placing is only indicative: it compares a mean over fewer dimensions with full ones. **[OPEN]** Whether to keep it (open question 2).
 - Every ranking is fresh (section 2): all skills are evaluated in the same run, so they share the same config, judge model, safety tier, scanner version and own-checks version. Results from earlier reports are never mixed in.
 - A skill whose safety status is `partial` because a `deep` scan fell back to `static` is still ranked, but flagged in the output, since its safety score is not comparable with skills scanned at `deep`.
 - A critical safety finding results in a low safety score. It does not remove the skill from the ranking, but it is noted, and a recommendation of that skill says to check it.
@@ -367,15 +367,17 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 - LLM judges are biased toward verbose, well-formatted text. Rubric anchors and mandatory quote-evidence mitigate but do not remove this.
 - Certain categories are dependent on the quality of the task (i.e. robustness).
 - Scores are only comparable within one config and judge model. Multiple different judges may cause noise to appear in scoring.
-- Task runs dominate cost. Each skill needs `tasks × runs` agent sessions with the skill and the same number without it. Skills evaluated on the same tasks in one run could share the baseline, so ranking `k` of them would cost `(k + 1) × tasks × runs` sessions instead of `2k × tasks × runs`. The runner as built does not share them: `run_skill` runs each skill's own baseline ([evaluate/runner.md](evaluate/runner.md) 2.1), which keeps every skill's lift independent of which other skills are in the call. Sharing is a possible later optimisation.
+- Task runs dominate cost. Each skill needs `tasks × runs` agent sessions with the skill and the same number without it. Skills evaluated on the same tasks in one run could share the baseline, so ranking `k` of them would cost `(k + 1) × tasks × runs` sessions instead of `2k × tasks × runs`. The runner as built does not share them: `run_skill` runs each skill's own baseline ([evaluate/runner.md](evaluate/runner.md) 2.1), which keeps every skill's lift independent of which other skills are in the call. Cost is not a problem at present, so baselines stay unshared; sharing is a possible later optimisation if it becomes one.
 
 ## 10. Open questions
 
 1. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
+2. Whether the note on a skill that is not ranked should say where it would place among the ranked skills (section 5.2). It is kept for now, as an indication only, since it compares a mean over fewer dimensions with full ones. Options: keep it, or drop it and show only the partial mean. To be discussed with the team.
 
 ### Answered
 
 - **Weighted-mean `overall`.** Kept, with weights safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1 (section 5.1).
 - **Skills with a CRITICAL safety finding.** They are run like every other skill, since every agent run happens only in the sandbox ([evaluate/runner.md](evaluate/runner.md) 2.6): no network, nothing of this machine mounted, limits on disk, memory and processes. The finding lowers the safety score and is noted in the ranking (section 5.2).
 - **A skipped (`null`) dimension.** The skill is not ranked; it is listed below the ranked skills with a note on how it did on the scored dimensions (sections 2.1 and 5.2).
-- **Sharing one baseline between skills.** Not shared: each skill runs its own baseline (section 9).
+- **Sharing one baseline between skills.** Not shared: each skill runs its own baseline, since cost is not a problem at present (section 9).
+- **Length of `output` in a report.** 2,000 characters by default (`output_max_chars`), with the full output in the run's log (section 2.1).
