@@ -584,7 +584,7 @@ def host_runner(command, workdir, timeout):
     """Runs on this machine, so only for the tests' own commands, never a skill's."""
     try:
         result = subprocess.run(command, shell=True, cwd=workdir, capture_output=True,
-                                text=True, timeout=timeout)
+                                stdin=subprocess.DEVNULL, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, ""
     return result.returncode, result.stderr
