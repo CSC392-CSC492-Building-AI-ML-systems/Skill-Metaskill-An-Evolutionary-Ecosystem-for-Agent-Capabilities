@@ -61,8 +61,9 @@ Settings for one `evaluate` or `rank` call.
 | `judge_retries` | `1` | Times a judge reply that does not fit its schema is asked for again ([judge.md](judge.md) 2.4). Must be ≥ 0 |
 | `judge_max_chars` | `100000` | Characters of a skill sent to the judge; larger skills are cut ([judge.md](judge.md) 2.3). Must be ≥ 1 |
 | `safety_tier` | `static` | Safety scan depth |
-| `weights` | equal, `1/6` each | Weight of each dimension in `overall`; each must be in `[0, 1]`. **[OPEN]** evaluate.md, open question 1 |
-| `output_max_chars` | `2000` | Truncation length for `TestResult.output`. **[OPEN]** |
+| `weights` | `DEFAULT_WEIGHTS`: safety 4, quality 3, robustness 3, clarity 2, efficiency 2, config cleanliness 1 | Relative weight of each dimension in `overall` (evaluate.md 5.1), divided by their sum. Each must be a number (not text or `true`/`false`, as a config file could give), ≥ 0 and finite, and at least one above 0 (`check_weights`, which raises `ValueError`). A dimension left out weighs 0. `DEFAULT_WEIGHTS` is read-only; each config gets its own copy |
+| `output_max_chars` | `2000` | Truncation length for `TestResult.output`; the full output is in the run's log ([runner.md](runner.md) 2.4) |
+| `sandbox_disk` | `16m` | Size of each run's folder in the sandbox ([runner.md](runner.md) 2.6); the task's fixtures must fit in it too. A number and `k`, `m` or `g`, nothing else, since it goes into the volume's mount options |
 | `output_dir` | `evaluation-reports` | Each run writes `[timestamp]/` here |
 
 - `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, since the output location does not affect scores. The result becomes `ReportMeta.config`.
@@ -157,7 +158,7 @@ A problem found in a skill's files, for Safety or Configuration Cleanliness.
 
 ### `Scores`
 
-One value per dimension plus `overall`, each in `[0, 1]` or `None` (skipped or failed). **[OPEN]** How `overall` treats a `None` dimension (evaluate.md 2.1).
+One value per dimension plus `overall`, each in `[0, 1]` or `None` (skipped or failed). `overall` is the weighted mean of the six ([rank.md](rank.md)), and `None` if any dimension of weight above 0 is `None`; such a skill is listed below the ranked ones (evaluate.md 5.2). `rank.make_scores(dimension_scores, config)` builds it from the scoring modules' `DimensionScore`s, with `config.weights`.
 
 ### `DimensionStatus`
 
@@ -171,7 +172,7 @@ Everything evaluated for one skill.
 |---|---|
 | `name` | Skill name |
 | `scores` | `Scores` |
-| `lift` | `pass_rate(with_skill) - pass_rate(baseline)`, in `[-1, 1]` (evaluate.md 4.1) |
+| `lift` | `pass_rate(with_skill) - pass_rate(baseline)`, in `[-1, 1]` (evaluate.md 4.1). Checked on construction; NaN is refused |
 | `dimensions` | `{Dimension: DimensionStatus}` |
 | `tests`, `rubric`, `findings` | All `TestResult`s, `RubricRating`s and `Finding`s for the skill |
 
