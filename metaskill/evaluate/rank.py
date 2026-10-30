@@ -6,11 +6,13 @@ but listed below the ranked skills with a note on how it did on what was scored.
 
 Skill names, finding locations and status details come from the skill or its backends,
 so they are cleaned before they are printed: a name must not be able to add a row to the
-table or send escape codes to the terminal.
+table or send escape codes to the terminal. table() also escapes the Markdown that could
+make a link, image, HTML or code, in case its output is rendered as Markdown.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -61,6 +63,11 @@ _DECIMALS = 9
 MAX_NAME_CHARS = 100  # of a skill name as printed
 MAX_TEXT_CHARS = 200  # of a location or detail as printed
 LOW_SAFETY = 0.5  # a recommended skill below this gets a warning
+UNNAMED = "(unnamed)"  # a name with nothing left once cleaned
+# Markdown that can fetch or run something when rendered: links and images ([]), HTML and
+# autolinks (<>), code (`), and \ itself, so an escape cannot be undone. `_` and `*` only
+# change formatting, and escaping them would show as `my\_skill` in a terminal.
+_MARKDOWN = re.compile(r"([\\`\[\]<>])")
 
 
 @dataclass
@@ -83,7 +90,7 @@ class RankedSkill:
     @property
     def name(self) -> str:
         """The skill's name, cleaned for printing."""
-        return clean(self.result.name, MAX_NAME_CHARS)
+        return clean(self.result.name, MAX_NAME_CHARS) or UNNAMED
 
 
 @dataclass
@@ -186,9 +193,9 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
         entry.notes = _notes(entry, ranked, weights, mixed)
     notes = []
     if statuses == {Status.PARTIAL}:
-        notes.append("Safety is partial for every skill (e.g. a scanner is not "
-                     "installed or a deep scan fell back to static): their safety scores "
-                     "compare with each other, not with full scans.")
+        notes.append("Safety is partial for every skill with a safety score (e.g. a "
+                     "scanner is not installed or a deep scan fell back to static): their "
+                     "safety scores compare with each other, not with full scans.")
     return Ranking(ranked=ranked, unranked=unranked, notes=notes,
                    recommendation=_recommend(ranked, unranked, mixed))
 
@@ -316,7 +323,8 @@ def table(ranking: Ranking) -> str:
     recommendation.
 
     Skills that are not ranked show `-` as their rank, their partial overall in
-    parentheses, and `-` for each dimension without a score.
+    parentheses, and `-` for each dimension without a score. Names, notes and the
+    recommendation are escaped (_escape), so the output is safe to render as Markdown.
     """
     head = ["Rank", "Skill", "Overall", *(HEADINGS[d] for d in COLUMNS)]
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
@@ -327,16 +335,22 @@ def table(ranking: Ranking) -> str:
         else:
             place = "-"
             score = "-" if entry.partial_overall is None else f"({entry.partial_overall:.2f})"
-        name = entry.name.replace("|", "\\|")
+        name = _escape(entry.name).replace("|", "\\|")
         row = [place, name, score, *(_cell(found[d]) for d in COLUMNS)]
         lines.append("| " + " | ".join(row) + " |")
     notes = [*ranking.notes,
              *(f"{e.name}: {note}" for e in ranking.entries for note in e.notes)]
     if notes:
-        lines += ["", "Notes:", *(f"- {note}" for note in notes)]
+        lines += ["", "Notes:", *(f"- {_escape(note)}" for note in notes)]
     if ranking.recommendation:
-        lines += ["", f"Recommendation: {ranking.recommendation}"]
+        lines += ["", f"Recommendation: {_escape(ranking.recommendation)}"]
     return "\n".join(lines)
+
+
+def _escape(text: str) -> str:
+    """text with the Markdown in _MARKDOWN escaped. The notes' own wording uses none of
+    those characters, so only what came from the skill or a backend changes."""
+    return _MARKDOWN.sub(r"\\\1", text)
 
 
 def _cell(value: float | None) -> str:
