@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 import re
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 # Used for both the run folder name and meta.timestamp, e.g. 2026-10-14-T15-30-02.
 TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
@@ -71,15 +72,26 @@ class Status(StrEnum):
 
 
 # Weight of each dimension in overall (evaluate.md 5.1): safety first, then quality and
-# robustness, then clarity and efficiency, then configuration cleanliness.
-DEFAULT_WEIGHTS: dict[Dimension, float] = {
+# robustness, then clarity and efficiency, then configuration cleanliness. Read-only, so
+# no caller can change the defaults of every other one.
+DEFAULT_WEIGHTS: Mapping[Dimension, float] = MappingProxyType({
     Dimension.SAFETY: 4,
     Dimension.QUALITY: 3,
     Dimension.ROBUSTNESS: 3,
     Dimension.CLARITY: 2,
     Dimension.EFFICIENCY: 2,
     Dimension.CONFIG_CLEANLINESS: 1,
-}
+})
+
+
+def check_weights(weights: Mapping[Dimension, float]) -> None:
+    """Raise ValueError unless every weight is >= 0 and finite, and one is above 0."""
+    for dimension, weight in weights.items():
+        if not 0.0 <= weight < math.inf:
+            raise ValueError(
+                f"weights[{dimension}] must be >= 0 and finite, got {weight}")
+    if not sum(weights.values()) > 0:
+        raise ValueError("at least one weight must be above 0")
 
 
 def _check_unit(name: str, value: float) -> None:
@@ -155,7 +167,7 @@ class EvaluationConfig:
     # their sum. A dimension left out weighs 0.
     weights: dict[Dimension, float] = field(
         default_factory=lambda: dict(DEFAULT_WEIGHTS))
-    # [OPEN] truncation length for TestResult.output (evaluate.md, section 2.1).
+    # Characters of the agent's output kept in TestResult.output; the log has it all.
     output_max_chars: int = 2000
     # Size of each run's folder in the sandbox (runner.md 2.6); fixtures must fit too.
     sandbox_disk: str = "16m"
@@ -174,12 +186,7 @@ class EvaluationConfig:
         if not isinstance(self.sandbox_disk, str) or not DISK_SIZE.fullmatch(self.sandbox_disk):
             raise ValueError(
                 f"sandbox_disk must be a size like 16m, got {self.sandbox_disk!r}")
-        for dimension, weight in self.weights.items():
-            if not 0.0 <= weight < math.inf:
-                raise ValueError(
-                    f"weights[{dimension}] must be >= 0 and finite, got {weight}")
-        if not sum(self.weights.values()) > 0:
-            raise ValueError("at least one weight must be above 0")
+        check_weights(self.weights)
 
     def hash(self) -> str:
         """Hash of the settings that affect scores; becomes ReportMeta.config.
@@ -664,6 +671,11 @@ class SkillResult:
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
+
+    def __post_init__(self) -> None:
+        # Also refuses NaN, which would make the ranking's order depend on input order.
+        if not -1.0 <= self.lift <= 1.0:
+            raise ValueError(f"lift must be in [-1, 1], got {self.lift}")
 
     def to_dict(self) -> dict[str, Any]:
         return {

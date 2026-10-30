@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -284,12 +285,21 @@ _HIDDEN_NOTE = (
 MAX_REASON_CHARS = 500  # of a reason or message the judge wrote
 
 
+def clean(text: object, limit: int) -> str:
+    """Untrusted text made safe to store and print: one line, no control characters
+    (terminal escape codes, BEL) and no hidden ones, at most `limit` characters. Every
+    such text the evaluate module keeps or prints goes through here."""
+    text = strip_hidden(str(text))
+    text = "".join(" " if unicodedata.category(c) == "Cc" else c for c in text)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 def _plain(text: str) -> str:
-    """Text the judge wrote, made safe to store: one line, no hidden characters, capped.
-    It can still hold anything the material got the judge to write, so a report must
-    escape it (docs/evaluate/judge.md 2.3)."""
-    text = " ".join(strip_hidden(text).split())
-    return text if len(text) <= MAX_REASON_CHARS else text[:MAX_REASON_CHARS - 1] + "…"
+    """Text the judge wrote, made safe to store (clean). It can still say anything the
+    material got the judge to write, so a report must escape its markup, e.g. `|` in a
+    table (docs/evaluate/judge.md 2.3)."""
+    return clean(text, MAX_REASON_CHARS)
 
 
 # --- Judge --------------------------------------------------------------------

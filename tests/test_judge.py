@@ -18,6 +18,7 @@ from metaskill.evaluate.judge import (
     MAX_REASON_CHARS,
     TokenUsage,
     _render,
+    clean,
     fit,
     locate,
     make_judge,
@@ -637,6 +638,20 @@ def test_exit_code_stderr_is_stored_as_plain_text(tmp_path):
     j = DeterministicJudge(run_command=lambda *args: (1, "line one\nline​ two\n"))
     verdict = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "x"), run_in(tmp_path))
     assert verdict.reason.endswith("exited 1, expected 0: line one line two")
+
+
+def test_exit_code_stderr_loses_escape_codes(tmp_path):
+    stderr = "\x1b[31mred\x1b[0m\x07 done"
+    j = DeterministicJudge(run_command=lambda *args: (1, stderr))
+    verdict = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "x"), run_in(tmp_path))
+    assert "\x1b" not in verdict.reason and "\x07" not in verdict.reason
+    assert verdict.reason.endswith("[31mred [0m done")
+
+
+def test_clean():
+    assert clean("a\r\n\tb\x1b[2J\x00c​d", 100) == "a b [2J cd"
+    assert clean(123, 100) == "123"
+    assert clean("x" * 10, 5) == "xxxx…"
 
 
 def test_exit_code_rejects_non_integer_expected(tmp_path):
