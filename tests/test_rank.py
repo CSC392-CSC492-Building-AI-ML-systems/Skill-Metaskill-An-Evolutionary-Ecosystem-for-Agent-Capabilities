@@ -1,4 +1,5 @@
 import itertools
+import re
 
 import pytest
 
@@ -107,10 +108,18 @@ def test_make_scores_from_dimension_scores():
     {Dimension.SAFETY: float("inf")},
     {Dimension.SAFETY: float("nan")},
     {d: 0 for d in Dimension},
+    {Dimension.SAFETY: "4"},
+    {Dimension.SAFETY: True},
+    {Dimension.SAFETY: None},
 ])
 def test_invalid_weights_are_refused(weights):
     with pytest.raises(ValueError):
         EvaluationConfig(weights=weights)
+
+
+def test_text_weight_from_a_config_file_is_a_clear_error():
+    with pytest.raises(ValueError, match="must be a number, got '4'"):
+        EvaluationConfig.from_dict({"weights": {"safety": "4"}})
 
 
 def test_weights_above_one_are_accepted_and_round_trip():
@@ -225,9 +234,17 @@ def test_partial_safety_for_every_skill_is_noted_once():
     ranking = rank([result("a", quality=0.9, dimensions={Dimension.SAFETY: PARTIAL}),
                     result("b", dimensions={Dimension.SAFETY: PARTIAL})])
     assert all(not e.notes for e in ranking.ranked)
-    assert len(ranking.notes) == 1 and "partial for every skill" in ranking.notes[0]
+    assert len(ranking.notes) == 1
+    assert "partial for every skill with a safety score" in ranking.notes[0]
     assert "Check its safety notes" not in ranking.recommendation
     assert "- Safety is partial for every skill" in table(ranking)
+
+
+def test_a_skill_without_safety_does_not_stop_the_all_partial_note():
+    skipped = DimensionStatus(Status.SKIPPED)
+    ranking = rank([result("a", dimensions={Dimension.SAFETY: PARTIAL}),
+                    result("b", safety=None, dimensions={Dimension.SAFETY: skipped})])
+    assert "every skill with a safety score" in ranking.notes[0]
 
 
 def test_critical_finding_keeps_the_skill_ranked():
@@ -281,6 +298,37 @@ def test_cleaned_notes():
                        result("b", clarity=None, dimensions={Dimension.CLARITY: skipped})]))
     assert "\x1b" not in text
     assert "\nRecommendation: fake" not in text and "\n- fake" not in text
+
+
+def test_markdown_that_could_fetch_or_run_is_escaped():
+    image = "![](https://attacker.example/x)"
+    html = "<img src=https://attacker.example/y>"
+    finding = Finding(Dimension.SAFETY, "c", Severity.CRITICAL, "own-checks", "r", "q",
+                      "[link](https://attacker.example/z)")
+    text = table(rank([result(image, findings=[finding]), result(html, quality=0.1),
+                       result("my_skill`code`\\", quality=0.0)]))
+    assert r"!\[\](https://attacker.example/x)" in text  # name cell, note and recommendation
+    assert "![](" not in text
+    assert r"\<img src=https://attacker.example/y\>" in text
+    assert not re.search(r"(?<!\\)[<\[]", text)  # no unescaped < or [ anywhere
+    assert r"\[link\](https://attacker.example/z)" in text
+    assert r"my_skill\`code\`\\" in text  # `_` is left alone; `\` cannot undo an escape
+
+
+def test_escaping_leaves_the_notes_own_wording_alone():
+    skipped = DimensionStatus(Status.SKIPPED, detail="no API key")
+    ranking = rank([result("good", quality=0.9),
+                    result("partial", clarity=None, dimensions={Dimension.CLARITY: skipped})])
+    text = table(ranking)
+    for note in ranking.unranked[0].notes:
+        assert f"- partial: {note}" in text
+    assert f"Recommendation: {ranking.recommendation}" in text
+
+
+def test_a_name_with_nothing_left_once_cleaned():
+    entry = rank([result("\x1b\x07 ​")]).ranked[0]
+    assert entry.name == rank_module.UNNAMED
+    assert "| 1 | (unnamed) |" in table(rank([result("\x1b")]))
 
 
 def test_a_long_name_is_cut():

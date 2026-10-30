@@ -325,7 +325,7 @@ The weights are relative, not fractions: they are divided by their sum, so only 
 - A skill whose safety status is `partial` (a `deep` scan that fell back to `static`, or a scanner that is not installed) is still ranked. It is flagged only when other skills in the same ranking were scanned in full (`ok`), since only then is its safety score not comparable with theirs. When every skill is `partial`, their scores compare with each other, so the output says so once instead of flagging each skill.
 - A critical safety finding results in a low safety score. It does not remove the skill from the ranking, but it is noted, and a recommendation of that skill says to check it.
 - Output includes as well, a recommendation of which skill to use based off their scores: the top ranked skill, or, if no skill could be ranked, the best on its scored dimensions, with a warning to rerun the missing ones. If the recommended skill's lift is 0 or less, the recommendation warns that it does no better than having no skill (section 4.1). Lift is only read when quality was scored, since both come from the same task runs.
-- Skill names, finding locations and status details come from the skill or its backends, so they are cleaned before they are printed: one line, no control or hidden characters, length-capped, and `|` escaped in the table. A skill cannot add a row to the table or send escape codes to the terminal through its name.
+- Skill names, finding locations and status details come from the skill or its backends, so they are cleaned before they are printed: one line, no control or hidden characters, length-capped, and `|` escaped in the table. The table also escapes the Markdown that could make a link, image, HTML or code (`[`, `]`, `<`, `>`, `` ` `` and `\`), since it may be rendered as Markdown, e.g. in `ranked-evaluation.md`. A skill cannot add a row to the table, send escape codes to the terminal, or make a rendered report contact a server through its name.
 
 
 ## 6. Module layout
@@ -386,7 +386,7 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 
 1. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
 2. Whether the note on a skill that is not ranked should say where it would place among the ranked skills (section 5.2). It is kept for now, as an indication only, since it compares a mean over fewer dimensions with full ones. Options: keep it, or drop it and show only the partial mean. To be discussed with the team.
-3. How close two `overall` scores must be to count as a tie, so lift decides. The runner reduces variance (every run starts from the same files, each task runs `n` times) but does not compute a spread; mean and spread come from the quality and robustness modules (section 4.4), which are not built yet. Until then, scores are compared at 9 decimal places. Options: keep that, compare at the 2 displayed decimals, or count scores within the measured spread as tied once it exists.
+3. How close two `overall` scores must be to count as a tie, so lift decides. The runner reduces variance (every run starts from the same files, each task runs `n` times) but does not compute a spread; mean and spread come from the quality and robustness modules (section 4.5), which are not built yet. Until then, scores are compared at 9 decimal places. Options: keep that, compare at the 2 displayed decimals, or count scores within the measured spread as tied once it exists.
 
 ### Answered
 
