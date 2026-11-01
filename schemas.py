@@ -1,6 +1,7 @@
 """Tool schemas — what the LLM sees.
 
 Keep descriptions short: this schema is sent to the model on every turn.
+Step-by-step guidance lives in the bundled skill (skills/guide/SKILL.md).
 """
 
 OPERATIONS = ("generalize", "personalize")
@@ -8,9 +9,8 @@ OPERATIONS = ("generalize", "personalize")
 METASKILL = {
     "name": "metaskill",
     "description": (
-        "Turn a Hermes skill into a shareable template (generalize) or fill a "
-        "template with a user's config (personalize). Detected values are never "
-        "returned, only counts and file paths."
+        "Generalize a Hermes skill into a template, or personalize a template "
+        "from a config. Read skill metaskill:guide first."
     ),
     "parameters": {
         "type": "object",
@@ -18,25 +18,18 @@ METASKILL = {
             "operation": {
                 "type": "string",
                 "enum": list(OPERATIONS),
-                "description": (
-                    "generalize: replace user-specific values in a skill with "
-                    "placeholders. personalize: apply a config to a generalized skill."
-                ),
             },
             "skill_path": {
                 "type": "string",
-                "description": (
-                    "Path to the skill directory or SKILL.md. If the user gave a skill "
-                    "name, locate its directory first and pass that path."
-                ),
+                "description": "Skill directory or SKILL.md path, not a name.",
             },
             "config_path": {
                 "type": "string",
-                "description": "Path to the JSON config file. Required for personalize.",
+                "description": "JSON config file. Required for personalize.",
             },
             "output_path": {
                 "type": "string",
-                "description": "Directory to write results to. Defaults to ./metaskill-output/.",
+                "description": "Output directory. Optional.",
             },
         },
         "required": ["operation", "skill_path"],

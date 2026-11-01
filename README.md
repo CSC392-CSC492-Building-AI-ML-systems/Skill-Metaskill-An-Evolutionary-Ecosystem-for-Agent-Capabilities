@@ -28,7 +28,7 @@ docker pull python:3.12-slim@sha256:e70237b264442328526ff29d6b3c43bd8abcf6cbab78
 | `metaskill/personalize/` | Part 1: rebuild a skill from a template + config |
 | `metaskill/evaluate/` | Part 2: scoring and ranking skills |
 | `metaskill/merge/` | Part 3 (stretch): skill breeding |
-| `skills/` | Skills bundled with the plugin |
+| `skills/` | Skills bundled with the plugin (`guide`, loaded as `metaskill:guide`) |
 | `tests/` | pytest tests and sample skills |
 | `examples/` | Example config files |
 | `docs/` | Design docs, limitations, meeting notes |

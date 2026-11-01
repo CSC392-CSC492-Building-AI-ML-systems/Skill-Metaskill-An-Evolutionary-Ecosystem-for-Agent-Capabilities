@@ -49,7 +49,8 @@ def test_schema_requires_operation_and_skill_path():
 
 def test_schema_stays_small():
     # Sent to the model every turn; guard against it growing unnoticed.
-    assert len(json.dumps(schemas.METASKILL)) < 1500
+    # Guidance belongs in skills/guide/SKILL.md, not here.
+    assert len(json.dumps(schemas.METASKILL)) < 700
 
 
 def test_generalize_routes_with_default_output(fake_pipelines):
@@ -100,9 +101,10 @@ def test_missing_config_file_rejected(fake_pipelines):
     assert "config_path" in result["error"]
 
 
-def test_schema_tells_model_to_resolve_names():
+def test_schema_points_to_guide_skill():
+    assert "metaskill:guide" in schemas.METASKILL["description"]
     description = schemas.METASKILL["parameters"]["properties"]["skill_path"]["description"]
-    assert "skill name" in description
+    assert "not a name" in description
 
 
 def test_missing_skill_path_rejected():
@@ -204,6 +206,60 @@ class RegisteringCtx(FakeCtx):
 
     def register_command(self, name, handler, description="", args_hint=""):
         self.commands.append((name, handler, description, args_hint))
+
+
+class SkillCtx(RegisteringCtx):
+    def __init__(self):
+        super().__init__()
+        self.skills = []
+
+    def register_skill(self, name, path, description="", frontmatter=None):
+        self.skills.append((name, path, description, frontmatter))
+
+
+def test_register_bundles_guide_skill():
+    ctx = SkillCtx()
+    load_plugin().register(ctx)
+    [(name, path, description, frontmatter)] = ctx.skills
+    assert name == "guide" and description
+    # Hermes expects the SKILL.md file itself and raises if it is missing.
+    assert path.name == "SKILL.md" and path.is_file()
+    assert path.read_text(encoding="utf-8").startswith("---\nname: guide\n")
+    assert frontmatter == {"metadata": {"hermes": {"requires_tools": ["metaskill"]}}}
+
+
+def test_register_skill_falls_back_to_name_and_path():
+    class OldSkillCtx(RegisteringCtx):
+        def __init__(self):
+            super().__init__()
+            self.skills = []
+
+        def register_skill(self, name, path):
+            self.skills.append((name, path))
+
+    ctx = OldSkillCtx()
+    load_plugin().register(ctx)
+    assert [name for name, _ in ctx.skills] == ["guide"]
+
+
+def test_guide_frontmatter_matches_registration():
+    # Hermes gates the index on the registered frontmatter; keep SKILL.md saying the same.
+    text = load_plugin().GUIDE_SKILL.read_text(encoding="utf-8")
+    header = text.split("---")[1]
+    assert "requires_tools: [metaskill]" in header
+
+
+def test_guide_skill_covers_the_steps_removed_from_the_schema():
+    text = load_plugin().GUIDE_SKILL.read_text(encoding="utf-8")
+    for step in ("skill name", "skill_view", "skill_dir", "generalize", "personalize",
+                 "config_path", "metaskill("):
+        assert step in text
+
+
+def test_register_works_without_plugin_skills():
+    ctx = RegisteringCtx()  # an older Hermes: no register_skill
+    load_plugin().register(ctx)
+    assert [t["name"] for t in ctx.tools] == ["metaskill"]
 
 
 def test_register_works_without_auxiliary_tasks():
