@@ -181,7 +181,7 @@ def test_command_reports_when_message_not_accepted():
     assert "could not send" in out
 
 
-def test_register_wires_tool_and_command():
+def load_plugin():
     import importlib.util
 
     root = os.path.join(os.path.dirname(__file__), "..")
@@ -191,21 +191,43 @@ def test_register_wires_tool_and_command():
     plugin = importlib.util.module_from_spec(spec)
     sys.modules["metaskill_plugin"] = plugin
     spec.loader.exec_module(plugin)
+    return plugin
 
-    class Ctx(FakeCtx):
+
+class RegisteringCtx(FakeCtx):
+    def __init__(self):
+        super().__init__()
+        self.tools, self.commands = [], []
+
+    def register_tool(self, **kwargs):
+        self.tools.append(kwargs)
+
+    def register_command(self, name, handler, description="", args_hint=""):
+        self.commands.append((name, handler, description, args_hint))
+
+
+def test_register_works_without_auxiliary_tasks():
+    ctx = RegisteringCtx()  # an older Hermes: no register_auxiliary_task
+    load_plugin().register(ctx)
+    assert [t["name"] for t in ctx.tools] == ["metaskill"]
+    assert ctx.commands
+
+
+def test_register_wires_tool_and_command():
+    plugin = load_plugin()
+
+    class Ctx(RegisteringCtx):
         def __init__(self):
             super().__init__()
-            self.tools, self.commands = [], []
+            self.tasks = []
 
-        def register_tool(self, **kwargs):
-            self.tools.append(kwargs)
-
-        def register_command(self, name, handler, description="", args_hint=""):
-            self.commands.append((name, handler, description, args_hint))
+        def register_auxiliary_task(self, key, **kwargs):
+            self.tasks.append(key)
 
     ctx = Ctx()
     plugin.register(ctx)
     assert [t["name"] for t in ctx.tools] == ["metaskill"]
+    assert ctx.tasks == ["metaskill_judge"]
     name, handler, _, hint = ctx.commands[0]
     assert name == "metaskill" and hint
     handler("generalize my-skill")

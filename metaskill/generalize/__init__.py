@@ -1,21 +1,33 @@
-"""Generalize a skill into a reusable template.
+"""Skill generalization: deterministic detection, plus the opt-in Laya entry point."""
 
-Part 1 of the metaskill plugin. Detects personal data in a skill with the
-Laya Experts PII model and reports counts. Redaction and placeholder output
-are not implemented yet, so no files are rewritten.
+from .detect import (
+    Action,
+    Category,
+    Finding,
+    ScanResult,
+    detect,
+    detect_file,
+    redact,
+    scan_skill,
+)
+from .inventory import InventoryError, load_inventory
 
-All Laya-specific code lives in ``laya_pii/``; this module only routes to it.
+__all__ = [
+    "Action",
+    "Category",
+    "Finding",
+    "InventoryError",
+    "ScanResult",
+    "detect",
+    "detect_file",
+    "load_inventory",
+    "redact",
+    "generalize_skill",
+    "scan_skill",
+]
 
-Entry point (imported by tools._load_entry_point)::
-
-    from metaskill.generalize import generalize_skill
-    generalize_skill(skill_path, output_path)
-"""
-
-from __future__ import annotations
-
-from . import laya_pii
-from .laya_pii.skill_scan import scan_skill
+from . import laya_pii  # noqa: E402
+from .laya_pii.skill_scan import scan_skill as _laya_scan_skill  # noqa: E402
 
 
 def generalize_skill(skill_path: str, output_path: str,
@@ -46,7 +58,7 @@ def generalize_skill(skill_path: str, output_path: str,
             ),
         }
 
-    entities_detected, files_scanned, files_over_limit = scan_skill(skill_path, laya_model_path)
+    entities_detected, files_scanned, files_over_limit = _laya_scan_skill(skill_path, laya_model_path)
     warnings = []
     if files_over_limit:
         warnings.append(f"{files_over_limit} file(s) over the size limit were skipped")
