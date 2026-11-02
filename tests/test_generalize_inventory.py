@@ -86,7 +86,11 @@ def test_symlinks_are_skipped_not_followed(tmp_path):
     }
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can read files without permission")
+@pytest.mark.skipif(
+    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="permission test is unsupported on Windows or running as root",
+)
+
 def test_unreadable_files_and_directories_are_skipped_not_fatal(tmp_path):
     write(tmp_path, {"SKILL.md": "# s", "secret.md": "x", "locked/inner.md": "x"})
     (tmp_path / "secret.md").chmod(0)
@@ -125,3 +129,36 @@ def test_too_many_bytes_is_rejected(tmp_path):
 def test_missing_path(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_inventory(tmp_path / "nope")
+
+def test_extracts_metadata_prompt_tools_and_dependencies(tmp_path):
+    write(tmp_path, {
+        "SKILL.md": (
+            "---\n"
+            "name: sample-skill\n"
+            "description: |\n"
+            "  Helps with sample work.\n"
+            "tools:\n"
+            "  - name: browser\n"
+            "  - shell\n"
+            "---\n"
+            "Use the browser tool. See [guide](references/guide.md).\n"
+            "Read the key from os.getenv('SERVICE_KEY').\n"
+        ),
+        "requirements.txt": "requests>=2.0\n",
+        "package.json": '{"dependencies":{"chalk":"^5.0.0"}}',
+        "scripts/run.py": "import json\nfrom pathlib import Path\n",
+    })
+
+    inventory = load_inventory(tmp_path)
+    project = inventory.project
+
+    assert project.metadata["name"] == "sample-skill"
+    assert project.metadata["description"] == "Helps with sample work."
+    assert project.prompt.startswith("Use the browser tool.")
+    assert project.tools == ["browser", "shell"]
+    assert "requests>=2.0" in project.dependencies
+    assert "chalk@^5.0.0" in project.dependencies
+    assert "json" in project.dependencies
+    assert "pathlib" in project.dependencies
+    assert project.referenced_files == ["references/guide.md"]
+    assert project.environment_variables == ["SERVICE_KEY"]
