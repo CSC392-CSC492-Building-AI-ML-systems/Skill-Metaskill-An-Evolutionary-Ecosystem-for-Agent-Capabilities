@@ -101,3 +101,39 @@ def test_real_laya_detection_runs_locally():
 
     assert {"email address", "phone number"} <= {e["label"] for e in entities}
     assert "" in laya_pii._MODELS  # the real model was loaded, not a stand-in
+
+
+def test_skip_nested_pieces_drops_fragments_of_a_larger_candidate():
+    # pii_demo imports numpy and torch at module level
+    pytest.importorskip("numpy")
+    pytest.importorskip("torch")
+    from metaskill.generalize.laya_pii.pii_demo import build_states, skip_nested_pieces
+
+    text = "Mail priya1990@acme.com or call 416-978-2011 on 4 March."
+    rows = build_states(text)
+    kept = {text[s:e] for (s, e), _, _ in skip_nested_pieces(rows)}
+    dropped = {text[s:e] for (s, e), _, _ in rows} - kept
+
+    assert {"priya1990@acme.com", "416-978-2011", "4 March"} <= kept
+    assert {"priya1990", "416", "978", "2011"} <= dropped  # pieces of the email and the phone
+    assert "March" in kept or "4 March" in kept  # a date is not a container, so it survives
+
+
+def test_resolve_device_defaults_to_cpu_and_passes_explicit_devices_through():
+    assert laya_pii.resolve_device("") == "cpu"
+    assert laya_pii.resolve_device("CPU") == "cpu"
+    assert laya_pii.resolve_device("cuda:1") == "cuda:1"
+    assert laya_pii.resolve_device("mps") == "mps"
+
+
+def test_resolve_device_gpu_mode_uses_cuda_only_when_torch_sees_one(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert laya_pii.resolve_device("gpu") == "cuda"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert laya_pii.resolve_device("gpu") == "cpu"
+
+
+def test_resolve_device_gpu_mode_without_torch_falls_back_to_cpu(monkeypatch):
+    monkeypatch.setitem(sys.modules, "torch", None)
+    assert laya_pii.resolve_device("gpu") == "cpu"

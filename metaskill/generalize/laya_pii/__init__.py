@@ -23,13 +23,32 @@ import threading
 
 HUB_REPO = "goku-san/laya-experts"
 # CPU by default: on an Apple-silicon Mac laya picks the GPU (MPS) on its own, and
-# there it hung indefinitely. Set this to "mps" or "cuda" to opt back in.
+# there it hung indefinitely. Set this to "gpu" to use an NVIDIA (CUDA) or AMD (ROCm)
+# GPU when PyTorch can see one and fall back to CPU otherwise, or to an explicit
+# torch device such as "cuda", "cuda:1" or "mps" to opt in directly.
 DEVICE_ENV = "METASKILL_LAYA_DEVICE"
 INSTALL_HINT = "laya is not installed; run: hermes plugins install metaskill-laya"
 
 
 class LayaUnavailable(RuntimeError):
     """laya is not installed, so no detector can be built."""
+
+
+def resolve_device(setting: str = "") -> str:
+    """Turn the METASKILL_LAYA_DEVICE setting into a torch device string.
+
+    "" or "cpu" -> "cpu". "gpu" -> "cuda" when PyTorch sees an NVIDIA or AMD (ROCm)
+    GPU, else "cpu". Anything else is passed to torch as given. Never picks MPS.
+    """
+    setting = setting.strip().lower()
+    if setting != "gpu":
+        return setting or "cpu"
+    try:
+        import torch  # imported lazily: laya may not be installed
+    except ImportError:
+        return "cpu"
+    # ROCm builds of PyTorch report AMD GPUs through the "cuda" device name.
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 _MODELS: dict[str, object] = {}
@@ -46,7 +65,7 @@ def load_detector(model_path: str = ""):
                 # The constructor imports laya itself, so it belongs inside the try.
                 _MODELS[model_path] = PiiRedactor(
                     model=model_path or HUB_REPO,
-                    device=os.environ.get(DEVICE_ENV, "cpu"),
+                    device=resolve_device(os.environ.get(DEVICE_ENV, "")),
                 )
             except ImportError as exc:
                 raise LayaUnavailable(INSTALL_HINT) from exc

@@ -225,6 +225,25 @@ class Detection:
         return self.redact()
 
 
+# Local addition (not in the training pipeline): the model scores every candidate on its own,
+# at ~0.3-0.7 s each on CPU, and a candidate that sits inside an email, URL, card or phone
+# span is a piece of something already being scored (the "1234" in "user1234@x.com"). Skipping
+# those pieces cuts ~20% of the work and leaves the model's inputs unchanged.
+_WHOLE_FAMILIES = {"EMAIL", "URLISH", "CARD", "SSN_DASH", "PHONE", "PHONE_RUN"}
+_PIECE_FAMILIES = {"BARE_INT", "POSTCODE_NUM", "ALNUM_ID", "DATE_NUMERIC", "TIME", "CAPS_SINGLE",
+                   "CAPS_RUN", "POSTCODE_UK", "POSTCODE_CA"}
+
+
+def skip_nested_pieces(rows: list) -> list:
+    """Drop candidates that are only fragments of a larger email/URL/card/phone candidate."""
+    wholes = [span for span, fams, _ in rows if _WHOLE_FAMILIES & set(fams)]
+    return [
+        row for row in rows
+        if not set(row[1]) <= _PIECE_FAMILIES
+        or not any(s <= row[0][0] and row[0][1] <= e and (s, e) != row[0] for s, e in wholes)
+    ]
+
+
 def build_states(text: str, region: str = "US") -> list[tuple[tuple[int, int], list[str], dict]]:
     """One model input per candidate span, in the exact key order the model was trained on."""
     dt = doc_type(text)
@@ -276,7 +295,7 @@ class PiiRedactor:
         return out
 
     def detect(self, text: str, threshold: float = 0.5, region: str = "US") -> Detection:
-        rows = build_states(text, region)
+        rows = skip_nested_pieces(build_states(text, region))
         probs = self.score([st for _, _, st in rows])
         kept = []
         for ((s, e), fams, _), pr in zip(rows, probs):
