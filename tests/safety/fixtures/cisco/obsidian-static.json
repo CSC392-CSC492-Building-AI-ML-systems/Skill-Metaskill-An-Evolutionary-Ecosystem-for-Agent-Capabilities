@@ -1,0 +1,49 @@
+{
+  "analyzers_used": [
+    "static_analyzer",
+    "bytecode",
+    "pipeline",
+    "correlation"
+  ],
+  "duration_ms": 235,
+  "findings": [],
+  "findings_count": 0,
+  "is_safe": true,
+  "max_severity": "SAFE",
+  "scan_duration_seconds": 0.235518217086792,
+  "scan_metadata": {
+    "cel": {
+      "elapsed_ms": 0.0,
+      "errors": [],
+      "evaluated": 0,
+      "evaluation_ms": 0.0,
+      "expression_set_hash": "f26459b8f4a46a974d7ab0aaae34127b5b6a40d693e266e12fca03a69a6d26aa",
+      "fact_schema": "v1",
+      "fallbacks": 0,
+      "mode": "shadow",
+      "per_rule": {},
+      "projection_incomplete": 0,
+      "projection_ms": 0.0,
+      "retained": 0,
+      "runtime": "cel-go",
+      "runtime_version": "v0.32.0;helper=2.2.1",
+      "suppressed": 0,
+      "suppressed_candidates": [],
+      "would_suppress": 0
+    },
+    "policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+    "policy_name": "default",
+    "policy_preset_base": "balanced",
+    "policy_version": "1.0",
+    "rule_contract": {
+      "checked": 0,
+      "errors": [],
+      "invalid_findings": 0,
+      "schema_version": 2,
+      "status": "passed"
+    }
+  },
+  "skill_name": "obsidian",
+  "skill_path": "<skills>/note-taking/obsidian",
+  "timestamp": "2026-10-18T23:49:11.104815+00:00"
+}
