@@ -77,9 +77,13 @@ class FakeCtx:
     def __init__(self):
         self.unload = []
         self.cli = []
+        self.skills = []
 
     def on_unload(self, callback):
         self.unload.append(callback)
+
+    def register_skill(self, name, path, description="", frontmatter=None):
+        self.skills.append((name, path, description, frontmatter))
 
     def register_cli_command(self, name, help, setup_fn, handler_fn=None, description=""):
         self.cli.append((name, setup_fn, handler_fn))

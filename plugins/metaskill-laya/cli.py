@@ -55,8 +55,14 @@ def status() -> int:
     print(f"laya:   {_version('laya')}")
     print(f"torch:  {_version('torch')}")
     print(f"model:  {detector.HUB_REPO}@{detector.MODEL_REVISION[:7]}, {_model_cached()}")
-    print(f"device: {detector.resolve_device(os.environ.get(detector.DEVICE_ENV, ''))} "
-          f"(set {detector.DEVICE_ENV}=gpu to use a GPU)")
+    setting = os.environ.get(detector.DEVICE_ENV, "")
+    device = detector.resolve_device(setting)
+    if setting.strip().lower() == "gpu" and device == "cpu":
+        print(f"device: cpu ({detector.DEVICE_ENV}=gpu, but PyTorch sees no CUDA or ROCm GPU; "
+              f"see skills/setup/SKILL.md in this add-on)")
+    else:
+        print(f"device: {device}" + ("" if setting else
+                                     f" (to use a GPU: hermes config set {detector.DEVICE_ENV} gpu)"))
     return 0 if _version("laya") != "not installed" else 1
 
 

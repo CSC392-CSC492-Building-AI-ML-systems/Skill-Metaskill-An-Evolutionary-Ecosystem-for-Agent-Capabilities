@@ -11,8 +11,15 @@ numbers. Nothing else to configure.
    hermes metaskill-laya download
    ```
 
-3. Optional, if you have an NVIDIA or AMD GPU with a GPU build of PyTorch: set
-   `METASKILL_LAYA_DEVICE=gpu`. On a CPU, expect about 3 seconds per small file.
+3. Optional, **Linux with an NVIDIA GPU** only: about 10 times faster than the CPU.
 
-Check the setup at any time with `hermes metaskill-laya status`. To turn the add-on
-off, run `hermes plugins disable metaskill-laya`.
+   ```bash
+   hermes config set METASKILL_LAYA_DEVICE gpu
+   ```
+
+   Then restart Hermes. On other machines the add-on runs on the CPU, at about 3
+   seconds per small file.
+
+Check the setup at any time with `hermes metaskill-laya status`, or ask the agent: it
+has the setup guide as the `metaskill-laya:setup` skill. To turn the add-on off, run
+`hermes plugins disable metaskill-laya`.

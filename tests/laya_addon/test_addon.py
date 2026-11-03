@@ -58,8 +58,56 @@ def test_unload_leaves_a_newer_registration_alone(addon, ctx):
 
 
 def test_register_works_on_an_older_hermes(addon):
-    addon.register(object())  # no on_unload, no register_cli_command
+    addon.register(object())  # no on_unload, register_cli_command or register_skill
     assert [e["name"] for e in extras.registered()] == ["laya"]
+
+
+def test_register_bundles_the_setup_skill(addon, ctx):
+    addon.register(ctx)
+    [(name, path, description, frontmatter)] = ctx.skills
+    assert name == "setup" and "GPU" in description
+    # Hermes expects the SKILL.md file itself and raises if it is missing.
+    assert path.name == "SKILL.md" and path.is_file()
+    assert frontmatter == {"metadata": {"hermes": {"requires_tools": ["metaskill"]}}}
+
+
+def test_register_skill_falls_back_to_name_and_path(addon):
+    class OldCtx:
+        def __init__(self):
+            self.skills = []
+
+        def register_skill(self, name, path):
+            self.skills.append(name)
+    ctx = OldCtx()
+    addon.register(ctx)
+    assert ctx.skills == ["setup"]
+
+
+def test_setup_skill_frontmatter_matches_the_registration(addon):
+    text = addon.SETUP_SKILL.read_text(encoding="utf-8")
+    header = text.split("---")[1]
+    assert header.startswith("\nname: setup\n")
+    assert "requires_tools: [metaskill]" in header
+
+
+def test_setup_skill_covers_setup_gpu_and_warnings(addon):
+    text = addon.SETUP_SKILL.read_text(encoding="utf-8")
+    detector = addon.detector
+    for needle in (
+        "hermes metaskill-laya status", "hermes metaskill-laya download",
+        f"hermes config set {detector.DEVICE_ENV} gpu", detector.MODEL_ENV,
+        "METASKILL_EXTRAS_MAX_SECONDS", "hermes pm repair", "Ask the user",
+        "not importable", "could not load the Laya model", "stopped at the time limit",
+    ):
+        assert needle in text, needle
+
+
+def test_setup_skill_quotes_the_real_warnings(addon):
+    # The skill tells the agent what each generalize warning means; keep it in step.
+    text = addon.SETUP_SKILL.read_text(encoding="utf-8")
+    assert addon.detector.INSTALL_HINT.startswith("the laya package is not importable")
+    assert "`the laya package is not importable`" in text
+    assert "`laya stopped at the time limit after N of M files`" in text
 
 
 def test_registry_name_matches_core(addon):
@@ -268,6 +316,20 @@ def test_cli_status_reports_a_missing_laya(monkeypatch, addon, capsys):
     monkeypatch.setattr(addon.cli, "_version", lambda package: "not installed")
     assert addon.cli.handle(_cli_args(addon, "status")) == 1
     assert "laya:   not installed" in capsys.readouterr().out
+
+
+def test_cli_status_explains_a_gpu_setting_without_a_gpu(monkeypatch, addon, capsys):
+    monkeypatch.setenv(addon.detector.DEVICE_ENV, "gpu")
+    monkeypatch.setattr(addon.detector, "resolve_device", lambda setting: "cpu")
+    addon.cli.handle(_cli_args(addon, "status"))
+    out = capsys.readouterr().out
+    assert "device: cpu (METASKILL_LAYA_DEVICE=gpu, but PyTorch sees no CUDA or ROCm GPU" in out
+
+
+def test_cli_status_shows_how_to_turn_on_the_gpu(addon, capsys):
+    addon.cli.handle(_cli_args(addon, "status"))
+    assert "device: cpu (to use a GPU: hermes config set METASKILL_LAYA_DEVICE gpu)" in (
+        capsys.readouterr().out)
 
 
 def test_cli_download_loads_and_self_checks(monkeypatch, addon, capsys):

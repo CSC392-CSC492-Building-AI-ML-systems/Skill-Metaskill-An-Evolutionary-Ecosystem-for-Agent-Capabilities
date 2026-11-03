@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 
 from . import cli, detector
 
@@ -18,6 +19,17 @@ from . import cli, detector
 # so they share a registry kept in sys.modules under this name.
 REGISTRY = "metaskill_extras"
 ENTRY = {"api": 1, "name": "laya", "detect": detector.detect}
+
+# Setup and GPU instructions, offered to the agent as metaskill-laya:setup and loaded on
+# demand. The same file is the setup documentation in the repo.
+SETUP_SKILL = Path(__file__).parent / "skills" / "setup" / "SKILL.md"
+SETUP_DESCRIPTION = (
+    "Set up or troubleshoot the metaskill-laya add-on: model download, GPU acceleration, "
+    "and laya warnings in generalize results."
+)
+# Hermes reads index conditions from the registration, not the file; this repeats the
+# SKILL.md frontmatter.
+SETUP_FRONTMATTER = {"metadata": {"hermes": {"requires_tools": ["metaskill"]}}}
 
 
 def _registry() -> dict:
@@ -44,3 +56,9 @@ def register(ctx):
             setup_fn=cli.setup,
             handler_fn=cli.handle,
         )
+    if hasattr(ctx, "register_skill"):
+        try:
+            ctx.register_skill("setup", SETUP_SKILL, description=SETUP_DESCRIPTION,
+                               frontmatter=SETUP_FRONTMATTER)
+        except TypeError:  # versions documented as register_skill(name, path) only
+            ctx.register_skill("setup", SETUP_SKILL)

@@ -43,8 +43,21 @@ returns the regex results with a warning that says why.
 | `METASKILL_LAYA_MODEL` | unset | A local copy of the model: a checkout of `goku-san/laya-experts` or its `pii/` folder. Used as given, without the revision pin or hash check. |
 | `METASKILL_EXTRAS_MAX_SECONDS` | `600` | Time limit for add-on detectors per `generalize` call. Detection stops at the next file and says so. |
 
-`hermes metaskill-laya status` shows the installed versions, whether the model is
-downloaded and which device will be used.
+Set them with `hermes config set NAME value` (saved to `~/.hermes/.env`), then restart
+Hermes. `hermes metaskill-laya status` shows the installed versions, whether the model
+is downloaded and which device will be used.
+
+## Using a GPU
+
+| Machine | GPU support |
+|---|---|
+| Linux, NVIDIA | Works: `hermes config set METASKILL_LAYA_DEVICE gpu`, restart Hermes, and `status` shows `cuda`. PyPI's PyTorch for Linux includes CUDA. |
+| Windows, or any AMD GPU | Not inside Hermes. The PyTorch Hermes installs is CPU-only there, and Hermes manages its environment, so a CUDA or ROCm build cannot be swapped in. The CPU works. |
+| Mac | Not supported: Laya hung on Apple's GPU (MPS) in testing. |
+
+The full setup and troubleshooting steps are in [skills/setup/SKILL.md](skills/setup/SKILL.md).
+The add-on also gives that file to the Hermes agent as the `metaskill-laya:setup` skill,
+so you can ask the agent to help with setup.
 
 ## Speed and accuracy
 
@@ -60,7 +73,7 @@ On the labeled set in [benchmarks/pii_compare](../../benchmarks/pii_compare)
 | Time, all 10 files | 0.1 s | 43 s | 34 s on CPU, 2.4 s on GPU |
 
 Measured with laya 0.4.21 on a Windows desktop CPU, and on an AMD Radeon RX 9070 XT
-with a ROCm build of PyTorch (identical results). The set is small and was written
+with a ROCm build of PyTorch outside Hermes (identical results). The set is small and was written
 with both detectors in mind: treat the numbers as a smoke test, not an accuracy rate.
 
 Laya's category labels are unreliable (it has labeled a card number "driver licence
