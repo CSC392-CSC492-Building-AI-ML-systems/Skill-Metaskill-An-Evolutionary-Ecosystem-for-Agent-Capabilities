@@ -1,3 +1,8 @@
+# Vendored from goku-san/laya-experts (https://huggingface.co/goku-san/laya-experts),
+# demo/pii_demo.py at revision 73d5a0883e7000ffac3bdf7bd7de83c5f484e7f4, under the
+# Apache License 2.0 (see LICENSE and NOTICE in this folder). Changed here, marked
+# "Local addition": skip_nested_pieces(), the skip argument of PiiRedactor.detect(),
+# and the revision and expected_sha256 arguments of PiiRedactor.
 """Laya Experts PII: find personal data in free text and redact it.
 
 A regex detector proposes candidate spans, and the fine-tuned Laya `pii` flavour labels each
@@ -12,6 +17,7 @@ it was trained.
 """
 from __future__ import annotations
 
+import bisect
 import collections
 import re
 from dataclasses import dataclass, field
@@ -260,11 +266,34 @@ def build_states(text: str, region: str = "US") -> list[tuple[tuple[int, int], l
     return rows
 
 
+def skip_claimed(rows: list, skip) -> list:
+    """Local addition: drop candidates that overlap a span another detector already claimed.
+
+    `skip` is a sorted list of non-overlapping (start, end) spans, e.g. from metaskill's regex
+    layer. Those values are already reported or known to be examples, so scoring them again
+    only costs time and repeats findings."""
+    if not skip:
+        return rows
+    starts = [s for s, _ in skip]
+    kept = []
+    for row in rows:
+        s, e = row[0]
+        # Of the spans starting before this candidate ends, only the last can reach into it.
+        i = bisect.bisect_left(starts, e)
+        if not (i and skip[i - 1][1] > s):
+            kept.append(row)
+    return kept
+
+
 class PiiRedactor:
     def __init__(self, model: str = REPO, subfolder: str | None = SUBFOLDER, device: str | None = None,
-                 batch_size: int = 16):
+                 batch_size: int = 16, revision: str | None = None,
+                 expected_sha256: dict[str, str] | None = None):
         import laya
-        self.agent = laya.Agent(model, subfolder=subfolder, device=device)
+        # Local addition: revision and expected_sha256 pin and verify the Hub download.
+        kwargs = {"revision": revision, "expected_sha256": expected_sha256}
+        self.agent = laya.Agent(model, subfolder=subfolder, device=device,
+                                **{k: v for k, v in kwargs.items() if v})
         self.batch_size = batch_size
         self.question = {"type": "choice", "instructions": INSTRUCTIONS, "criteria": LABELS}
 
@@ -294,8 +323,8 @@ class PiiRedactor:
             out += [dict(zip(LABELS, map(float, row))) for row in p]
         return out
 
-    def detect(self, text: str, threshold: float = 0.5, region: str = "US") -> Detection:
-        rows = skip_nested_pieces(build_states(text, region))
+    def detect(self, text: str, threshold: float = 0.5, region: str = "US", skip=()) -> Detection:
+        rows = skip_claimed(skip_nested_pieces(build_states(text, region)), skip)
         probs = self.score([st for _, _, st in rows])
         kept = []
         for ((s, e), fams, _), pr in zip(rows, probs):

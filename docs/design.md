@@ -144,9 +144,11 @@ Re-generalizing an unchanged personalized skill should yield a compatible placeh
 ```text
 metaskill/
   generalize/
-    __init__.py       # generalize_skill() entry point
+    __init__.py       # public names, including generalize_skill()
+    pipeline.py       # generalize_skill() entry point
     inventory.py      # bounded file discovery and type filtering
     detect.py         # deterministic candidate detectors
+    extras.py         # extra detectors from optional add-on plugins (e.g. metaskill-laya)
     classify.py       # optional contextual classification interface
     transform.py      # placeholder assignment and safe replacements
     config.py         # schema and example configuration generation

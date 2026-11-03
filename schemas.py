@@ -19,9 +19,8 @@ METASKILL = {
                 "type": "string",
                 "enum": list(OPERATIONS),
                 "description": (
-                    "generalize: detect user-specific personal data in a skill and "
-                    "report counts (nothing is rewritten yet). personalize: apply a "
-                    "config to a generalized skill."
+                    "generalize: replace user-specific values in a skill with "
+                    "placeholders. personalize: apply a config to a generalized skill."
                 ),
             },
             "skill_path": {
@@ -29,22 +28,6 @@ METASKILL = {
                 "description": (
                     "Path to the skill directory or SKILL.md. If the user gave a skill "
                     "name, locate its directory first and pass that path."
-                ),
-            },
-            "use_laya": {
-                "type": "boolean",
-                "description": (
-                    "generalize only. Opt in to the local Laya Experts PII model for "
-                    "detection (~1GB, downloaded once, no API key). Off by default. "
-                    "If the result says laya is unavailable, ask the user before "
-                    "suggesting the install in next_step."
-                ),
-            },
-            "laya_model_path": {
-                "type": "string",
-                "description": (
-                    "generalize only, with use_laya. Path to a local Laya PII model "
-                    "directory; leave empty to use the public Hugging Face model."
                 ),
             },
             "config_path": {
