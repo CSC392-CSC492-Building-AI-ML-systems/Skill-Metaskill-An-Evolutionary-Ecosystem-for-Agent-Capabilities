@@ -110,7 +110,8 @@ def metaskill(args, **kwargs):
         return json.dumps(result)
     except Exception as exc:  # last resort: handlers must not raise
         return json.dumps(
-            {"success": False, "status": "error", "error": f"metaskill failed: {type(exc).__name__}"}
+            {"success": False, "status": "error",
+                "error": f"metaskill failed: {type(exc).__name__}"}
         )
 
 

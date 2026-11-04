@@ -130,6 +130,10 @@ class EvaluationConfig:
     runs_per_task: int = 3
     judge_provider: str = ""
     judge_model: str = ""
+    # Times a judge reply that does not fit its schema is asked for again (judge.md 2.4).
+    judge_retries: int = 1
+    # Characters of a skill the judge is sent; larger skills are cut (judge.md 2.3).
+    judge_max_chars: int = 100_000
     safety_tier: SafetyTier = SafetyTier.STATIC
     # [OPEN] weighting of overall (evaluate.md, open question 1). Equal weights for now.
     weights: dict[Dimension, float] = field(
@@ -142,6 +146,12 @@ class EvaluationConfig:
         if self.runs_per_task < 1:
             raise ValueError(
                 f"runs_per_task must be >= 1, got {self.runs_per_task}")
+        if self.judge_retries < 0:
+            raise ValueError(
+                f"judge_retries must be >= 0, got {self.judge_retries}")
+        if self.judge_max_chars < 1:
+            raise ValueError(
+                f"judge_max_chars must be >= 1, got {self.judge_max_chars}")
         for dimension, weight in self.weights.items():
             _check_unit(f"weights[{dimension}]", weight)
 
@@ -173,6 +183,8 @@ class EvaluationConfig:
             "runs_per_task": self.runs_per_task,
             "judge_provider": self.judge_provider,
             "judge_model": self.judge_model,
+            "judge_retries": self.judge_retries,
+            "judge_max_chars": self.judge_max_chars,
             "safety_tier": self.safety_tier.value,
             "weights": {d.value: w for d, w in self.weights.items()},
             "output_max_chars": self.output_max_chars,
@@ -185,6 +197,8 @@ class EvaluationConfig:
             runs_per_task=data.get("runs_per_task", 3),
             judge_provider=data.get("judge_provider", ""),
             judge_model=data.get("judge_model", ""),
+            judge_retries=data.get("judge_retries", 1),
+            judge_max_chars=data.get("judge_max_chars", 100_000),
             safety_tier=SafetyTier(
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             output_max_chars=data.get("output_max_chars", 2000),

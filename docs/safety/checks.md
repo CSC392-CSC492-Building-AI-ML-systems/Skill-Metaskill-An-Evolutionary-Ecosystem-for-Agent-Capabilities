@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "1"
+CHECKS_VERSION = "2"
 
 class ChecksBackend:
     name = "own-checks"
@@ -182,6 +182,27 @@ Not covered here: secrets written into the skill itself (that is Configuration C
 `unpinned-install` is common in legitimate skills and caps each of them at 0.9. It stays: it is a real, minor supply-chain risk, and skills doing the same job are affected equally, so their ranking barely changes.
 
 "Unknown source" in the safety design (an allowlist of trusted hosts) is not in version 1.
+
+### Hidden characters
+
+Characters that render as nothing, in `SKILL.md` and every markdown or script file. A person reading the skill does not see them, but the agent reads them. Added in `CHECKS_VERSION` 2.
+
+| Rule | Matches | Severity |
+|---|---|---|
+| `hidden-tag-text` | Tag characters (U+E0000 to U+E007F). They mirror ASCII, so a run of them can spell out an instruction only the model sees. The message gives the decoded text | HIGH |
+| `bidi-control` | Bidirectional controls (U+202A to U+202E, U+2066 to U+2069), which make text display in a different order from how it is read | MEDIUM |
+| `zero-width` | Zero-width space, word joiner and invisible operators (U+200B, U+2060 to U+2064), U+180E, and U+FEFF anywhere but the start of a file | LOW |
+
+All are `excess-scope`: a skill has no reason to hide text from its user. Each rule gives one finding per file, at the first line, with the number of lines when there are more. The quote shows the hidden characters visibly (`⟦hidden text: "..."⟧`, `⟦U+200B⟧`), so the report does not carry the hidden text on.
+
+Not matched, because real skills use them:
+
+- Joiners (U+200C, U+200D), which emoji and several scripts need.
+- Flag emoji such as England's, which are a black flag followed by tag characters.
+- A byte order mark at the start of a file.
+- HTML comments. 14 of the 58 Hermes skills have them, all template notes such as `<!-- What should happen -->`. The LLM review sees comments, marked as hidden ([judge.md](../evaluate/judge.md) 2.3), and judges what they say.
+
+None of the 58 Hermes skills triggers any of the three rules.
 
 ## Results on real skills
 

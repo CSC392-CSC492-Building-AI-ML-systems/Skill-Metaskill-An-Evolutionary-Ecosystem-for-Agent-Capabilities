@@ -2,7 +2,7 @@
 
 Status: draft. Items marked **[OPEN]** need a decision before implementation. Items marked **[VERIFY]** are taken from a scanner's README or docs and have not been checked by running the tool.
 
-This expands section 3.6 of [evaluate.md](evaluate.md). Code lives in `metaskill/evaluate/safety/`; each file has its own document in [safety/](safety/README.md), which describes what was built. The `static` tier (Cisco and own checks) is implemented; the LLM review waits on `judge.py`.
+This expands section 3.6 of [evaluate.md](evaluate.md). Code lives in `metaskill/evaluate/safety/`; each file has its own document in [safety/](safety/README.md), which describes what was built. The `static` tier (Cisco and own checks) is implemented. The LLM review (`review.py`) is not built yet; `judge.py`, which it calls, is.
 
 ## 1. Purpose
 
@@ -234,15 +234,13 @@ metaskill/evaluate/safety/
 
 ## 7. Validation
 
-This is how we know the component works, and the numbers go in the final report.
+[The golden dataset](evaluation/golden_dataset.md#safety-finding-annotations) owns safety case format, shared fixture references, review, storage, and versioning. This component owns how detection is run and measured; it does not maintain a second independently annotated validation collection.
 
-Test set, kept small:
+Measure category/location detection rate and false-positive rate per category and tier for Cisco alone, own checks alone, and their combination. Evaluate severity constraints separately from detection. Use the golden design's reviewed positive and negative annotations, matching rules, and explicit denominators; report raw counts and unavailable measurements.
 
-- **Benign controls**: real skills from public repos, expected to produce no findings.
-- **Risky variants**: 3 or 4 real skills, each with one deliberate flaw added. One variant for each of our categories in 2.1, plus one scanner category: unconfirmed `rm -rf`, printed credential, `curl | sh`, hidden instruction, over-broad permissions.
-- **Known-malicious examples**: any that ship with the scanner.
+Existing implementation fixtures, deliberate risky variants, scanner examples, and reviewed real-skill false positives are candidate sources for the shared collection. Pin and review them before using them as gold; do not infer that a public skill is benign or reuse a detector's own output as independent ground truth.
 
-Measured per category, at each tier: detection rate and false-positive rate, for Cisco alone, own checks alone, and the combination.
+Backend and unit tests in section 8 remain implementation tests. Reuse shared fixtures where suitable without duplicating independently maintained gold labels.
 
 ## 8. Testing
 
