@@ -33,10 +33,6 @@ def overall(found, weights=DEFAULT_WEIGHTS):
     return rank_module.overall(found, weights)
 
 
-def weighted_mean(found, weights=DEFAULT_WEIGHTS):
-    return rank_module.weighted_mean(found, weights)
-
-
 def make_scores(dimension_scores):
     return rank_module.make_scores(dimension_scores, CONFIG)
 
@@ -81,15 +77,9 @@ def test_overall_is_none_when_a_dimension_is_missing():
     assert overall({**ALL, Dimension.CLARITY: None}) is None
 
 
-def test_a_missing_dimension_of_weight_zero_does_not_count():
+def test_a_missing_dimension_of_weight_zero_still_means_no_overall():
     weights = {**DEFAULT_WEIGHTS, Dimension.CLARITY: 0}
-    assert overall({**ALL, Dimension.CLARITY: None}, weights) == pytest.approx(0.5)
-
-
-def test_weighted_mean_leaves_missing_dimensions_out():
-    found = {**{d: None for d in Dimension}, Dimension.SAFETY: 1.0, Dimension.QUALITY: 0.0}
-    assert weighted_mean(found) == pytest.approx(4 / 7)
-    assert weighted_mean({d: None for d in Dimension}) is None
+    assert overall({**ALL, Dimension.CLARITY: None}, weights) is None
 
 
 def test_make_scores_from_dimension_scores():
@@ -185,31 +175,30 @@ def test_null_dimension_puts_the_skill_below_every_ranked_one():
     assert [e.result.name for e in ranking.unranked] == ["partial"]
     entry = ranking.unranked[0]
     assert entry.rank is None and entry.overall is None
-    assert entry.partial_overall == pytest.approx(1.0)
     assert entry.missing == [Dimension.CLARITY]
 
 
-def test_unranked_skills_get_a_note_on_how_they_did():
+def test_unranked_skills_get_a_note_on_what_is_missing():
     skipped = DimensionStatus(Status.SKIPPED, detail="no API key")
     entry = rank([
         result("ranked", quality=0.4),
         result("partial", clarity=None, quality=0.9,
                dimensions={Dimension.CLARITY: skipped}),
     ]).unranked[0]
-    note = entry.notes[0]
-    assert note.startswith("Not ranked: no score for clarity (skipped: no API key).")
-    assert "5 scored dimension(s)" in note
-    assert "would place it 1st of 2" in note
-    assert "best: quality (0.90)" in note
+    assert entry.notes == ["Not ranked: no score for clarity (skipped: no API key)."]
 
 
-def test_unranked_skills_are_ordered_among_themselves():
-    ranking = rank([result("x", clarity=None, quality=0.1),
-                    result("y", clarity=None, quality=0.9),
+def test_the_scores_of_an_unranked_skill_are_kept_but_not_averaged():
+    text = table(rank([result("partial", clarity=None, quality=0.9)]))
+    assert "| - | partial | - | 0.90 | 0.50 | - |" in text
+    assert "averages" not in text and "would place" not in text
+
+
+def test_unranked_skills_are_ordered_by_name_not_by_their_scores():
+    ranking = rank([result("y", clarity=None, quality=0.1),
+                    result("x", clarity=None, quality=0.9),
                     result("z", **{d.value: None for d in Dimension})])
-    assert [e.result.name for e in ranking.unranked] == ["y", "x", "z"]
-    assert ranking.unranked[-1].partial_overall is None
-    assert "No dimension was scored" in ranking.unranked[-1].notes[0]
+    assert [e.result.name for e in ranking.unranked] == ["x", "y", "z"]
 
 
 # --- flags and recommendation --------------------------------------------
@@ -260,9 +249,6 @@ def test_recommendation():
     assert rank([]).recommendation == "No skills to rank."
     assert rank([result("a"), result("b", quality=0.1)]).recommendation.startswith(
         "Use a: highest overall (0.50) of 2 ranked skill(s).")
-    only_partial = rank([result("a", clarity=None)]).recommendation
-    assert only_partial.startswith("No skill could be fully ranked")
-    assert "a did best" in only_partial
     low = rank([result("a", safety=0.2)]).recommendation
     assert "safety score is low (0.20)" in low
 
@@ -271,11 +257,20 @@ def test_recommendation_warns_about_lift_of_zero_or_less():
     assert "Its lift is -0.60" in rank([result("a", lift=-0.6)]).recommendation
     assert "Its lift is +0.00" in rank([result("a", lift=0.0)]).recommendation
     assert "lift" not in rank([result("a", lift=0.2)]).recommendation
-    # Without quality, lift was not measured, so it says nothing.
-    no_quality = rank([result("a", lift=0.0, quality=None)]).recommendation
-    assert "did best" in no_quality and "lift" not in no_quality
-    best_unranked = rank([result("a", lift=-0.2, clarity=None)]).recommendation
-    assert "Its lift is -0.20" in best_unranked
+
+
+def test_no_winner_is_named_when_every_skill_is_incomplete():
+    incomplete = rank([result("alpha", clarity=None, quality=1.0),
+                       result("beta", safety=None, lift=-0.5)])
+    assert not incomplete.ranked
+    assert incomplete.recommendation.startswith("No complete overall comparison")
+    assert "alpha" not in incomplete.recommendation
+    assert "beta" not in incomplete.recommendation
+
+
+def test_complete_skills_are_recommended_over_incomplete_ones():
+    mixed = rank([result("low", quality=0.1), result("high", clarity=None, quality=1.0)])
+    assert mixed.recommendation.startswith("Use low")
 
 
 # --- untrusted text and invalid input ------------------------------------
@@ -362,11 +357,11 @@ def test_default_weights_are_read_only():
         DEFAULT_WEIGHTS[Dimension.SAFETY] = 0  # type: ignore[index]
 
 
-def test_weight_zero_dimensions_are_left_out_of_the_note():
+def test_a_weight_zero_dimension_without_a_score_is_in_the_note():
     weights = {**{d: 1 for d in Dimension}, Dimension.CLARITY: 0}
-    note = rank([result("z", efficiency=None, clarity=0.0)], weights).unranked[0].notes[0]
-    assert "On the 4 scored dimension(s)" in note
-    assert "clarity" not in note
+    entry = rank([result("z", clarity=None)], weights).unranked[0]
+    assert entry.missing == [Dimension.CLARITY]
+    assert "clarity" in entry.notes[0]
 
 
 def test_make_scores_and_rank_agree_on_overall():
@@ -383,6 +378,6 @@ def test_table():
     assert lines[0] == ("| Rank | Skill | Overall | Quality | Robustness | Clarity "
                         "| Config Cleanliness | Efficiency | Safety |")
     assert lines[2].startswith("| 1 | good | 0.58 | 0.90 |")
-    assert lines[3] == "| - | partial | (0.50) | 0.50 | 0.50 | - | 0.50 | 0.50 | 0.50 |"
+    assert lines[3] == "| - | partial | - | 0.50 | 0.50 | - | 0.50 | 0.50 | 0.50 |"
     assert "Notes:" in lines
     assert lines[-1].startswith("Recommendation: Use good")

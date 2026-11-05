@@ -2,7 +2,8 @@
 
 overall is a weighted mean of the six dimensions (weights in EvaluationConfig). A skill
 with a dimension that scored None (skipped or failed) has no overall: it is not ranked,
-but listed below the ranked skills with a note on how it did on what was scored.
+but listed below the ranked skills with the scores it has and a note on what is missing.
+Those scores are never averaged into a stand-in for overall.
 
 Skill names, finding locations and status details come from the skill or its backends,
 so they are cleaned before they are printed: a name must not be able to add a row to the
@@ -77,9 +78,6 @@ class RankedSkill:
     result: SkillResult
     rank: int | None  # 1..k for ranked skills; None when not ranked
     overall: float | None  # None exactly when rank is None
-    # Weighted mean over the dimensions that were scored, for skills that are not
-    # ranked; None if nothing was scored. Equal to overall for ranked skills.
-    partial_overall: float | None
     missing: list[Dimension] = field(default_factory=list)  # dimensions scored None
     notes: list[str] = field(default_factory=list)
 
@@ -112,35 +110,20 @@ def values(scores: Scores) -> dict[Dimension, float | None]:
     return {d: getattr(scores, d.value) for d in Dimension}
 
 
-def weighted_mean(dimension_values: Mapping[Dimension, float | None],
-                  weights: Mapping[Dimension, float]) -> float | None:
-    """Weighted mean of the dimensions that have a value; None if none of weight > 0 has.
-
-    Dimensions without a value are left out of both the sum and the weight total, so
-    this is the partial overall of a skill that is not ranked.
-    """
-    total = weight_sum = 0.0
-    for dimension, value in dimension_values.items():
-        weight = weights.get(dimension, 0.0)
-        if value is None or weight == 0:
-            continue
-        total += weight * value
-        weight_sum += weight
-    if weight_sum == 0:
-        return None
-    return min(1.0, max(0.0, total / weight_sum))
-
-
 def overall(dimension_values: Mapping[Dimension, float | None],
             weights: Mapping[Dimension, float]) -> float | None:
-    """overall of a skill: the weighted mean, or None if any dimension has no value.
-
-    A dimension of weight 0 does not count, so its missing value does not either.
-    """
+    """overall of a skill: the weighted mean of all six dimensions, or None if any of
+    them has no value, whatever its weight. The rest are not averaged instead: a mean
+    over fewer dimensions is a different assessment (evaluate.md 2.1)."""
+    total = weight_sum = 0.0
     for dimension in Dimension:
-        if weights.get(dimension, 0.0) > 0 and dimension_values.get(dimension) is None:
+        value = dimension_values.get(dimension)
+        if value is None:
             return None
-    return weighted_mean(dimension_values, weights)
+        weight = weights.get(dimension, 0.0)
+        total += weight * value
+        weight_sum += weight
+    return min(1.0, max(0.0, total / weight_sum))
 
 
 def make_scores(dimension_scores: Mapping[Dimension, DimensionScore],
@@ -161,8 +144,8 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
     overall is recomputed from the dimension scores, so it is always the one of these
     weights, the same as make_scores gives with the same config. Ranked skills come
     first, ordered by overall, then lift, then the dimensions in TIE_BREAK, then name.
-    Skills with a missing dimension follow, ordered the same way by their partial
-    overall. The same input always gives the same order.
+    Skills with a missing dimension follow, ordered by name: their scores do not compare,
+    so that order says nothing about them. The same input always gives the same order.
     """
     weights = config.weights
     check_weights(weights)
@@ -175,14 +158,12 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
             result=result,
             rank=None,
             overall=score,
-            partial_overall=weighted_mean(found, weights),
-            missing=[d for d in Dimension
-                     if found[d] is None and weights.get(d, 0.0) > 0],
+            missing=[d for d in Dimension if found[d] is None],
         )
         (ranked if score is not None else unranked).append(entry)
 
     ranked.sort(key=lambda e: _order(e, e.overall))
-    unranked.sort(key=lambda e: _order(e, e.partial_overall))
+    unranked.sort(key=lambda e: (str(e.result.name), _order(e, None)))
     for i, entry in enumerate(ranked, start=1):
         entry.rank = i
     # Partial safety only makes a score incomparable when other skills here were
@@ -190,7 +171,7 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
     statuses = {_safety_status(r) for r in results} & {Status.OK, Status.PARTIAL}
     mixed = len(statuses) == 2
     for entry in ranked + unranked:
-        entry.notes = _notes(entry, ranked, weights, mixed)
+        entry.notes = _notes(entry, mixed)
     notes = []
     if statuses == {Status.PARTIAL}:
         notes.append("Safety is partial for every skill with a safety score (e.g. a "
@@ -218,12 +199,11 @@ def _desc(value: float | None) -> tuple[int, float]:
     return (0, -round(value, _DECIMALS))
 
 
-def _notes(entry: RankedSkill, ranked: list[RankedSkill],
-           weights: Mapping[Dimension, float], mixed: bool) -> list[str]:
+def _notes(entry: RankedSkill, mixed: bool) -> list[str]:
     result = entry.result
     notes: list[str] = []
     if not entry.ranked:
-        notes.append(_unranked_note(entry, ranked, weights))
+        notes.append(_unranked_note(entry))
     if mixed and _safety_status(result) is Status.PARTIAL:
         detail = clean(result.dimensions[Dimension.SAFETY].detail, MAX_TEXT_CHARS)
         detail = f" ({detail})" if detail else ""
@@ -246,42 +226,14 @@ def _critical(result: SkillResult) -> list[Finding]:
             if f.dimension is Dimension.SAFETY and f.severity is Severity.CRITICAL]
 
 
-def _unranked_note(entry: RankedSkill, ranked: list[RankedSkill],
-                   weights: Mapping[Dimension, float]) -> str:
-    """How a skill that is not ranked did on the dimensions that were scored."""
+def _unranked_note(entry: RankedSkill) -> str:
+    """Why a skill is not ranked: its missing dimensions, with status and detail."""
     statuses = entry.result.dimensions
     why = ", ".join(
         f"{d.value} ({statuses[d].status}: {clean(statuses[d].detail, MAX_TEXT_CHARS)})"
         if d in statuses and statuses[d].detail else d.value
         for d in entry.missing)
-    note = f"Not ranked: no score for {why}."
-    if entry.partial_overall is None:
-        return note + " No dimension was scored."
-    found = values(entry.result.scores)
-    # Only dimensions that count: one of weight 0 is not in the mean either.
-    scored = {d: v for d, v in found.items()
-              if v is not None and weights.get(d, 0.0) > 0}
-    best = max(scored, key=lambda d: (scored[d], -TIE_BREAK.index(d)))
-    worst = min(scored, key=lambda d: (scored[d], TIE_BREAK.index(d)))
-    note += (f" On the {len(scored)} scored dimension(s) it averages "
-             f"{entry.partial_overall:.2f}")
-    # Where it would stand among the ranked skills on that average. Only indicative:
-    # the ranked skills' overall also counts the dimensions this one is missing.
-    mine = round(entry.partial_overall, _DECIMALS)
-    above = sum(1 for e in ranked
-                if e.overall is not None and round(e.overall, _DECIMALS) > mine)
-    if ranked:
-        note += f", which would place it {_ordinal(above + 1)} of {len(ranked) + 1}"
-    note += f"; best: {best.value} ({scored[best]:.2f}), worst: {worst.value} ({scored[worst]:.2f})."
-    return note
-
-
-def _ordinal(n: int) -> str:
-    if 10 <= n % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
+    return f"Not ranked: no score for {why}."
 
 
 def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
@@ -297,22 +249,15 @@ def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
         elif safety is not None and safety < LOW_SAFETY:
             text += f" Its safety score is low ({safety:.2f}); check its findings first."
         return text + _lift_warning(top)
-    candidates = [e for e in unranked if e.partial_overall is not None]
-    if candidates:
-        best = candidates[0]
-        return (f"No skill could be fully ranked. On the dimensions that were scored, "
-                f"{best.name} did best ({best.partial_overall:.2f}); "
-                f"rerun with the missing dimensions before relying on it."
-                + _lift_warning(best))
-    if unranked:
-        return "No skill could be ranked: no dimension was scored."
+    if unranked:  # no winner from an incomplete assessment (evaluate.md 2.1)
+        return ("No complete overall comparison was available, so no skill is "
+                "recommended. The notes say which dimensions each skill is missing.")
     return "No skills to rank."
 
 
 def _lift_warning(entry: RankedSkill) -> str:
-    """A skill no better than no skill adds no value (evaluate.md 4.1). Lift means
-    nothing without quality, which comes from the same runs, so it is only read then."""
-    if values(entry.result.scores)[Dimension.QUALITY] is None or entry.result.lift > 0:
+    """A skill no better than no skill adds no value (evaluate.md 4.1)."""
+    if entry.result.lift > 0:
         return ""
     return (f" Its lift is {entry.result.lift:+.2f}: on the tasks it does no better than "
             "having no skill.")
@@ -322,21 +267,17 @@ def table(ranking: Ranking) -> str:
     """The terminal table of evaluate.md section 2, followed by the notes and the
     recommendation.
 
-    Skills that are not ranked show `-` as their rank, their partial overall in
-    parentheses, and `-` for each dimension without a score. Names, notes and the
-    recommendation are escaped (_escape), so the output is safe to render as Markdown.
+    Skills that are not ranked show `-` as their rank and overall, and for each dimension
+    without a score. Names, notes and the recommendation are escaped (_escape), so the
+    output is safe to render as Markdown.
     """
     head = ["Rank", "Skill", "Overall", *(HEADINGS[d] for d in COLUMNS)]
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     for entry in ranking.entries:
         found = values(entry.result.scores)
-        if entry.ranked:
-            place, score = str(entry.rank), _cell(entry.overall)
-        else:
-            place = "-"
-            score = "-" if entry.partial_overall is None else f"({entry.partial_overall:.2f})"
+        place = str(entry.rank) if entry.ranked else "-"
         name = _escape(entry.name).replace("|", "\\|")
-        row = [place, name, score, *(_cell(found[d]) for d in COLUMNS)]
+        row = [place, name, _cell(entry.overall), *(_cell(found[d]) for d in COLUMNS)]
         lines.append("| " + " | ".join(row) + " |")
     notes = [*ranking.notes,
              *(f"{e.name}: {note}" for e in ranking.entries for note in e.notes)]
