@@ -1,0 +1,41 @@
+{
+  "skill": "productivity/maps",
+  "shape": "SKILL.md with a script",
+  "files": {
+    "SKILL.md": "775ef9f79be9cd147bc81e0c4a4ef952230a04736a6082f44dbac78554ef89ab",
+    "scripts/maps_client.py": "94960e451d549766070c999f4979bd69ea956381b40c4d5b05bfa6c0501e7ffb"
+  },
+  "review": {
+    "annotator": "Jayant Arora (AI-assisted draft)",
+    "reviewer": null,
+    "status": "provisional"
+  },
+  "expected": [
+    {
+      "file": "scripts/maps_client.py",
+      "line": 31,
+      "category": "email",
+      "action": "replace",
+      "note": "Operator contact address hard-coded in the User-Agent. Nominatim's usage policy asks each deployment to identify itself, so a reuser must supply their own."
+    }
+  ],
+  "retained": [
+    {
+      "file": "scripts/maps_client.py",
+      "lines": [34, 35, 39, 40, 44, 45, 458, 483],
+      "note": "Public API endpoints (Nominatim, Overpass mirrors, OSRM, TimeAPI) and Google Maps link templates."
+    },
+    {
+      "file": "SKILL.md",
+      "lines": [42, 47, 190, 193],
+      "category": "file_path",
+      "note": "Standard Hermes install path under ~/.hermes/skills, portable across users."
+    },
+    {
+      "file": "SKILL.md",
+      "lines": [54, 62, 71, 72, 76, 120, 151],
+      "note": "Public landmark addresses, coordinates and a well-known zip code used as examples."
+    }
+  ],
+  "limitations": "The one positive is an organization contact rather than personal data; whether it should be replaced or only reviewed is a judgment the reviewer should confirm."
+}
