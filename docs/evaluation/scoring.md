@@ -23,7 +23,7 @@ Existing design choices include:
 - Safety uses findings and preserves evidence; a critical finding does not remove a skill from ranking.
 - Rankings are evaluated fresh; historical reports are not reused as current scores.
 
-The null-ranking policy below reflects agreement in the team discussion and is incorporated into the accompanying revision of `evaluate.md`. Numeric formulas and thresholds remain proposals unless explicitly attributed to the existing designs.
+The null-ranking policy below reflects agreement in the team discussion, is incorporated into the accompanying revision of `evaluate.md`, and is implemented in `rank.py`. The overall weights in `evaluate.md`, section 5.1, are in use but remain open. Other numeric formulas and thresholds remain proposals unless explicitly attributed to the existing designs.
 
 Safety-specific categories, backend behaviour, severity mappings, and safety validation belong to `evaluate-safety.md`. This document consumes the resulting Safety score and status; it does not maintain a second safety specification.
 
@@ -301,33 +301,33 @@ Critical findings do not independently remove a skill from ranking under the cur
 
 ## Overall Score and Ranking
 
-### Proposed aggregation
+### Aggregation
 
-**[PROPOSED]** Start with an equal-weight arithmetic mean:
+Overall is the weighted mean of [the evaluation design](../evaluate.md), section 5.1, implemented in [`rank.py`](../evaluate/rank.md). **[OPEN]** The current weights set the priority safety > quality and robustness > clarity and efficiency > configuration cleanliness, and may still change:
 
 ```text
-Overall = (Q + R + C + K + E + S) / 6
+Overall = (4S + 3Q + 3R + 2C + 2E + K) / 15
 ```
 
-Equal weights are a reviewable starting point, not a claim that dimensions are interchangeable. Always display the six component scores, pass rate, lift, and dimension statuses.
+The weights are relative: they are divided by their sum, so only their ratios matter. They live in `EvaluationConfig.weights` and are part of the config hash, so a report records which weights produced it. Always display the six component scores, pass rate, lift, and dimension statuses.
 
 A mean allows a high score in one dimension to offset a low score in another. In particular, a critical safety finding can coexist with a high overall score. Preserve that visibility; do not quietly add a safety gate that contradicts the current ranking design.
 
 ### Missing and partial dimensions
 
-**[TEAM DISCUSSION AGREEMENT — DOCUMENTED POLICY, IMPLEMENTATION PENDING]** If any of the six dimensions is null, overall is null and the skill is unranked. This reflects the reviewer and teammate discussion and the accompanying revision of `evaluate.md`. It specifies intended aggregation behaviour; the current model classes permit null values but do not implement ranking.
+**[DECIDED — TEAM DISCUSSION AGREEMENT, IMPLEMENTED]** If any of the six dimensions is null, overall is null and the skill is unranked, whatever that dimension's weight. This reflects the reviewer and teammate discussion and the accompanying revision of `evaluate.md`, and is implemented in [`rank.py`](../evaluate/rank.md).
 
 Do not replace null with zero or renormalize the available dimensions. Such overall scores would represent different assessments. Preserve all available dimension scores, statuses, reasons, and evidence so the user can still make an informed decision.
 
 If every submitted skill is missing at least one dimension, report every skill as unranked. State that no complete overall comparison was available and identify the missing dimensions for each skill. Do not declare an overall winner from an incomplete assessment.
 
-If some skills are complete, rank those eligible skills and display incomplete skills as unranked in the same report.
+If some skills are complete, rank those eligible skills and display incomplete skills as unranked in the same report, below the ranked ones. Unranked skills are ordered by name, since their scores do not compare with each other.
 
 A partial but numeric Safety result remains ranked and flagged under the current evaluation design. Other partial results require a documented scoring rule. Do not treat `partial` as permission to invent a replacement score.
 
 ### Ties and recommendations
 
-**[PROPOSED]** Complete the tie-breaking order as:
+`rank.py` breaks ties in this order, with the dimensions in weight order:
 
 1. Overall.
 2. Lift.
@@ -335,10 +335,12 @@ A partial but numeric Safety result remains ranked and flagged under the current
 4. Quality.
 5. Robustness.
 6. Clarity.
-7. Configuration Cleanliness.
-8. Efficiency.
+7. Efficiency.
+8. Configuration Cleanliness.
 
-Use the same underlying precision throughout. Skills still tied after all numeric criteria share a rank; sort names only for stable presentation, not to imply superiority.
+Use the same underlying precision throughout. `rank.py` compares scores rounded to 9 decimal places.
+
+Skills still tied after all numeric criteria share a rank, and the next place is skipped (1, 1, 3). Names are sorted only for stable presentation, not to imply superiority. If the first place is tied, a recommendation names every tied skill rather than picking one.
 
 A recommendation should explain task fit and material weaknesses, not simply repeat rank one. Flag critical findings and partial assessments. How strongly such findings restrict recommendations remains open and is separate from retaining a skill in the ranking.
 
@@ -359,9 +361,10 @@ Suppose a run yields:
 Then:
 
 ```text
-Overall = (0.68 + 0.90 + 0.80 + 0.75 + 0.60 + 0.90) / 6
-        = 0.771666...
-Displayed overall = 0.772
+Overall = (4 × 0.90 + 3 × 0.68 + 3 × 0.90 + 2 × 0.80 + 2 × 0.60 + 0.75) / 15
+        = 11.89 / 15
+        = 0.792666...
+Displayed overall = 0.793
 ```
 
 The other dimension values are illustrative outputs, not labels assigned to an actual skill.
@@ -432,10 +435,10 @@ Calibrate judge anchors against independently reviewed golden cases. Real agent 
 | Configuration Cleanliness | Four equally weighted, stage-aware properties. |
 | Efficiency | Formula and success-conditioning remain open; compare alternatives before selecting eligibility or coverage rules. |
 | Safety | Consume the score and status defined by the teammate-owned safety design; no separate mapping here. |
-| Overall formula | Equal arithmetic mean remains proposed. |
-| Null handling | Team discussion agrees: any null means null overall and unranked; retain all available results. Documented in the accompanying `evaluate.md` revision; implementation pending. |
+| Overall formula | Open: weighted mean, currently with safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1 (`evaluate.md` 5.1). The weights may still change. |
+| Null handling | Decided in team discussion: any null means null overall and unranked; retain all available results. Documented in the accompanying `evaluate.md` revision; implemented in `rank.py`. |
 | Partial Safety | Preserve current numeric, flagged fallback behaviour; clarify conflicting static-only wording with the safety-design owner. |
-| Ties | Complete the existing precedence; share ranks after all numeric ties. |
+| Ties | Decided: precedence with dimensions in weight order, and a shared rank after all numeric ties; implemented in `rank.py`. |
 | Invalid judge output | One bounded retry, then evaluation error; distinct from rerunning the agent. |
 | Transient runtime infrastructure failure | Proposed two additional attempts per logical run, fixed in advance; retain all logs and never retry valid task failure. |
 

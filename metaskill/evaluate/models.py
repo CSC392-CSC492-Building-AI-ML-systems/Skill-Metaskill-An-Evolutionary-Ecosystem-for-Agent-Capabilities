@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 import re
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 # Used for both the run folder name and meta.timestamp, e.g. 2026-10-14-T15-30-02.
 TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
@@ -73,6 +75,33 @@ class Status(StrEnum):
     PARTIAL = "partial"  # ran with less than was asked for, e.g. a fallback
     SKIPPED = "skipped"  # not run, e.g. no API key
     ERROR = "error"
+
+
+# Weight of each dimension in overall (evaluate.md 5.1): safety first, then quality and
+# robustness, then clarity and efficiency, then configuration cleanliness. Read-only, so
+# no caller can change the defaults of every other one.
+DEFAULT_WEIGHTS: Mapping[Dimension, float] = MappingProxyType({
+    Dimension.SAFETY: 4,
+    Dimension.QUALITY: 3,
+    Dimension.ROBUSTNESS: 3,
+    Dimension.CLARITY: 2,
+    Dimension.EFFICIENCY: 2,
+    Dimension.CONFIG_CLEANLINESS: 1,
+})
+
+
+def check_weights(weights: Mapping[Dimension, float]) -> None:
+    """Raise ValueError unless every weight is a number >= 0 and finite, and one is
+    above 0."""
+    for dimension, weight in weights.items():
+        # A weight from a JSON or YAML config can be text or true/false.
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            raise ValueError(f"weights[{dimension}] must be a number, got {weight!r}")
+        if not 0.0 <= weight < math.inf:
+            raise ValueError(
+                f"weights[{dimension}] must be >= 0 and finite, got {weight}")
+    if not sum(weights.values()) > 0:
+        raise ValueError("at least one weight must be above 0")
 
 
 def _check_unit(name: str, value: float) -> None:
@@ -144,10 +173,11 @@ class EvaluationConfig:
     # Characters of a skill the judge is sent; larger skills are cut (judge.md 2.3).
     judge_max_chars: int = 100_000
     safety_tier: SafetyTier = SafetyTier.STATIC
-    # [OPEN] weighting of overall (evaluate.md, open question 1). Equal weights for now.
+    # Relative weight of each dimension in overall (evaluate.md 5.1); overall divides by
+    # their sum. A dimension left out weighs 0.
     weights: dict[Dimension, float] = field(
-        default_factory=lambda: {d: 1 / len(Dimension) for d in Dimension})
-    # [OPEN] truncation length for TestResult.output (evaluate.md, section 2.1).
+        default_factory=lambda: dict(DEFAULT_WEIGHTS))
+    # Characters of the agent's output kept in TestResult.output; the log has it all.
     output_max_chars: int = 2000
     # Size of each run's folder in the sandbox (runner.md 2.6); fixtures must fit too.
     sandbox_disk: str = "16m"
@@ -170,8 +200,7 @@ class EvaluationConfig:
             # The folder is in memory, so a larger one could never be filled.
             raise ValueError(f"sandbox_disk must be under the sandbox's memory limit of "
                              f"{SANDBOX_MEMORY}, got {self.sandbox_disk}")
-        for dimension, weight in self.weights.items():
-            _check_unit(f"weights[{dimension}]", weight)
+        check_weights(self.weights)
 
     def hash(self) -> str:
         """Hash of the settings that affect scores; becomes ReportMeta.config.
@@ -569,8 +598,8 @@ class DimensionStatus:
 class Scores:
     """Return type of the overall scoring function.
 
-    None means the dimension was skipped or failed. [OPEN] how overall treats it
-    (evaluate.md, section 2.1).
+    None means the dimension was skipped or failed. overall is then None too, and the
+    skill is listed below the ranked ones (evaluate.md 5.2). Built by rank.make_scores.
     """
 
     overall: float | None
@@ -656,6 +685,11 @@ class SkillResult:
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
+
+    def __post_init__(self) -> None:
+        # Also refuses NaN, which would make the ranking's order depend on input order.
+        if not -1.0 <= self.lift <= 1.0:
+            raise ValueError(f"lift must be in [-1, 1], got {self.lift}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
