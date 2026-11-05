@@ -584,7 +584,7 @@ def host_runner(command, workdir, timeout):
     """Runs on this machine, so only for the tests' own commands, never a skill's."""
     try:
         result = subprocess.run(command, shell=True, cwd=workdir, capture_output=True,
-                                text=True, timeout=timeout)
+                                stdin=subprocess.DEVNULL, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, ""
     return result.returncode, result.stderr
@@ -631,6 +631,12 @@ def test_exit_code_runs_through_the_given_runner(tmp_path):
     verdict = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "python test.py"), run_in(tmp_path))
     assert calls == [("python test.py", tmp_path, 5)]
     assert not verdict.passed and verdict.reason.endswith("exited 2, expected 0: boom")
+
+
+def test_exit_code_stderr_is_stored_as_plain_text(tmp_path):
+    j = DeterministicJudge(run_command=lambda *args: (1, "line one\nline​ two\n"))
+    verdict = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "x"), run_in(tmp_path))
+    assert verdict.reason.endswith("exited 1, expected 0: line one line two")
 
 
 def test_exit_code_rejects_non_integer_expected(tmp_path):

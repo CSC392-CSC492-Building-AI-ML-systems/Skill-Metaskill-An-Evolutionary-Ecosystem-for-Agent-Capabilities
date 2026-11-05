@@ -29,7 +29,12 @@ class Dependency:
 
     backend: str
     package: str
-    install_command: str
+    install_command: str  # "" when the user has to install it by hand (install_url)
+    # Required: evaluate does not run without it. Otherwise it only runs with less, as
+    # safety does without Cisco's scanner.
+    required: bool = False
+    install_url: str = ""  # where to get it, when no command installs it
+    reason: str = ""  # what is wrong, e.g. "Docker is not usable: ..."
 
 
 def score(skill: Skill, config: EvaluationConfig,
