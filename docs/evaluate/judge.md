@@ -91,7 +91,7 @@ Behaviour to be aware of:
   - No stdin, and only the tail of stdout and stderr kept, read in memory as it comes, so no output can fill memory or disk. Reading has a deadline, so a leftover child process holding a pipe open cannot make it hang.
   - On timeout, the command is killed, and background processes it leaves behind are killed when the run's workspace is closed. Return `None` as the exit code on timeout.
 - **`output_matches` searches with a time limit.** The regex is the task author's, but the text is shaped by the skill, and some regexes take exponential time on crafted text (`^(a+)+$` on forty `a`s and a `b`). Python's `re` cannot be stopped, so the search runs in a separate `python -I` process that is killed after `regex_timeout`. The pattern and text are passed to it as JSON data, never as code. A search that times out fails the check, with the reason; it is not a `JudgeError`, which would let a skill leave itself unscored.
-- An `exit_code` command that runs past `timeout` counts as a failed check, not an error. If the command fails, the last 200 characters of its stderr are added to `reason`.
+- An `exit_code` command that runs past `timeout` counts as a failed check, not an error. The timeout is measured where the command runs, so the sandbox's own overhead cannot turn a command that finished into one that timed out ([runner.md](runner.md) 2.6). If the command fails, the last 200 characters of its stderr are added to `reason`.
 - A check that cannot be evaluated as written raises `JudgeError`. Examples: an invalid regex, a non-integer `expected` exit code, or an empty `target`. Such an error means the task is broken, not that the skill failed.
 
 ### 1.4 LLM checklist judging

@@ -16,7 +16,7 @@ hermes plugins enable metaskill
 docker pull python:3.12-slim@sha256:e70237b264442328526ff29d6b3c43bd8abcf6cbab78a949322fb69b7d91d6b6
 ```
 
-`generalize` does not need Docker. If something is missing, the plugin lists it before evaluating ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
+`evaluate` also needs Python 3.12.11, 3.13.4 or later. `generalize` does not need Docker. If something is missing, the plugin lists it before evaluating ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
 
 ## Layout
 

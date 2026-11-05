@@ -9,6 +9,7 @@ into the agent's folder, so one outside it could hand the agent any of the user'
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -85,12 +86,21 @@ def _fixture(root: Path, fixture: Path, where: str) -> Path:
         raise TaskError(f"{where}: fixture {fixture} is outside the task file's folder")
     if not resolved.exists():
         raise TaskError(f"{where}: fixture {fixture} does not exist")
-    # Copying follows links, so a link in a fixture folder must not lead out of it. A
-    # hard link cannot be told apart from a file outside, so it is refused too.
+    # A link in a fixture folder is copied as a link (sandbox._archive), so it must not
+    # lead out of the folder, and must still work in the container, where only the
+    # fixture is. A hard link cannot be told apart from a file outside, so it is refused.
     for path in [resolved, *(resolved.rglob("*") if resolved.is_dir() else [])]:
-        if not path.resolve().is_relative_to(root):
+        target = path.resolve()
+        if not target.is_relative_to(root):
             raise TaskError(f"{where}: fixture {fixture} links to a file outside the "
                             "task file's folder")
+        if path.is_symlink():
+            written = os.readlink(path)
+            if (not target.is_relative_to(resolved) or not target.exists()
+                    or os.path.isabs(written) or "\\" in written):
+                raise TaskError(f"{where}: {path.name} in fixture {fixture} would be a "
+                                "broken link in the sandbox: it must be relative, with "
+                                "`/`, and lead to a file in the same fixture")
         if path.is_file() and path.stat().st_nlink > 1:
             raise TaskError(f"{where}: fixture {fixture} has a hard link, so it may be a "
                             "file outside the task file's folder")

@@ -82,6 +82,39 @@ def test_link_in_a_fixture_folder_leading_out_is_refused(folder):
         load_tasks(write(folder, [{**TASK, "fixtures": ["files"]}]))
 
 
+def link(path, target):
+    try:
+        path.symlink_to(target)
+    except OSError:
+        pytest.skip("this system cannot make symlinks")
+
+
+def test_link_inside_a_fixture_folder_is_allowed(folder):
+    link(folder / "files" / "link", "a.txt")
+    [task] = load_tasks(write(folder, [{**TASK, "fixtures": ["files"]}]))
+    assert task.fixtures == [(folder / "files").resolve()]
+
+
+def test_link_to_a_file_in_another_fixture_folder_is_refused(folder):
+    # In the task file's folder, but only the fixture reaches the sandbox: it would dangle.
+    link(folder / "files" / "link", "../other/a.txt")
+    with pytest.raises(TaskError, match="broken link in the sandbox"):
+        load_tasks(write(folder, [{**TASK, "fixtures": ["files"]}]))
+
+
+def test_absolute_link_in_a_fixture_folder_is_refused(folder):
+    # Inside the fixture here, but that path does not exist in the sandbox.
+    link(folder / "files" / "link", (folder / "files" / "a.txt").resolve())
+    with pytest.raises(TaskError, match="broken link in the sandbox"):
+        load_tasks(write(folder, [{**TASK, "fixtures": ["files"]}]))
+
+
+def test_broken_link_in_a_fixture_folder_is_refused(folder):
+    link(folder / "files" / "link", "missing.txt")
+    with pytest.raises(TaskError, match="broken link in the sandbox"):
+        load_tasks(write(folder, [{**TASK, "fixtures": ["files"]}]))
+
+
 def test_hard_linked_fixture_is_refused(folder):
     try:
         (folder / "files" / "key").hardlink_to(folder.parent / "outside.txt")

@@ -24,8 +24,8 @@ def require_dependencies(sandbox: DockerSandbox | None = None) -> None: ...  # r
 
 | Field | Meaning |
 |---|---|
-| `backend` | `sandbox` for Docker and its image, `cisco` for the scanner |
-| `package` | What is missing: `Docker`, the image name, or the pip package |
+| `backend` | `sandbox` for Python, Docker and its image, `cisco` for the scanner |
+| `package` | What is missing: `Python`, `Docker`, the image name, or the pip package |
 | `install_command` | A command the agent can run with the user's OK; `""` if the user installs it by hand |
 | `required` | `True`: evaluate does not run without it. `False`: it runs with less |
 | `install_url` | Where to get it, when no command installs it |
@@ -36,6 +36,7 @@ def require_dependencies(sandbox: DockerSandbox | None = None) -> None: ...  # r
 | Docker not installed (`not-installed`) | `Docker` (by hand, `install_url`), then the image (`docker pull python:3.12-slim@sha256:...`, pinned in `sandbox.DEFAULT_IMAGE`) | Yes |
 | Docker installed but not answering or refusing access (`not-running`) | `Docker`, with Docker's own message as `reason`. The user starts Docker, or on Linux gets access to its socket | Yes |
 | Image not pulled (`no-image`) | The image, with its `docker pull` command | Yes |
+| Python too old for tarfile's fixes (`old-python`) | `Python`, by hand (`install_url`). Needs 3.12.11, 3.13.4 or later ([runner.md](runner.md) 2.6). Checked first, so Docker is listed only once this is solved | Yes |
 | Cisco's scanner not installed | `cisco-ai-skill-scanner`, with its `pip install` command | No: safety is scored by our own checks only, as `partial` |
 
 When Docker is not installed, the image is listed too, so the user sees both steps at once instead of one per attempt.

@@ -34,7 +34,7 @@ from .judge import (
 )
 from .models import (
     EvaluationConfig, JudgeType, Metrics, Skill, Task, TestResult, Variant)
-from .sandbox import DockerSandbox, Sandbox, Workspace
+from .sandbox import DockerSandbox, RunFailed, Sandbox, Workspace
 from .tasks import SAFE_NAME, load_tasks
 
 VARIANTS = (Variant.WITH_SKILL, Variant.BASELINE)
@@ -128,9 +128,9 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
                 try:
                     result.tests.append(
                         _run_once(skill, task, variant, n, agent, pool, config, run_dir))
-                # JudgeError also covers a workspace that could not be made or copied
-                # out. OSError: writing the log failed. Either costs this run, not the
-                # runs already made.
+                # JudgeError also covers a workspace that could not be made, or Docker
+                # failing. OSError: writing the log failed. Either costs this run, not
+                # the runs already made.
                 except (JudgeError, JudgeUnavailable, OSError) as e:
                     result.errors.append(f"{label}: {type(e).__name__}: {e}")
 
@@ -145,17 +145,24 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
     """One session in a fresh workspace, judged against every check of the task."""
     workspace = pool.sandbox.open(task.fixtures)
     left_out: list[str] = []
+    run, failure = AgentRun(output=""), ""
     try:
         if variant is Variant.WITH_SKILL:
             # Before the clock: copying is not the agent's time.
-            left_out = _put_skill(skill, workspace)
+            try:
+                left_out = _put_skill(skill, workspace)
+            except RunFailed as e:  # too large: it fails, rather than go unscored
+                failure = str(e)
         start = time.monotonic()
-        try:
-            run = agent.run(task.prompt, skill if variant is Variant.WITH_SKILL else None,
-                            workspace)
-            failure = ""
-        except Exception as e:  # the agent failing is an outcome, not a runner error
-            run, failure = AgentRun(output=""), f"agent failed: {type(e).__name__}: {e}"
+        if not failure:
+            try:
+                run = agent.run(task.prompt,
+                                skill if variant is Variant.WITH_SKILL else None, workspace)
+            except Exception as e:  # the agent failing is an outcome, not a runner error
+                # Unless it failed because Docker did, reached through the workspace.
+                if isinstance(e, JudgeError) and not isinstance(e, RunFailed):
+                    raise
+                failure = f"agent failed: {type(e).__name__}: {e}"
         seconds = time.monotonic() - start
 
         if failure:
@@ -214,13 +221,16 @@ def _put_skill(skill: Skill, workspace: Workspace) -> list[str]:
 def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Verdict:
     """Every check of the task on the run. The judges read a copy of the workspace's
     folder, made once, before any check runs; `exit_code` commands run in the workspace
-    itself, where the agent ran."""
+    itself, where the agent ran. A run that broke its workspace fails: it is not left
+    out, or a skill could leave itself unscored."""
     workdir = Path(tempfile.mkdtemp(prefix=f"metaskill-{task.task_id}-"))
     try:
         workspace.export(workdir)
         output = RunOutput(text=run.output, workdir=workdir)
         pool.workspace = workspace
         return _combine([pool.get(c.judge).judge(task, c, output) for c in task.checks])
+    except RunFailed as e:
+        return Verdict(passed=False, score=0.0, reason=str(e), evidence=None)
     finally:
         pool.workspace = None
         shutil.rmtree(workdir, ignore_errors=True)

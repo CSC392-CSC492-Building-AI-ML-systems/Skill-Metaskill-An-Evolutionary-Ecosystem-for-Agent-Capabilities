@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from . import safety
 from .safety import Dependency
-from .sandbox import DOCKER_INSTALL_URL, DockerSandbox, Problem
+from .sandbox import DOCKER_INSTALL_URL, PYTHON_INSTALL_URL, DockerSandbox, Problem
 
 SANDBOX = "sandbox"  # Dependency.backend of Docker and its image
 
@@ -48,6 +48,9 @@ def _sandbox(sandbox: DockerSandbox) -> list[Dependency]:
     if problem is None:
         return []
     kind, reason = problem
+    if kind is Problem.OLD_PYTHON:  # checked first, so Docker's state is not known yet
+        return [Dependency(SANDBOX, "Python", "", required=True, reason=reason,
+                           install_url=PYTHON_INSTALL_URL)]
     image = Dependency(SANDBOX, sandbox.image, sandbox.pull_command, required=True,
                        reason="" if kind is Problem.NOT_INSTALLED else reason)
     if kind is Problem.NO_IMAGE:

@@ -4,7 +4,8 @@ from metaskill.evaluate import dependencies
 from metaskill.evaluate.dependencies import (
     SANDBOX, MissingDependencyError, missing_dependencies, require_dependencies)
 from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, CiscoBackend
-from metaskill.evaluate.sandbox import DEFAULT_IMAGE, DOCKER_INSTALL_URL, DockerSandbox, Problem
+from metaskill.evaluate.sandbox import (
+    DEFAULT_IMAGE, DOCKER_INSTALL_URL, PYTHON_INSTALL_URL, DockerSandbox, Problem)
 
 
 class FakeSandbox(DockerSandbox):
@@ -53,6 +54,13 @@ def test_docker_not_running_lists_only_docker(cisco_installed):
 def test_image_not_pulled_lists_the_pull_command(cisco_installed):
     [image] = missing_dependencies(FakeSandbox((Problem.NO_IMAGE, "not pulled")))
     assert image.install_command == f"docker pull {DEFAULT_IMAGE}" and image.required
+
+
+def test_old_python_is_required_and_installed_by_hand(cisco_installed):
+    [python] = missing_dependencies(FakeSandbox((Problem.OLD_PYTHON, "Python 3.12.9 is too old")))
+    assert (python.package, python.install_command, python.install_url) == (
+        "Python", "", PYTHON_INSTALL_URL)
+    assert python.required and python.reason == "Python 3.12.9 is too old"
 
 
 def test_cisco_is_listed_after_docker_and_is_optional(monkeypatch):

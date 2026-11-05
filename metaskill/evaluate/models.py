@@ -18,6 +18,12 @@ TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
 # A size Docker's tmpfs takes, e.g. 16m. Nothing else: it goes into the mount's options,
 # so a comma would add options of its own.
 DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
+SANDBOX_MEMORY = "512m"  # the sandbox's memory limit, which its run folder counts against
+
+
+def size_bytes(size: str) -> int:
+    """A DISK_SIZE, e.g. 16m, in bytes."""
+    return int(size[:-1]) * 1024 ** "kmg".index(size[-1]) * 1024
 
 
 class Dimension(StrEnum):
@@ -160,6 +166,10 @@ class EvaluationConfig:
         if not isinstance(self.sandbox_disk, str) or not DISK_SIZE.fullmatch(self.sandbox_disk):
             raise ValueError(
                 f"sandbox_disk must be a size like 16m, got {self.sandbox_disk!r}")
+        if size_bytes(self.sandbox_disk) >= size_bytes(SANDBOX_MEMORY):
+            # The folder is in memory, so a larger one could never be filled.
+            raise ValueError(f"sandbox_disk must be under the sandbox's memory limit of "
+                             f"{SANDBOX_MEMORY}, got {self.sandbox_disk}")
         for dimension, weight in self.weights.items():
             _check_unit(f"weights[{dimension}]", weight)
 

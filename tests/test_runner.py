@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from metaskill.evaluate import runner
-from metaskill.evaluate.judge import Judge, TokenUsage
+from metaskill.evaluate.judge import Judge, JudgeError, TokenUsage
 from metaskill.evaluate.models import (
     Check,
     CheckKind,
@@ -26,7 +26,7 @@ from metaskill.evaluate.runner import (
     run_tasks,
     timestamp,
 )
-from metaskill.evaluate.sandbox import CommandResult
+from metaskill.evaluate.sandbox import CommandResult, RunFailed
 
 
 class FakeAgent:
@@ -372,6 +372,16 @@ def test_sandbox_disk_must_be_a_plain_size(disk):
         EvaluationConfig(sandbox_disk=disk)
 
 
+@pytest.mark.parametrize("disk", ["512m", "1g", "600000k"])
+def test_sandbox_disk_must_be_under_the_memory_limit(disk):
+    with pytest.raises(ValueError, match="under the sandbox's memory limit"):
+        EvaluationConfig(sandbox_disk=disk)
+
+
+def test_sandbox_disk_just_under_the_memory_limit_is_allowed():
+    assert EvaluationConfig(sandbox_disk="511m").sandbox_disk == "511m"
+
+
 def test_sandbox_disk_round_trips_and_changes_the_hash():
     custom = EvaluationConfig(sandbox_disk="64m")
     assert EvaluationConfig.from_dict(custom.to_dict()).sandbox_disk == "64m"
@@ -463,3 +473,95 @@ def test_a_hard_linked_skill_md_is_a_run_error(skill, run_dir, tmp_path):
     assert [t.variant for t in result.tests] == [Variant.BASELINE]
     assert "SKILL.md is a link or hard link" in result.errors[0]
     assert all(w.closed for w in sandbox.opened) and len(agent.calls) == 1
+
+
+class BrokenWorkspace(FakeWorkspace):
+    """A workspace whose `export` or `run_command` raises `error`."""
+
+    error, method = None, "export"
+
+    def export(self, dest):
+        if self.method == "export":
+            raise self.error
+        super().export(dest)
+
+    def run_command(self, command, timeout, input=None):
+        if self.method == "run_command":
+            raise self.error
+        return super().run_command(command, timeout, input)
+
+
+class BrokenSandbox(FakeSandbox):
+    def __init__(self, error, method="export"):
+        super().__init__()
+        self.error, self.method = error, method
+
+    def open(self, fixtures):
+        workspace = BrokenWorkspace(self)
+        workspace.error, workspace.method = self.error, self.method
+        self.opened.append(workspace)
+        return workspace
+
+
+@pytest.mark.parametrize("method", ["export", "run_command"])
+def test_a_run_that_breaks_its_workspace_fails_rather_than_being_left_out(
+        skill, run_dir, method):
+    sandbox = BrokenSandbox(RunFailed("the run stopped its sandbox container"), method)
+    result = run_tasks(skill, [task(checks=[exit_check()])], FakeAgent(),
+                       config=config(runs=1), run_dir=run_dir,
+                       sandbox=sandbox)
+    assert result.errors == [] and len(result.tests) == 2
+    assert not any(t.passed for t in result.tests)
+    assert "stopped its sandbox container" in result.tests[0].reason
+    assert all(w.closed for w in sandbox.opened)
+
+
+def test_docker_failing_during_a_run_is_an_error_not_a_failed_run(skill, run_dir):
+    result = run_tasks(skill, [task(checks=[exit_check()])], FakeAgent(),
+                       config=config(runs=1), run_dir=run_dir,
+                       sandbox=BrokenSandbox(JudgeError("Docker stopped answering")))
+    assert result.tests == [] and len(result.errors) == 2
+
+
+@pytest.mark.parametrize("error, counted", [
+    (JudgeError("Docker stopped answering"), False),
+    (RunFailed("the run stopped its sandbox container"), True),
+])
+def test_an_agent_failing_through_the_workspace(skill, run_dir, error, counted):
+    class Raising:
+        def run(self, prompt, skill, workspace):
+            raise error
+
+    result = run_tasks(skill, [task(checks=[exit_check()])], Raising(),
+                       config=config(runs=1), run_dir=run_dir,
+                       sandbox=FakeSandbox())
+    assert len(result.tests) == (2 if counted else 0)
+    assert len(result.errors) == (0 if counted else 2)
+
+
+class TooLargeWorkspace(FakeWorkspace):
+    def put(self, paths, folder):
+        if folder != self.root:
+            raise RunFailed("the skill is too large for the sandbox")
+        super().put(paths, folder)
+
+
+class TooLargeSandbox(FakeSandbox):
+    def open(self, fixtures):
+        workspace = TooLargeWorkspace(self)
+        self.opened.append(workspace)
+        return workspace
+
+
+def test_a_skill_too_large_for_the_sandbox_is_a_failed_run(skill, run_dir):
+    agent, sandbox = FakeAgent(), TooLargeSandbox()
+    result = run_tasks(skill, [task()], agent, config=config(runs=1), run_dir=run_dir,
+                       sandbox=sandbox)
+    assert result.errors == []
+    runs = {t.variant: t for t in result.tests}
+    assert not runs[Variant.WITH_SKILL].passed and runs[Variant.WITH_SKILL].score == 0.0
+    assert "too large" in runs[Variant.WITH_SKILL].reason
+    # The agent was not started for it, and the baseline ran as usual.
+    assert [c.skill for c in agent.calls] == [None]
+    assert all(w.closed for w in sandbox.opened)
+    assert (run_dir / "cleanup" / "logs" / "write-report-with_skill-r1.txt").is_file()
