@@ -146,8 +146,27 @@ def test_ties_broken_by_lift_then_safety():
     assert [e.result.name for e in rank([d, c]).ranked] == ["c", "d"]
 
 
-def test_full_tie_falls_back_to_name():
-    assert [e.result.name for e in rank([result("b"), result("a")]).ranked] == ["a", "b"]
+def test_a_full_tie_shares_a_rank_and_the_next_place_is_skipped():
+    ranking = rank([result("c"), result("a"), result("b"), result("z", quality=0.1),
+                    result("top", quality=0.9)])
+    assert [(e.rank, e.result.name) for e in ranking.ranked] == [
+        (1, "top"), (2, "a"), (2, "b"), (2, "c"), (5, "z")]
+
+
+def test_a_name_never_decides_a_rank():
+    for skills in ([result("a"), result("b")], [result("b"), result("a")]):
+        assert [e.rank for e in rank(skills).ranked] == [1, 1]
+
+
+def test_skills_that_differ_on_a_tie_break_do_not_share_a_rank():
+    # Same overall and lift, as in test_ties_broken_by_lift_then_safety.
+    ranking = rank([result("c", safety=0.8, quality=0.1), result("d")])
+    assert [e.rank for e in ranking.ranked] == [1, 2]
+
+
+def test_shared_rank_is_in_the_table():
+    lines = table(rank([result("a"), result("b")])).splitlines()
+    assert lines[2].startswith("| 1 | a |") and lines[3].startswith("| 1 | b |")
 
 
 def test_order_does_not_depend_on_input_order():
@@ -257,6 +276,28 @@ def test_recommendation_warns_about_lift_of_zero_or_less():
     assert "Its lift is -0.60" in rank([result("a", lift=-0.6)]).recommendation
     assert "Its lift is +0.00" in rank([result("a", lift=0.0)]).recommendation
     assert "lift" not in rank([result("a", lift=0.2)]).recommendation
+
+
+def test_a_tie_for_first_names_every_skill_and_picks_none():
+    tied = rank([result("b", lift=0.2), result("a", lift=0.2), result("c", quality=0.1)])
+    text = tied.recommendation
+    assert text.startswith("Tied for highest overall (0.50) of 3 ranked skill(s): a, b.")
+    assert "Use " not in text and "c" not in text.split(":")[1].split(".")[0]
+
+
+def test_a_tie_for_first_keeps_the_warnings():
+    assert "Their safety score is low (0.20)" in rank(
+        [result("a", safety=0.2, lift=0.2), result("b", safety=0.2, lift=0.2)]).recommendation
+    assert "Their lift is +0.00: on the tasks they do no better" in rank(
+        [result("a"), result("b")]).recommendation
+
+
+def test_a_critical_finding_on_either_tied_skill_is_warned_about():
+    critical = Finding(dimension=Dimension.SAFETY, category="x", severity=Severity.CRITICAL,
+                       source="own-checks", rule="r", quote="q", location="SKILL.md:1",
+                       message="m")
+    text = rank([result("a", findings=[critical]), result("b")]).recommendation
+    assert "Check their safety notes before using them." in text
 
 
 def test_no_winner_is_named_when_every_skill_is_incomplete():

@@ -28,7 +28,7 @@ print(table(ranking))                            # the terminal table
 
 `rank` recomputes `overall` from the dimension scores, rather than reading `Scores.overall`.
 
-1. Skills whose `overall` is a number are ranked `1..k`, ordered by `overall`, then `lift`, then safety, quality, robustness, clarity, efficiency and configuration cleanliness (`TIE_BREAK`), then name. Scores are compared rounded to 9 decimal places, so floating-point noise does not decide a place. The name is compared as text, since a YAML `name` can be a number. **[OPEN]** Whether ties should be judged more coarsely ([evaluate.md](../evaluate.md), open question 2).
+1. Skills whose `overall` is a number are ranked, ordered by `overall`, then `lift`, then safety, quality, robustness, clarity, efficiency and configuration cleanliness (`TIE_BREAK`). Skills equal on all of these share a rank, and the next place is skipped (`1, 1, 3`). They are listed by name, which only keeps the output stable and says nothing about them. Scores are compared rounded to 9 decimal places, so floating-point noise does not decide a place. The name is compared as text, since a YAML `name` can be a number. **[OPEN]** Whether ties should be judged more coarsely ([evaluate.md](../evaluate.md), open question 2).
 2. Skills with a dimension that scored `None` follow, with `rank` and `overall` `None`. They are ordered by name, since their scores do not compare with each other. Their remaining dimensions are not averaged into a replacement score (evaluate.md 2.1).
 
 The order does not depend on the order of the input, and the same input always gives the same output. `SkillResult` refuses a `lift` outside `[-1, 1]`, NaN included, which would otherwise break this.
@@ -48,7 +48,7 @@ The order does not depend on the order of the input, and the same input always g
 | Field | Description |
 |---|---|
 | `result` | The `SkillResult` |
-| `rank` | `1..k`, or `None` if not ranked |
+| `rank` | Place from 1, shared on a full tie; `None` if not ranked |
 | `overall` | `None` exactly when `rank` is |
 | `missing` | Dimensions that scored `None` |
 | `notes` | Lines for the report (3) |
@@ -67,6 +67,7 @@ For the ranking as a whole (`Ranking.notes`): when every skill with a safety sco
 ## 4. Recommendation
 
 - At least one ranked skill: the top one, `Use [name]: highest overall (0.88) of 3 ranked skill(s).` If it has a CRITICAL safety finding, or a partial-safety flag (3), this adds `Check its safety notes before using it.`; otherwise, if its safety score is below 0.5 (`LOW_SAFETY`), it says so.
+- Several skills tied for first: all of them are named and none is picked, `Tied for highest overall (0.88) of 3 ranked skill(s): a, b. Nothing scored separates them.` The safety check is added if any of them is flagged, and the low-safety and lift warnings still apply.
 - No ranked skill: no skill is named, since no complete overall comparison was available: `No complete overall comparison was available, so no skill is recommended.`, pointing to the notes for what is missing.
 - No skills: `No skills to rank.`
 - A recommended skill also gets a warning if its `lift` is 0 or less: on the tasks it does no better than having no skill (evaluate.md 4.1).
@@ -95,4 +96,4 @@ Skill names come from the skill's own frontmatter, finding locations from its fi
 
 ## 7. Testing
 
-[`tests/test_rank.py`](../../tests/test_rank.py) builds `SkillResult`s directly. It covers the default weights and their order of priority, the weighted mean, weight validation (also after the config was made), ordering and every tie-break, that the order does not depend on input order, unranked skills, their notes and that their scores are not averaged, no winner when every skill is incomplete, partial safety flagged only when statuses differ, CRITICAL findings, the lift warning, the recommendation and the table, and names and notes that try to add rows, send escape codes or inject Markdown links, images or HTML.
+[`tests/test_rank.py`](../../tests/test_rank.py) builds `SkillResult`s directly. It covers the default weights and their order of priority, the weighted mean, weight validation (also after the config was made), ordering and every tie-break, shared ranks, that the order does not depend on input order, unranked skills, their notes and that their scores are not averaged, no winner when every skill is incomplete, partial safety flagged only when statuses differ, CRITICAL findings, the lift warning, the recommendation and the table, and names and notes that try to add rows, send escape codes or inject Markdown links, images or HTML.

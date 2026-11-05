@@ -448,7 +448,7 @@ As proposed provenance extensions, record dataset release, case revisions, sourc
 
 The dataset's controlled comparisons should use equivalent intended tasks and shared success criteria. It does not establish a meaningful universal ranking among unrelated capabilities.
 
-The current evaluation design ranks by overall score, breaking ties by lift, then safety, quality, robustness, clarity, and the remaining dimensions. Completing the tie-breaking specification is an implementation detail to settle in the ranking design.
+The current evaluation design ranks by overall score, breaking ties by lift, then safety, quality, robustness, clarity, efficiency, and configuration cleanliness. Skills still tied after all of these share a rank.
 
 All skills in a ranking are assessed fresh under shared settings. The evaluation design keeps a skill in ranking when deep safety falls back to static, but flags the partial result. It also retains skills with critical safety findings.
 
@@ -543,8 +543,7 @@ Initial acceptance should require reviewed expectations, resolvable inputs, repr
 
 ### Decisions already open in the component designs
 
-- Exact Quality formula, dimension formulas, overall weighting, and complete tie handling.
-- Incorporating and implementing the team discussion policy: any null dimension leaves overall null and the skill unranked.
+- Exact Quality formula, dimension formulas, and overall weighting.
 - Whether candidates on identical tasks share a baseline within one run.
 - Whether and how the runner executes skills with critical safety findings.
 - Final safety severity-to-score values and scanner-category routing.

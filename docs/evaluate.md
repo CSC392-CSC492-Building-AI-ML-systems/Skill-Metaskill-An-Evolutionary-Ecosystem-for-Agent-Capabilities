@@ -300,7 +300,7 @@ Code: `rank.py`, documented in [evaluate/rank.md](evaluate/rank.md).
 
 ### 5.1 Overall score
 
-`overall` is a weighted mean of the six dimensions. The weights set the priority **safety > quality and robustness > clarity and efficiency > configuration cleanliness**:
+`overall` is a weighted mean of the six dimensions. The current weights set the priority **safety > quality and robustness > clarity and efficiency > configuration cleanliness**. **[OPEN]** They may still change (open question 3):
 
 | Dimension | Weight |
 |---|---|
@@ -319,12 +319,12 @@ The weights are relative, not fractions: they are divided by their sum, so only 
 
 ### 5.2 Ordering
 
-- Rank by `overall`, with ties broken by lift, then by the dimensions in weight order: safety, quality, robustness, clarity, efficiency, configuration cleanliness. A full tie is broken by name, so the same input always gives the same order. Scores are compared rounded to 9 decimal places, so floating-point noise does not decide a place; two skills that show the same 2-decimal `overall` in the table can still be ordered by it (see open question 2).
+- Rank by `overall`, with ties broken by lift, then by the dimensions in weight order: safety, quality, robustness, clarity, efficiency, configuration cleanliness. Skills equal on all of these share a rank, and the next place is skipped (1, 1, 3). They are listed by name, which only keeps the output stable and says nothing about them. Scores are compared rounded to 9 decimal places, so floating-point noise does not decide a place; two skills that show the same 2-decimal `overall` in the table can still be ordered by it (see open question 2).
 - **Skills with a `null` dimension are not ranked.** They have no `overall`, and are listed below every ranked skill, ordered by name, since their scores do not compare with each other. This holds for any `null` dimension, whatever its weight. They keep the scores they have, and each gets a note saying which dimensions are missing and why. The remaining dimensions are not averaged into a replacement score.
 - Every ranking is fresh (section 2): all skills are evaluated in the same run, so they share the same config, judge model, safety tier, scanner version and own-checks version. Results from earlier reports are never mixed in.
 - A skill whose safety status is `partial` (a `deep` scan that fell back to `static`, or a scanner that is not installed) is still ranked. It is flagged only when other skills in the same ranking were scanned in full (`ok`), since only then is its safety score not comparable with theirs. When every skill is `partial`, their scores compare with each other, so the output says so once instead of flagging each skill.
 - A critical safety finding results in a low safety score. It does not remove the skill from the ranking, but it is noted, and a recommendation of that skill says to check it.
-- Output includes as well, a recommendation of which skill to use based off their scores: the top ranked skill. If no skill could be ranked, the output says no complete overall comparison was available and names no skill. If the recommended skill's lift is 0 or less, the recommendation warns that it does no better than having no skill (section 4.1).
+- Output includes as well, a recommendation of which skill to use based off their scores: the top ranked skill, or, if the first place is tied, every skill tied for it, with none picked. If no skill could be ranked, the output says no complete overall comparison was available and names no skill. If the recommended skill's lift is 0 or less, the recommendation warns that it does no better than having no skill (section 4.1).
 - Skill names, finding locations and status details come from the skill or its backends, so they are cleaned before they are printed: one line, no control or hidden characters, length-capped, and `|` escaped in the table. The table also escapes the Markdown that could make a link, image, HTML or code (`[`, `]`, `<`, `>`, `` ` `` and `\`), since it may be rendered as Markdown, e.g. in `ranked-evaluation.md`. A skill cannot add a row to the table, send escape codes to the terminal, or make a rendered report contact a server through its name.
 
 
@@ -386,10 +386,10 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 
 1. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
 2. How close two `overall` scores must be to count as a tie, so lift decides. The runner reduces variance (every run starts from the same files, each task runs `n` times) but does not compute a spread; mean and spread come from the quality and robustness modules (section 4.5), which are not built yet. Until then, scores are compared at 9 decimal places. Options: keep that, compare at the 2 displayed decimals, or count scores within the measured spread as tied once it exists.
+3. The weights of `overall` (section 5.1). The current defaults, safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1, are in use but may still change.
 
 ### Answered
 
-- **Weighted-mean `overall`.** Kept, with weights safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1 (section 5.1).
 - **Skills with a CRITICAL safety finding.** They are run like every other skill, since every agent run happens only in the sandbox ([evaluate/runner.md](evaluate/runner.md) 2.6): no network, nothing of this machine mounted, limits on disk, memory and processes. The finding lowers the safety score and is noted in the ranking (section 5.2).
 - **A skipped (`null`) dimension.** The skill is not ranked; it is listed below the ranked skills with the scores it has and a note on what is missing, and its other dimensions are not averaged. If no skill is complete, no winner is named (sections 2.1 and 5.2).
 - **Sharing one baseline between skills.** Not shared: each skill runs its own baseline, since cost is not a problem at present (section 9).

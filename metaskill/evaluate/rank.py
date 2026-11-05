@@ -76,7 +76,7 @@ class RankedSkill:
     """One skill's place in a ranking."""
 
     result: SkillResult
-    rank: int | None  # 1..k for ranked skills; None when not ranked
+    rank: int | None  # place from 1, shared on a full tie; None when not ranked
     overall: float | None  # None exactly when rank is None
     missing: list[Dimension] = field(default_factory=list)  # dimensions scored None
     notes: list[str] = field(default_factory=list)
@@ -143,7 +143,9 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
 
     overall is recomputed from the dimension scores, so it is always the one of these
     weights, the same as make_scores gives with the same config. Ranked skills come
-    first, ordered by overall, then lift, then the dimensions in TIE_BREAK, then name.
+    first, ordered by overall, then lift, then the dimensions in TIE_BREAK. Skills equal
+    on all of these share a rank, and the next place is skipped (1, 1, 3). They are
+    listed by name, which only keeps the output stable: it says nothing about them.
     Skills with a missing dimension follow, ordered by name: their scores do not compare,
     so that order says nothing about them. The same input always gives the same order.
     """
@@ -162,10 +164,12 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
         )
         (ranked if score is not None else unranked).append(entry)
 
-    ranked.sort(key=lambda e: _order(e, e.overall))
-    unranked.sort(key=lambda e: (str(e.result.name), _order(e, None)))
-    for i, entry in enumerate(ranked, start=1):
-        entry.rank = i
+    # The name is compared as text: a YAML name can be a number.
+    ranked.sort(key=lambda e: (_standing(e), str(e.result.name)))
+    unranked.sort(key=lambda e: (str(e.result.name), _standing(e)))
+    for i, entry in enumerate(ranked):
+        tied = i > 0 and _standing(ranked[i - 1]) == _standing(entry)
+        entry.rank = ranked[i - 1].rank if tied else i + 1
     # Partial safety only makes a score incomparable when other skills here were
     # scanned in full (evaluate.md 5.2). When every skill is partial, say so once.
     statuses = {_safety_status(r) for r in results} & {Status.OK, Status.PARTIAL}
@@ -181,14 +185,14 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
                    recommendation=_recommend(ranked, unranked, mixed))
 
 
-def _order(entry: RankedSkill, score: float | None) -> tuple:
-    """Sort key: higher is better for every score, so each is negated."""
+def _standing(entry: RankedSkill) -> tuple:
+    """What places a skill: skills with the same standing are tied. Higher is better for
+    every score, so each is negated."""
     found = values(entry.result.scores)
     return (
-        _desc(score),
+        _desc(entry.overall),
         _desc(entry.result.lift),
         *(_desc(found[d]) for d in TIE_BREAK),
-        str(entry.result.name),  # a YAML name can be a number
     )
 
 
@@ -240,26 +244,35 @@ def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
                mixed: bool) -> str:
     """Which skill to use, based on the ranking (evaluate.md 5.2)."""
     if ranked:
-        top = ranked[0]
-        text = (f"Use {top.name}: highest overall ({top.overall:.2f}) "
-                f"of {len(ranked)} ranked skill(s).")
-        safety = values(top.result.scores)[Dimension.SAFETY]
-        if _critical(top.result) or (mixed and _safety_status(top.result) is Status.PARTIAL):
-            text += " Check its safety notes before using it."
+        top = [e for e in ranked if e.rank == 1]
+        first, alone = top[0], len(top) == 1
+        place = f"({first.overall:.2f}) of {len(ranked)} ranked skill(s)"
+        if alone:
+            text = f"Use {first.name}: highest overall {place}."
+        else:  # picking one would decide on the name
+            names = ", ".join(e.name for e in top)
+            text = f"Tied for highest overall {place}: {names}. Nothing scored separates them."
+        its = "its" if alone else "their"
+        safety = values(first.result.scores)[Dimension.SAFETY]  # the same across a tie
+        if any(_critical(e.result) or (mixed and _safety_status(e.result) is Status.PARTIAL)
+               for e in top):
+            text += f" Check {its} safety notes before using {'it' if alone else 'them'}."
         elif safety is not None and safety < LOW_SAFETY:
-            text += f" Its safety score is low ({safety:.2f}); check its findings first."
-        return text + _lift_warning(top)
+            text += (f" {its.capitalize()} safety score is low ({safety:.2f}); "
+                     f"check {its} findings first.")
+        return text + _lift_warning(first, alone)
     if unranked:  # no winner from an incomplete assessment (evaluate.md 2.1)
         return ("No complete overall comparison was available, so no skill is "
                 "recommended. The notes say which dimensions each skill is missing.")
     return "No skills to rank."
 
 
-def _lift_warning(entry: RankedSkill) -> str:
+def _lift_warning(entry: RankedSkill, alone: bool) -> str:
     """A skill no better than no skill adds no value (evaluate.md 4.1)."""
     if entry.result.lift > 0:
         return ""
-    return (f" Its lift is {entry.result.lift:+.2f}: on the tasks it does no better than "
+    its, does = ("Its", "it does") if alone else ("Their", "they do")
+    return (f" {its} lift is {entry.result.lift:+.2f}: on the tasks {does} no better than "
             "having no skill.")
 
 
