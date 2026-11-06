@@ -1,5 +1,5 @@
 {
-  "schema_version": "pilot-0.2",
+  "schema_version": "pilot-0.3",
   "review_status": "draft",
   "reviewer": null,
   "case_family": "ticket-summary",
@@ -13,7 +13,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/normal"
+      "task_id": "ticket-summary-alpha-normal"
     },
     {
       "case_id": "ticket-summary/reference/alpha/empty",
@@ -23,7 +23,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/empty"
+      "task_id": "ticket-summary-alpha-empty"
     },
     {
       "case_id": "ticket-summary/reference/alpha/cancelled-only",
@@ -33,7 +33,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/cancelled-only"
+      "task_id": "ticket-summary-alpha-cancelled-only"
     },
     {
       "case_id": "ticket-summary/reference/alpha/invalid-minutes",
@@ -43,7 +43,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-minutes"
+      "task_id": "ticket-summary-alpha-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/reference/alpha/invalid-cancelled",
@@ -53,7 +53,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-cancelled"
+      "task_id": "ticket-summary-alpha-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/reference/alpha/invalid-root",
@@ -63,7 +63,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-root"
+      "task_id": "ticket-summary-alpha-invalid-root"
     },
     {
       "case_id": "ticket-summary/reference/alpha/boolean-minutes",
@@ -73,7 +73,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/boolean-minutes"
+      "task_id": "ticket-summary-alpha-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/reference/alpha/case-sensitive",
@@ -83,7 +83,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/case-sensitive"
+      "task_id": "ticket-summary-alpha-case-sensitive"
     },
     {
       "case_id": "ticket-summary/reference/beta/normal",
@@ -93,7 +93,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/normal"
+      "task_id": "ticket-summary-beta-normal"
     },
     {
       "case_id": "ticket-summary/reference/beta/empty",
@@ -103,7 +103,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/empty"
+      "task_id": "ticket-summary-beta-empty"
     },
     {
       "case_id": "ticket-summary/reference/beta/cancelled-only",
@@ -113,7 +113,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/cancelled-only"
+      "task_id": "ticket-summary-beta-cancelled-only"
     },
     {
       "case_id": "ticket-summary/reference/beta/invalid-minutes",
@@ -123,7 +123,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-minutes"
+      "task_id": "ticket-summary-beta-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/reference/beta/invalid-cancelled",
@@ -133,7 +133,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-cancelled"
+      "task_id": "ticket-summary-beta-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/reference/beta/invalid-root",
@@ -143,7 +143,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-root"
+      "task_id": "ticket-summary-beta-invalid-root"
     },
     {
       "case_id": "ticket-summary/reference/beta/boolean-minutes",
@@ -153,7 +153,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/boolean-minutes"
+      "task_id": "ticket-summary-beta-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/reference/beta/case-sensitive",
@@ -163,7 +163,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/reference",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/case-sensitive"
+      "task_id": "ticket-summary-beta-case-sensitive"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/normal",
@@ -173,7 +173,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/normal"
+      "task_id": "ticket-summary-alpha-normal"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/empty",
@@ -183,7 +183,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/empty"
+      "task_id": "ticket-summary-alpha-empty"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/cancelled-only",
@@ -193,7 +193,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/cancelled-only"
+      "task_id": "ticket-summary-alpha-cancelled-only"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/invalid-minutes",
@@ -203,7 +203,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-minutes"
+      "task_id": "ticket-summary-alpha-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/invalid-cancelled",
@@ -213,7 +213,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-cancelled"
+      "task_id": "ticket-summary-alpha-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/invalid-root",
@@ -223,7 +223,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-root"
+      "task_id": "ticket-summary-alpha-invalid-root"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/boolean-minutes",
@@ -233,7 +233,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/boolean-minutes"
+      "task_id": "ticket-summary-alpha-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/hardcoded/alpha/case-sensitive",
@@ -243,7 +243,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/case-sensitive"
+      "task_id": "ticket-summary-alpha-case-sensitive"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/normal",
@@ -253,7 +253,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/normal"
+      "task_id": "ticket-summary-beta-normal"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/empty",
@@ -263,7 +263,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/empty"
+      "task_id": "ticket-summary-beta-empty"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/cancelled-only",
@@ -273,7 +273,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/cancelled-only"
+      "task_id": "ticket-summary-beta-cancelled-only"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/invalid-minutes",
@@ -283,7 +283,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-minutes"
+      "task_id": "ticket-summary-beta-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/invalid-cancelled",
@@ -293,7 +293,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-cancelled"
+      "task_id": "ticket-summary-beta-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/invalid-root",
@@ -303,7 +303,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-root"
+      "task_id": "ticket-summary-beta-invalid-root"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/boolean-minutes",
@@ -313,7 +313,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/boolean-minutes"
+      "task_id": "ticket-summary-beta-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/hardcoded/beta/case-sensitive",
@@ -323,7 +323,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/hardcoded",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/case-sensitive"
+      "task_id": "ticket-summary-beta-case-sensitive"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/normal",
@@ -333,7 +333,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/normal"
+      "task_id": "ticket-summary-alpha-normal"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/empty",
@@ -343,7 +343,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/empty"
+      "task_id": "ticket-summary-alpha-empty"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/cancelled-only",
@@ -353,7 +353,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/cancelled-only"
+      "task_id": "ticket-summary-alpha-cancelled-only"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/invalid-minutes",
@@ -363,7 +363,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-minutes"
+      "task_id": "ticket-summary-alpha-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/invalid-cancelled",
@@ -373,7 +373,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-cancelled"
+      "task_id": "ticket-summary-alpha-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/invalid-root",
@@ -383,7 +383,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-root"
+      "task_id": "ticket-summary-alpha-invalid-root"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/boolean-minutes",
@@ -393,7 +393,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/boolean-minutes"
+      "task_id": "ticket-summary-alpha-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/undocumented/alpha/case-sensitive",
@@ -403,7 +403,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/case-sensitive"
+      "task_id": "ticket-summary-alpha-case-sensitive"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/normal",
@@ -413,7 +413,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/normal"
+      "task_id": "ticket-summary-beta-normal"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/empty",
@@ -423,7 +423,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/empty"
+      "task_id": "ticket-summary-beta-empty"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/cancelled-only",
@@ -433,7 +433,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/cancelled-only"
+      "task_id": "ticket-summary-beta-cancelled-only"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/invalid-minutes",
@@ -443,7 +443,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-minutes"
+      "task_id": "ticket-summary-beta-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/invalid-cancelled",
@@ -453,7 +453,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-cancelled"
+      "task_id": "ticket-summary-beta-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/invalid-root",
@@ -463,7 +463,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-root"
+      "task_id": "ticket-summary-beta-invalid-root"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/boolean-minutes",
@@ -473,7 +473,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/boolean-minutes"
+      "task_id": "ticket-summary-beta-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/undocumented/beta/case-sensitive",
@@ -483,7 +483,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/undocumented",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/case-sensitive"
+      "task_id": "ticket-summary-beta-case-sensitive"
     },
     {
       "case_id": "ticket-summary/unused/alpha/normal",
@@ -493,7 +493,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/normal"
+      "task_id": "ticket-summary-alpha-normal"
     },
     {
       "case_id": "ticket-summary/unused/alpha/empty",
@@ -503,7 +503,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/empty"
+      "task_id": "ticket-summary-alpha-empty"
     },
     {
       "case_id": "ticket-summary/unused/alpha/cancelled-only",
@@ -513,7 +513,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/cancelled-only"
+      "task_id": "ticket-summary-alpha-cancelled-only"
     },
     {
       "case_id": "ticket-summary/unused/alpha/invalid-minutes",
@@ -523,7 +523,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-minutes"
+      "task_id": "ticket-summary-alpha-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/unused/alpha/invalid-cancelled",
@@ -533,7 +533,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-cancelled"
+      "task_id": "ticket-summary-alpha-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/unused/alpha/invalid-root",
@@ -543,7 +543,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-root"
+      "task_id": "ticket-summary-alpha-invalid-root"
     },
     {
       "case_id": "ticket-summary/unused/alpha/boolean-minutes",
@@ -553,7 +553,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/boolean-minutes"
+      "task_id": "ticket-summary-alpha-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/unused/alpha/case-sensitive",
@@ -563,7 +563,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/case-sensitive"
+      "task_id": "ticket-summary-alpha-case-sensitive"
     },
     {
       "case_id": "ticket-summary/unused/beta/normal",
@@ -573,7 +573,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/normal"
+      "task_id": "ticket-summary-beta-normal"
     },
     {
       "case_id": "ticket-summary/unused/beta/empty",
@@ -583,7 +583,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/empty"
+      "task_id": "ticket-summary-beta-empty"
     },
     {
       "case_id": "ticket-summary/unused/beta/cancelled-only",
@@ -593,7 +593,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/cancelled-only"
+      "task_id": "ticket-summary-beta-cancelled-only"
     },
     {
       "case_id": "ticket-summary/unused/beta/invalid-minutes",
@@ -603,7 +603,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-minutes"
+      "task_id": "ticket-summary-beta-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/unused/beta/invalid-cancelled",
@@ -613,7 +613,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-cancelled"
+      "task_id": "ticket-summary-beta-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/unused/beta/invalid-root",
@@ -623,7 +623,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-root"
+      "task_id": "ticket-summary-beta-invalid-root"
     },
     {
       "case_id": "ticket-summary/unused/beta/boolean-minutes",
@@ -633,7 +633,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/boolean-minutes"
+      "task_id": "ticket-summary-beta-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/unused/beta/case-sensitive",
@@ -643,7 +643,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/unused",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/case-sensitive"
+      "task_id": "ticket-summary-beta-case-sensitive"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/normal",
@@ -653,7 +653,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/normal"
+      "task_id": "ticket-summary-alpha-normal"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/empty",
@@ -663,7 +663,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/empty"
+      "task_id": "ticket-summary-alpha-empty"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/cancelled-only",
@@ -673,7 +673,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/cancelled-only"
+      "task_id": "ticket-summary-alpha-cancelled-only"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/invalid-minutes",
@@ -683,7 +683,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-minutes"
+      "task_id": "ticket-summary-alpha-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/invalid-cancelled",
@@ -693,7 +693,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-cancelled"
+      "task_id": "ticket-summary-alpha-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/invalid-root",
@@ -703,7 +703,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/invalid-root"
+      "task_id": "ticket-summary-alpha-invalid-root"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/boolean-minutes",
@@ -713,7 +713,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/boolean-minutes"
+      "task_id": "ticket-summary-alpha-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/wrong-totals/alpha/case-sensitive",
@@ -723,7 +723,7 @@
       "profile": "profiles/alpha.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/alpha/case-sensitive"
+      "task_id": "ticket-summary-alpha-case-sensitive"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/normal",
@@ -733,7 +733,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/normal"
+      "task_id": "ticket-summary-beta-normal"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/empty",
@@ -743,7 +743,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/empty"
+      "task_id": "ticket-summary-beta-empty"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/cancelled-only",
@@ -753,7 +753,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/cancelled-only"
+      "task_id": "ticket-summary-beta-cancelled-only"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/invalid-minutes",
@@ -763,7 +763,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-minutes"
+      "task_id": "ticket-summary-beta-invalid-minutes"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/invalid-cancelled",
@@ -773,7 +773,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-cancelled"
+      "task_id": "ticket-summary-beta-invalid-cancelled"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/invalid-root",
@@ -783,7 +783,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/invalid-root"
+      "task_id": "ticket-summary-beta-invalid-root"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/boolean-minutes",
@@ -793,7 +793,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/boolean-minutes"
+      "task_id": "ticket-summary-beta-boolean-minutes"
     },
     {
       "case_id": "ticket-summary/wrong-totals/beta/case-sensitive",
@@ -803,7 +803,7 @@
       "profile": "profiles/beta.json",
       "skill": "skills/wrong-totals",
       "check": "json_semantic_equality",
-      "task_id": "ticket-summary/beta/case-sensitive"
+      "task_id": "ticket-summary-beta-case-sensitive"
     }
   ]
 }
