@@ -101,10 +101,24 @@ def test_make_scores_from_dimension_scores():
     {Dimension.SAFETY: "4"},
     {Dimension.SAFETY: True},
     {Dimension.SAFETY: None},
+    {"bogus": 1},  # sums above 0, yet weighs none of the six: overall would divide by 0
+    {"safety": 1},  # a Dimension's value, but to_dict needs the Dimension
+    {d: 1e308 for d in Dimension},  # each finite, the sum not: overall would be NaN
 ])
 def test_invalid_weights_are_refused(weights):
     with pytest.raises(ValueError):
         EvaluationConfig(weights=weights)
+
+
+@pytest.mark.parametrize("call", [
+    lambda config: rank_module.rank([result("a")], config),
+    lambda config: rank_module.make_scores({}, config),
+])
+def test_unknown_weights_set_after_the_config_was_made_are_refused(call):
+    config = EvaluationConfig()
+    config.weights = {"bogus": 1}
+    with pytest.raises(ValueError, match="unknown dimension"):
+        call(config)
 
 
 def test_text_weight_from_a_config_file_is_a_clear_error():
@@ -205,6 +219,16 @@ def test_unranked_skills_get_a_note_on_what_is_missing():
                dimensions={Dimension.CLARITY: skipped}),
     ]).unranked[0]
     assert entry.notes == ["Not ranked: no score for clarity (skipped: no API key)."]
+
+
+@pytest.mark.parametrize("status, note", [
+    (DimensionStatus(Status.SKIPPED), "clarity (skipped)"),  # a status, no detail
+    (DimensionStatus(Status.ERROR, detail="​\x07"), "clarity (error)"),  # cleans to ""
+])
+def test_a_note_keeps_the_status_of_a_dimension_without_a_detail(status, note):
+    entry = rank([result("a", clarity=None,
+                         dimensions={Dimension.CLARITY: status})]).unranked[0]
+    assert entry.notes == [f"Not ranked: no score for {note}."]
 
 
 def test_the_scores_of_an_unranked_skill_are_kept_but_not_averaged():
