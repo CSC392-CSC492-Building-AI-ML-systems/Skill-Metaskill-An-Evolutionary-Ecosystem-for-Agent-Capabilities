@@ -29,6 +29,13 @@ def make(tmp_path, files):
     return load(tmp_path)
 
 
+def symlink(target, link):
+    try:
+        os.symlink(target, link)
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+
+
 def scan(skill):
     return ChecksBackend().scan(skill, SafetyTier.STATIC)
 
@@ -242,7 +249,7 @@ def test_bundle_symlink_pointing_outside(tmp_path):
     skill_dir = tmp_path / "skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("# Skill\n")
-    os.symlink(outside, skill_dir / "build")
+    symlink(outside, skill_dir / "build")
     [f] = scan(load(skill_dir)).findings
     assert (f.rule, f.category, f.severity) == ("bundle-symlink", "excess-scope", MEDIUM)
     assert f.location == "build"
@@ -254,7 +261,7 @@ def test_delete_through_a_bundle_symlink_is_critical(tmp_path):
     skill_dir = tmp_path / "skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("```bash\nrm -rf build/\n```\n")
-    os.symlink(outside, skill_dir / "build")
+    symlink(outside, skill_dir / "build")
     assert ("recursive-delete", "SKILL.md:2", CRITICAL) in found(scan(load(skill_dir)))
 
 
@@ -273,7 +280,7 @@ def test_symlinked_file_is_not_read(tmp_path):
     skill_dir = tmp_path / "skill"
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Skill\n")
-    os.symlink(secret, skill_dir / "scripts" / "run.sh")
+    symlink(secret, skill_dir / "scripts" / "run.sh")
     assert [f.rule for f in scan(load(skill_dir)).findings] == ["bundle-symlink"]
 
 

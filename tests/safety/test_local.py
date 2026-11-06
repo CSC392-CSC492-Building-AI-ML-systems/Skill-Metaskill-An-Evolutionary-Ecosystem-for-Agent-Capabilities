@@ -2,6 +2,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from metaskill.evaluate import safety
 from metaskill.evaluate.models import LocalWarning, Severity, Skill, SkillResult, Scores
 from metaskill.evaluate.safety import local
@@ -21,6 +23,13 @@ def files(folder, count, old=False):
         f.write_text("x")
         if old:
             os.utime(f, (time.time() - 30 * 86400,) * 2)
+
+
+def symlink(target, link):
+    try:
+        os.symlink(target, link)
+    except OSError:
+        pytest.skip("cannot create symlinks here")
 
 
 def warn(home, *targets, env=None, config=None):
@@ -105,21 +114,21 @@ def test_recently_changed_files(tmp_path):
 
 def test_symlink_followed_by_the_delete(tmp_path):
     (tmp_path / "thesis").mkdir()
-    os.symlink(tmp_path / "thesis", tmp_path / "build")
+    symlink(tmp_path / "thesis", tmp_path / "build")
     [w] = warn(tmp_path, target("~/build/", follows_links=True))
     assert w.reasons[0].startswith(f"is a link to `{tmp_path / 'thesis'}`")
 
 
 def test_symlink_not_followed_removes_only_the_link(tmp_path):
     (tmp_path / "thesis").mkdir()
-    os.symlink(tmp_path / "thesis", tmp_path / "build")
+    symlink(tmp_path / "thesis", tmp_path / "build")
     assert warn(tmp_path, target("~/build", follows_links=False)) == []
 
 
 def test_symlinks_are_not_followed_while_counting(tmp_path):
     files(tmp_path / "elsewhere", 500, old=True)
     (tmp_path / "small").mkdir()
-    os.symlink(tmp_path / "elsewhere", tmp_path / "small" / "link")
+    symlink(tmp_path / "elsewhere", tmp_path / "small" / "link")
     assert warn(tmp_path, target("~/small")) == []
 
 
@@ -149,6 +158,7 @@ def test_safety_local_warnings_reads_the_skills_deletes(tmp_path, monkeypatch):
     home = tmp_path / "home"
     files(home / "Documents" / "drafts", 120, old=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
     skill_dir = tmp_path / "skill"
     skill_dir.mkdir()
     body = "```bash\nrm -rf ~/Documents/drafts\n```\n"

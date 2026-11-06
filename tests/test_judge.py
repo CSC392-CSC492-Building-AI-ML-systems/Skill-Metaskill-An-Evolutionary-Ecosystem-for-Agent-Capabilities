@@ -18,6 +18,7 @@ from metaskill.evaluate.judge import (
     MAX_REASON_CHARS,
     TokenUsage,
     _render,
+    clean,
     fit,
     locate,
     make_judge,
@@ -584,7 +585,7 @@ def host_runner(command, workdir, timeout):
     """Runs on this machine, so only for the tests' own commands, never a skill's."""
     try:
         result = subprocess.run(command, shell=True, cwd=workdir, capture_output=True,
-                                text=True, timeout=timeout)
+                                stdin=subprocess.DEVNULL, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, ""
     return result.returncode, result.stderr
@@ -631,6 +632,26 @@ def test_exit_code_runs_through_the_given_runner(tmp_path):
     verdict = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "python test.py"), run_in(tmp_path))
     assert calls == [("python test.py", tmp_path, 5)]
     assert not verdict.passed and verdict.reason.endswith("exited 2, expected 0: boom")
+
+
+def test_exit_code_stderr_is_stored_as_plain_text(tmp_path):
+    j = DeterministicJudge(run_command=lambda *args: (1, "line one\nline​ two\n"))
+    verdict = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "x"), run_in(tmp_path))
+    assert verdict.reason.endswith("exited 1, expected 0: line one line two")
+
+
+def test_exit_code_stderr_loses_escape_codes(tmp_path):
+    stderr = "\x1b[31mred\x1b[0m\x07 done"
+    j = DeterministicJudge(run_command=lambda *args: (1, stderr))
+    verdict = j.judge(TASK, deterministic(CheckKind.EXIT_CODE, "x"), run_in(tmp_path))
+    assert "\x1b" not in verdict.reason and "\x07" not in verdict.reason
+    assert verdict.reason.endswith("[31mred [0m done")
+
+
+def test_clean():
+    assert clean("a\r\n\tb\x1b[2J\x00c​d", 100) == "a b [2J cd"
+    assert clean(123, 100) == "123"
+    assert clean("x" * 10, 5) == "xxxx…"
 
 
 def test_exit_code_rejects_non_integer_expected(tmp_path):
