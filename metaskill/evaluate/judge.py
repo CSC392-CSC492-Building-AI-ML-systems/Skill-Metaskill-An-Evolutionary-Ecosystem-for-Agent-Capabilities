@@ -89,7 +89,6 @@ class PluginLlm(Protocol):
 # Text an agent may act on but a human reviewer cannot see: HTML comments, and
 # characters that render as nothing (zero-width, bidi and annotation controls, tag
 # characters).
-_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _INVISIBLE = re.compile(
     "[­᠎​-‏‪-‮⁠-⁤⁦-⁩﻿"
     "؜￹-￻\U000e0000-\U000e007f]")
@@ -99,8 +98,26 @@ def strip_hidden(text: str) -> str:
     """text without HTML comments or invisible characters. A comment is replaced by its
     line breaks, so line numbers still match the file on disk. Invisible characters go
     first: removing them afterwards could join `<!-` and `-` into a comment."""
-    text = _INVISIBLE.sub("", _normalize(text))
-    return _HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    return _strip_comments(_INVISIBLE.sub("", _normalize(text)))
+
+
+def _strip_comments(text: str) -> str:
+    """text with each HTML comment replaced by its line breaks.
+
+    A `<!--` with no `-->` after it is not a comment: it and the text after it stay, so
+    a stray `<!--` cannot hide the rest of a file from a check. The text is untrusted, so
+    this is one pass; the regex `<!--.*?-->` takes quadratic time on many unclosed `<!--`.
+    """
+    kept: list[str] = []
+    position = 0
+    while (start := text.find("<!--", position)) != -1:
+        end = text.find("-->", start + 4)
+        if end == -1:
+            break  # no later `<!--` can be closed either
+        kept += text[position:start], "\n" * text.count("\n", start, end)
+        position = end + 3
+    kept.append(text[position:])
+    return "".join(kept)
 
 
 # Tag characters mirror ASCII (U+E0041 is "A"), so a run of them can spell out text that
@@ -112,7 +129,8 @@ _JOINERS = {"‌", "‍"}
 
 def mark_hidden(text: str) -> str:
     """text with what a person cannot see made visible, for the safety review. HTML
-    comments are kept; a run of tag characters becomes ⟦hidden text: "..."⟧ and other
+    comments are kept, and an unclosed `<!--` stays plain text, as in strip_hidden; a run
+    of tag characters becomes ⟦hidden text: "..."⟧ and other
     invisible characters ⟦U+200B⟧. Line breaks are unchanged."""
     def tags(m: re.Match[str]) -> str:
         decoded = "".join(chr(ord(c) - 0xE0000) for c in m.group(0)
