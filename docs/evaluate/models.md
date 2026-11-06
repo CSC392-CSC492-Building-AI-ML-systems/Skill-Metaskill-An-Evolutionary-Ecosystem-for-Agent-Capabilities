@@ -172,7 +172,7 @@ Everything evaluated for one skill.
 |---|---|
 | `name` | Skill name |
 | `scores` | `Scores` |
-| `lift` | `pass_rate(with_skill) - pass_rate(baseline)`, in `[-1, 1]` (evaluate.md 4.1). Checked on construction; NaN is refused |
+| `lift` | `pass_rate(with_skill) - pass_rate(baseline)`, in `[-1, 1]` (evaluate.md 4.1), or `None` if no tasks ran, as `0` would say the skill adds nothing. Checked on construction; NaN is refused |
 | `dimensions` | `{Dimension: DimensionStatus}` |
 | `tests`, `rubric`, `findings` | All `TestResult`s, `RubricRating`s and `Finding`s for the skill |
 

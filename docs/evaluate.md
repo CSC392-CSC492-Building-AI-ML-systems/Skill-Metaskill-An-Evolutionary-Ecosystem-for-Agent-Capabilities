@@ -76,7 +76,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `scanner_version` | Version of the external safety scanner; empty if it did not run |
 | `checks_version` | Version of our own safety rule set ([evaluate-safety.md](evaluate-safety.md), section 3.2) |
 
-**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1), a status for each dimension (`dimensions`), and four lists: `tests`, `rubric`, `findings` and `local_warnings`.
+**Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1; `null` if no tasks ran), a status for each dimension (`dimensions`), and four lists: `tests`, `rubric`, `findings` and `local_warnings`.
 
 **Dimension status (`dimensions`).** One entry per dimension, keyed by dimension name. It records whether the dimension ran as configured, so a score produced with less than was asked for (for example a `deep` safety scan that fell back to `static`) is not mistaken for a full one.
 
@@ -364,9 +364,19 @@ Dependencies:
 
 ## 7. Tool surface
 
-Exposed through the existing `metaskill` tool (`request` string), e.g. "evaluate gcp-file-transfer" or "rank my skills". Requests are routed to `evaluate_skill` / `rank_skills`.
+Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g. `/metaskill evaluate gcp-file-transfer` or "rank my skills". The command passes the request to the agent, which resolves skill names to paths and calls the tool with `operation` `evaluate` or `rank`. These are routed to `evaluate_skill` / `rank_skills` in `__init__.py`.
+
+| Argument | Description |
+|---|---|
+| `skill_path` | A skill's folder or its `SKILL.md`. For `rank`, a comma separated list (section 2) |
+| `config_path` | Optional JSON file for `EvaluationConfig.from_dict` |
+| `output_path` | Optional; replaces `EvaluationConfig.output_dir` |
 
 If a request does not name the skills, such as "rank my skills", the agent asks the user which skills to rank: all installed skills, or a set they list. The answer becomes the skill list in section 2.
+
+The tool's response goes into the agent's context, so it holds the table with its notes and recommendation, the report paths, counts, warnings and any missing `dependencies`. Quotes, finding text and local paths stay in the reports. A skill that cannot be loaded is listed in `warnings`, and the others go on.
+
+**Current state.** Each dimension's module is listed in `SCORERS` in `__init__.py`. A module that does not exist yet gives a `skipped` dimension with a `null` score; one that exists but fails to import or raises gives `error`. Only Safety is built, so every skill is unranked, no skill is recommended, and `warnings` says the result is partial (section 5.2). No built dimension runs tasks, so `lift` is `null` and Docker is not asked for ([evaluate/dependencies.md](evaluate/dependencies.md)).
 
 ## 8. Testing
 
@@ -387,6 +397,7 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 1. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
 2. How close two `overall` scores must be to count as a tie, so lift decides. The runner reduces variance (every run starts from the same files, each task runs `n` times) but does not compute a spread; mean and spread come from the quality and robustness modules (section 4.5), which are not built yet. Until then, scores are compared at 9 decimal places. Options: keep that, compare at the 2 displayed decimals, or count scores within the measured spread as tied once it exists.
 3. The weights of `overall` (section 5.1). The current defaults, safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1, are in use but may still change.
+4. How we measure the accuracy of an evaluation as a whole: whether a skill's scores, and the order of a ranking, match what a careful human reviewer would conclude. Parts of it are covered: safety detection ([evaluate-safety.md](evaluate-safety.md), section 7), and judge agreement and detection against reviewed labels ([the golden dataset](evaluation/golden_dataset.md)). Nothing yet says what accuracy means for `overall` or the order. To decide: what the reference is (e.g. reviewed scores, or a reviewed order for a set of skills), what is measured (e.g. distance from reviewed scores, rank correlation, whether the top skill agrees), how many skills that takes, and what result is good enough, chosen before looking at the results.
 
 ### Answered
 

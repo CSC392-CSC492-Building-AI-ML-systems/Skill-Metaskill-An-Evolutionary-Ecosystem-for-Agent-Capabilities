@@ -684,7 +684,8 @@ class SkillResult:
 
     name: str
     scores: Scores
-    lift: float  # pass_rate(with_skill) - pass_rate(baseline), in [-1, 1]
+    # pass_rate(with_skill) - pass_rate(baseline), in [-1, 1]; None if no tasks ran.
+    lift: float | None
     dimensions: dict[Dimension, DimensionStatus] = field(default_factory=dict)
     tests: list[TestResult] = field(default_factory=list)
     rubric: list[RubricRating] = field(default_factory=list)
@@ -693,7 +694,7 @@ class SkillResult:
 
     def __post_init__(self) -> None:
         # Also refuses NaN, which would make the ranking's order depend on input order.
-        if not -1.0 <= self.lift <= 1.0:
+        if self.lift is not None and not -1.0 <= self.lift <= 1.0:
             raise ValueError(f"lift must be in [-1, 1], got {self.lift}")
 
     def to_dict(self) -> dict[str, Any]:

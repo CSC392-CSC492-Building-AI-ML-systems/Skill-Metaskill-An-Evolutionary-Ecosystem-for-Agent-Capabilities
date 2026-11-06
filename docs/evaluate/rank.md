@@ -19,6 +19,7 @@ print(table(ranking))                            # the terminal table
 | `make_scores(dimension_scores, config)` | `Scores` from `{Dimension: DimensionScore}`, weighted with `config.weights`. A dimension missing from the mapping counts as `None` |
 | `rank(results, config)` | `Ranking` of the given `SkillResult`s, weighted with `config.weights` (2) |
 | `table(ranking)` | The Markdown table of evaluate.md section 2, then the notes and the recommendation (5) |
+| `markdown(meta, ranking)` | The contents of `ranked-evaluation.md` (5) |
 | `overall(values, weights)` | Weighted mean of the six dimensions; `None` if any dimension has no value, whatever its weight |
 | `values(scores)` | The six dimension values of a `Scores`, keyed by `Dimension` |
 
@@ -70,7 +71,7 @@ For the ranking as a whole (`Ranking.notes`): when every skill with a safety sco
 - Several skills tied for first: all of them are named and none is picked, `Tied for highest overall (0.88) of 3 ranked skill(s): a, b. Nothing scored separates them.` The safety check is added if any of them is flagged, and the low-safety and lift warnings still apply.
 - No ranked skill: no skill is named, since no complete overall comparison was available: `No complete overall comparison was available, so no skill is recommended.`, pointing to the notes for what is missing.
 - No skills: `No skills to rank.`
-- A recommended skill also gets a warning if its `lift` is 0 or less: on the tasks it does no better than having no skill (evaluate.md 4.1).
+- A recommended skill also gets a warning if its `lift` is 0 or less: on the tasks it does no better than having no skill (evaluate.md 4.1). A `lift` of `None`, when no tasks ran, gets no warning.
 
 ## 5. Table
 
@@ -88,11 +89,13 @@ Recommendation: Use gcp-file-transfer: highest overall (0.88) of 1 ranked skill(
 
 A skill that is not ranked has `-` as its rank and `overall`, and for each dimension without a score. `Ranking.notes` come first under `Notes:`, then each skill's.
 
+`markdown(meta, ranking)` gives the human-readable report: the run's settings, this table, then a section per skill with its lift, dimension statuses, tests, clarity ratings, findings and local warnings, leaving out what is empty. It has the same fields as the JSON report (evaluate.md 2.1). Local warnings are headed as this machine's, to remove before sharing.
+
 ## 6. Untrusted text
 
 Skill names come from the skill's own frontmatter, finding locations from its file names, and status details from backends such as Docker or a scanner. None of it is trusted. `judge.clean` ([judge.md](judge.md) 2.3), the same cleaner the judge uses for its own reasons, makes it one line, removes control characters (including terminal escape codes) and hidden characters, and cuts it to a length: 100 characters for a name (`MAX_NAME_CHARS`), 200 for the rest (`MAX_TEXT_CHARS`). `table` also escapes `|` in the name, so a skill cannot add a row of its own or spoof another skill's place. Every name, location and detail in the notes and the recommendation is cleaned the same way. A name with nothing left once cleaned is shown as `(unnamed)` (`UNNAMED`).
 
-`table`'s output may end up rendered as Markdown, e.g. in `ranked-evaluation.md`, where a name like `![](https://attacker.example/x)` would make the viewer contact that server. So `table` escapes, with a backslash, the Markdown that can fetch or run something: `[` and `]` (links and images), `<` and `>` (HTML and autolinks), `` ` `` (code), and `\` itself, so a name cannot undo an escape. This applies to names, notes and the recommendation. `_` and `*` are left alone: they only change formatting, and escaping them would show as `my\_skill` in a terminal. The notes' own wording uses none of the escaped characters, so only text from the skill or a backend changes. `Ranking` and `RankedSkill` keep the unescaped (but cleaned) text, for the JSON report, which needs no escaping.
+`table`'s output may end up rendered as Markdown, e.g. in `ranked-evaluation.md`, where a name like `![](https://attacker.example/x)` would make the viewer contact that server. So `table` escapes, with a backslash, the Markdown that can fetch or run something: `[` and `]` (links and images), `<` and `>` (HTML and autolinks), `` ` `` (code), and `\` itself, so a name cannot undo an escape. This applies to names, notes and the recommendation, and `markdown` does the same, after `clean`, for everything else in the report that came from a skill, a run, a backend or the judge. `_` and `*` are left alone: they only change formatting, and escaping them would show as `my\_skill` in a terminal. The notes' own wording uses none of the escaped characters, so only text from the skill or a backend changes. `Ranking` and `RankedSkill` keep the unescaped (but cleaned) text, for the JSON report, which needs no escaping.
 
 ## 7. Testing
 

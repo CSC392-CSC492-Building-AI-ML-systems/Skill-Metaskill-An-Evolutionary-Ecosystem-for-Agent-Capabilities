@@ -43,6 +43,8 @@ When Docker is not installed, the image is listed too, so the user sees both ste
 
 The runner still checks the sandbox itself once before running anything (runner.md 2.6). That is a second line of defence if Docker stops between this check and the run: no run starts, and nothing runs on the host.
 
-## Open
+## In the tool
 
-- The `evaluate` tool operation does not exist yet (`tools.py` routes only `generalize` and `personalize`). When it is added, it calls `missing_dependencies()` before evaluating and `require_dependencies()` before starting.
+No built dimension runs tasks yet, so `evaluate` and `rank` need no sandbox and do not call this module: Docker would be asked for with nothing to run in it. They call `safety.missing_dependencies()` and return the list as `dependencies` in the tool's response, for the agent to show the user. Nothing there is required, so the evaluation goes ahead.
+
+Once a dimension runs tasks, `metaskill/evaluate/__init__.py` calls `missing_dependencies()` before evaluating and `require_dependencies()` before starting, as above.

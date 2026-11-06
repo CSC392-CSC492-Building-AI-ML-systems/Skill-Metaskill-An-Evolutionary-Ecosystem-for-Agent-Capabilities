@@ -44,7 +44,8 @@ def fake_pipelines(monkeypatch):
 def test_schema_requires_operation_and_skill_path():
     params = schemas.METASKILL["parameters"]
     assert params["required"] == ["operation", "skill_path"]
-    assert params["properties"]["operation"]["enum"] == ["generalize", "personalize"]
+    assert params["properties"]["operation"]["enum"] == [
+        "generalize", "personalize", "evaluate", "rank"]
 
 
 def test_schema_stays_small():
@@ -82,7 +83,7 @@ def test_personalize_requires_config(fake_pipelines):
 
 
 def test_unknown_operation_rejected():
-    result = json.loads(tools.metaskill({"operation": "evaluate", "skill_path": "x"}))
+    result = json.loads(tools.metaskill({"operation": "merge", "skill_path": "x"}))
     assert result["success"] is False
 
 
@@ -150,6 +151,90 @@ def test_handler_never_raises_on_unexpected_failure(monkeypatch):
     raw = tools.metaskill({"operation": "generalize", "skill_path": "x"})
     assert "leaky-message-123" not in raw
     assert json.loads(raw)["success"] is False
+
+
+@pytest.fixture
+def fake_evaluate(monkeypatch):
+    """Stand-ins for evaluate_skill and rank_skills, recording how they were called."""
+    calls = {}
+
+    def pipeline(operation):
+        def run(target, **kwargs):
+            calls[operation] = (target, kwargs)
+            return {"artifacts": ["report.json"], "counts": {"skills": 1}}
+        return run
+
+    module = types.ModuleType("metaskill.evaluate")
+    module.evaluate_skill, module.rank_skills = pipeline("evaluate"), pipeline("rank")
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
+    return calls
+
+
+def test_evaluate_routes_with_ctx_and_no_default_output(fake_evaluate):
+    ctx = object()
+    result = json.loads(tools.metaskill({"operation": "evaluate", "skill_path": "skills/gcp"},
+                                        ctx=ctx))
+    assert fake_evaluate["evaluate"] == (
+        "skills/gcp", {"config_path": None, "output_path": None, "ctx": ctx})
+    assert result["success"] is True and result["operation"] == "evaluate"
+
+
+def test_rank_splits_a_comma_separated_list(fake_evaluate):
+    tools.metaskill({"operation": "rank", "skill_path": "skills/gcp, x"})
+    assert fake_evaluate["rank"][0] == ["skills/gcp", "x"]
+
+
+def test_rank_keeps_a_path_with_a_comma_whole(fake_evaluate, workspace):
+    (workspace / "a,b").mkdir()
+    tools.metaskill({"operation": "rank", "skill_path": "a,b"})
+    assert fake_evaluate["rank"][0] == ["a,b"]
+
+
+def test_evaluate_does_not_split_a_list(fake_evaluate):
+    result = json.loads(tools.metaskill({"operation": "evaluate", "skill_path": "x,skills/gcp"}))
+    assert result["success"] is False and "evaluate" not in fake_evaluate
+
+
+def test_rank_names_the_skill_it_cannot_find(fake_evaluate):
+    result = json.loads(tools.metaskill({"operation": "rank", "skill_path": "x, gcp"}))
+    assert result["success"] is False and "rank" not in fake_evaluate
+    assert "gcp" in result["error"] and "find the skill's directory" in result["error"]
+
+
+@pytest.mark.parametrize("operation", ["evaluate", "rank"])
+@pytest.mark.parametrize("skill_path", [None, ""])
+def test_evaluation_without_skills_tells_the_agent_to_ask(fake_evaluate, operation, skill_path):
+    result = json.loads(tools.metaskill({"operation": operation, "skill_path": skill_path}))
+    assert result["success"] is False and "ask the user" in result["error"]
+
+
+def test_rank_with_only_commas_has_no_skills(fake_evaluate):
+    result = json.loads(tools.metaskill({"operation": "rank", "skill_path": " , "}))
+    assert result["success"] is False and "ask the user" in result["error"]
+
+
+def test_evaluate_takes_an_optional_config(fake_evaluate):
+    tools.metaskill({"operation": "evaluate", "skill_path": "x", "config_path": "c.json"})
+    assert fake_evaluate["evaluate"][1]["config_path"] == "c.json"
+    result = json.loads(tools.metaskill(
+        {"operation": "evaluate", "skill_path": "x", "config_path": "nope.json"}))
+    assert result["success"] is False and "config_path" in result["error"]
+
+
+def test_a_failed_evaluation_is_not_a_success(monkeypatch):
+    module = types.ModuleType("metaskill.evaluate")
+    module.evaluate_skill = lambda target, **kwargs: {"status": "error", "error": "no skill"}
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
+    result = json.loads(tools.metaskill({"operation": "evaluate", "skill_path": "x"}))
+    assert result["success"] is False and result["error"] == "no skill"
+
+
+def test_evaluate_and_rank_end_to_end(workspace):
+    (workspace / "x" / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+    args = {"operation": "rank", "skill_path": "x", "output_path": "out/reports"}
+    result = json.loads(tools.metaskill(args, ctx=object(), task_id="ignored"))
+    assert result["success"] is True and result["counts"]["unranked"] == 1
+    assert all(os.path.exists(path) for path in result["artifacts"])
 
 
 class FakeCtx:

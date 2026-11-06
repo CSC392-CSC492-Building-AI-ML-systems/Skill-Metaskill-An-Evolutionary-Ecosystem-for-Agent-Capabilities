@@ -10,13 +10,24 @@ ln -s "$PWD" ~/.hermes/plugins/metaskill
 hermes plugins enable metaskill
 ```
 
-`evaluate` also needs [Docker](https://docs.docker.com/get-started/get-docker/), installed and running, to run the agent's actions and task checks in a sandbox, and the sandbox image, pinned by digest:
+Once `evaluate` runs test tasks, it also needs [Docker](https://docs.docker.com/get-started/get-docker/), installed and running, to run the agent's actions and task checks in a sandbox, and the sandbox image, pinned by digest:
 
 ```bash
 docker pull python:3.12-slim@sha256:e70237b264442328526ff29d6b3c43bd8abcf6cbab78a949322fb69b7d91d6b6
 ```
 
-`evaluate` also needs Python 3.12.11, 3.13.4 or later. `generalize` does not need Docker. If something is missing, the plugin lists it before evaluating ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
+Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not need Docker. If something is missing, the plugin lists it ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
+
+## Usage
+
+```text
+/metaskill generalize <skill>
+/metaskill personalize <skill> --config <file>
+/metaskill evaluate <skill>
+/metaskill rank <skill>, <skill>
+```
+
+`evaluate` and `rank` print a table and write a report to `evaluation-reports/[timestamp]/`. Only the Safety dimension is built so far. The others are left empty, so every skill is listed as unranked and none is recommended ([docs/evaluate.md](docs/evaluate.md), section 7).
 
 ## Layout
 

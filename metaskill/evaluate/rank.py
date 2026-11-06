@@ -17,12 +17,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from .judge import clean
+from .judge import MAX_REASON_CHARS, clean
 from .models import (
     Dimension,
     DimensionScore,
     EvaluationConfig,
     Finding,
+    ReportMeta,
     Scores,
     Severity,
     SkillResult,
@@ -274,7 +275,7 @@ def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
 
 def _lift_warning(entry: RankedSkill, alone: bool) -> str:
     """A skill no better than no skill adds no value (evaluate.md 4.1)."""
-    if entry.result.lift > 0:
+    if entry.result.lift is None or entry.result.lift > 0:
         return ""
     its, does = ("Its", "it does") if alone else ("Their", "they do")
     return (f" {its} lift is {entry.result.lift:+.2f}: on the tasks {does} no better than "
@@ -304,6 +305,67 @@ def table(ranking: Ranking) -> str:
     if ranking.recommendation:
         lines += ["", f"Recommendation: {_escape(ranking.recommendation)}"]
     return "\n".join(lines)
+
+
+def markdown(meta: ReportMeta, ranking: Ranking) -> str:
+    """ranked-evaluation.md: the settings, table(), then each skill's details, so it has
+    the same fields as ranked-evaluation.json (evaluate.md 2.1). Everything that came
+    from a skill, a run, a backend or the judge goes through _md (judge.md 2.3)."""
+    lines = [
+        "# Skill evaluation", "",
+        f"- Time: {meta.timestamp}",
+        f"- Skills: {_md(', '.join(meta.skills))}",
+        f"- Config: {meta.config}",
+        f"- Runs per task: {meta.runs_per_task}",
+        f"- Judge model: {_md(meta.judge_model) or 'none'}",
+        f"- Safety tier: {meta.safety_tier}",
+        f"- Scanner version: {_md(meta.scanner_version) or 'not run'}",
+        f"- Checks version: {_md(meta.checks_version)}",
+        "", table(ranking),
+    ]
+    for entry in ranking.entries:
+        lines += _details(entry)
+    return "\n".join(lines) + "\n"
+
+
+def _details(entry: RankedSkill) -> list[str]:
+    result = entry.result
+    lift = "not measured" if result.lift is None else f"{result.lift:+.2f}"
+    return [
+        "", f"## {_md(entry.name)}", "", f"Lift: {lift}",
+        *_section("Dimensions", [
+            f"{d.value}: {s.status}" + "".join(f". {_md(t)}" for t in (s.reason, s.detail) if t)
+            for d, s in result.dimensions.items()]),
+        *_section("Tests", [
+            f"{_md(t.task_id)} ({_md(t.description)}), {t.variant} r{t.run}: "
+            f"{'passed' if t.passed else 'failed'}, score {t.score:.2f}, judge {t.judge}, "
+            f"{t.metrics.tokens} tokens, {t.metrics.seconds}s, "
+            f"{t.metrics.tool_calls} tool calls. {_md(t.reason)}"
+            + (f" Evidence: {_md(t.evidence)}" if t.evidence else "")
+            + f" Output: {_md(t.output, len(t.output))}"  # uncut: it ends with the log's path
+            for t in result.tests]),
+        *_section("Clarity ratings", [
+            f"{_md(r.criterion)}: {r.rating:.2f}. {_md(r.reason)} Quote: {_md(r.quote)}"
+            for r in result.rubric]),
+        *_section("Findings", [
+            f"{f.severity} {_md(f.category)} at {_md(f.location)} "
+            f"({f.dimension}, {_md(f.source)}, {_md(f.rule)}): {_md(f.message)} "
+            f"Quote: {_md(f.quote)}"
+            for f in result.findings]),
+        *_section("Local warnings (this machine only: remove before sharing)", [
+            f"{_md(w.message)} Target: {_md(w.target)}, on this machine {_md(w.resolved)}, "
+            f"at {_md(w.location)}. Why: {_md(', '.join(w.reasons))}"
+            for w in result.local_warnings]),
+    ]
+
+
+def _section(title: str, items: list[str]) -> list[str]:
+    return ["", f"### {title}", "", *(f"- {item}" for item in items)] if items else []
+
+
+def _md(text: object, limit: int = MAX_REASON_CHARS) -> str:
+    """Untrusted text for ranked-evaluation.md: cleaned, then escaped."""
+    return _escape(clean(text, limit))
 
 
 def _escape(text: str) -> str:
