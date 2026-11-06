@@ -1,0 +1,231 @@
+{
+ "apple/apple-notes": [],
+ "apple/apple-reminders": [],
+ "apple/findmy": [],
+ "apple/imessage": [],
+ "autonomous-ai-agents/claude-code": [
+  [
+   "recursive-delete",
+   "HIGH",
+   "SKILL.md:608"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:20"
+  ]
+ ],
+ "autonomous-ai-agents/codex": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:29"
+  ]
+ ],
+ "autonomous-ai-agents/computer-use": [],
+ "autonomous-ai-agents/hermes-agent": [
+  [
+   "curl-pipe-shell",
+   "HIGH",
+   "SKILL.md:49"
+  ]
+ ],
+ "autonomous-ai-agents/opencode": [],
+ "creative/architecture-diagram": [],
+ "creative/ascii-video": [
+  [
+   "recursive-delete",
+   "HIGH",
+   "references/optimization.md:647"
+  ]
+ ],
+ "creative/baoyu-infographic": [],
+ "creative/claude-design": [],
+ "creative/design-md": [],
+ "creative/humanizer": [],
+ "creative/manim-video": [
+  [
+   "unpinned-install",
+   "LOW",
+   "README.md:19"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:38"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/rendering.md:141"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/rendering.md:143"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/rendering.md:144"
+  ]
+ ],
+ "creative/p5js": [
+  [
+   "recursive-delete",
+   "HIGH",
+   "scripts/render.sh:101"
+  ]
+ ],
+ "creative/popular-web-designs": [],
+ "creative/songwriting-and-ai-music": [],
+ "devops/sdlc-review": [],
+ "email/email-inbox-triage": [],
+ "email/himalaya": [],
+ "media/gif-search": [],
+ "media/songsee": [],
+ "media/youtube-content": [],
+ "note-taking/obsidian": [],
+ "productivity/airtable": [],
+ "productivity/box": [],
+ "productivity/document-to-action-items": [],
+ "productivity/docx": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:40"
+  ]
+ ],
+ "productivity/google-workspace": [],
+ "productivity/maps": [],
+ "productivity/meeting-action-items": [],
+ "productivity/notion": [
+  [
+   "curl-pipe-shell",
+   "HIGH",
+   "SKILL.md:39"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:42"
+  ]
+ ],
+ "productivity/pdf": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:35"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:36"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/nano-pdf-editing.md:10"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/nano-pdf-editing.md:13"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/ocr-extraction.md:164"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/ocr-extraction.md:55"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/ocr-extraction.md:86"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "scripts/pdf_stamp.py:106"
+  ]
+ ],
+ "productivity/powerpoint": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:37"
+  ]
+ ],
+ "productivity/product-price-monitor": [],
+ "productivity/teams-meeting-pipeline": [],
+ "productivity/weekly-review-planning": [],
+ "productivity/xlsx": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:41"
+  ]
+ ],
+ "research/arxiv": [],
+ "research/competitor-news-monitor": [],
+ "research/grounded-citations": [],
+ "research/llm-wiki": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:430"
+  ]
+ ],
+ "social-media/xurl": [
+  [
+   "curl-pipe-shell",
+   "HIGH",
+   "SKILL.md:59"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:65"
+  ]
+ ],
+ "software-development/codebase-inspection": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:31"
+  ]
+ ],
+ "software-development/dogfood": [],
+ "software-development/github": [
+  [
+   "echo-secret",
+   "HIGH",
+   "references/pr-workflow.md:27"
+  ],
+  [
+   "print-secret",
+   "HIGH",
+   "scripts/git-credential-token.py:59"
+  ]
+ ],
+ "software-development/hermes-agent-skill-authoring": [],
+ "software-development/inspecting-hermes-desktop-dom": [],
+ "software-development/node-inspect-debugger": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:109"
+  ]
+ ],
+ "software-development/python-debugpy": [],
+ "software-development/requesting-code-review": [],
+ "software-development/simplify-code": [],
+ "software-development/spike": [],
+ "software-development/systematic-debugging": [],
+ "software-development/test-driven-development": [],
+ "web/blocked-page-recovery": []
+}

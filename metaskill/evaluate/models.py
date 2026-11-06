@@ -7,14 +7,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 import re
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 # Used for both the run folder name and meta.timestamp, e.g. 2026-10-14-T15-30-02.
 TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
+# A size Docker's tmpfs takes, e.g. 16m. Nothing else: it goes into the mount's options,
+# so a comma would add options of its own.
+DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
+SANDBOX_MEMORY = "512m"  # the sandbox's memory limit, which its run folder counts against
+
+
+def size_bytes(size: str) -> int:
+    """A DISK_SIZE, e.g. 16m, in bytes."""
+    return int(size[:-1]) * 1024 ** "kmg".index(size[-1]) * 1024
 
 
 class Dimension(StrEnum):
@@ -64,6 +75,38 @@ class Status(StrEnum):
     PARTIAL = "partial"  # ran with less than was asked for, e.g. a fallback
     SKIPPED = "skipped"  # not run, e.g. no API key
     ERROR = "error"
+
+
+# Weight of each dimension in overall (evaluate.md 5.1): safety first, then quality and
+# robustness, then clarity and efficiency, then configuration cleanliness. Read-only, so
+# no caller can change the defaults of every other one.
+DEFAULT_WEIGHTS: Mapping[Dimension, float] = MappingProxyType({
+    Dimension.SAFETY: 4,
+    Dimension.QUALITY: 3,
+    Dimension.ROBUSTNESS: 3,
+    Dimension.CLARITY: 2,
+    Dimension.EFFICIENCY: 2,
+    Dimension.CONFIG_CLEANLINESS: 1,
+})
+
+
+def check_weights(weights: Mapping[Dimension, float]) -> None:
+    """Raise ValueError unless every key is a Dimension, every weight is a number >= 0
+    and finite, one is above 0, and their sum is finite: overall divides by it."""
+    for dimension, weight in weights.items():
+        if not isinstance(dimension, Dimension):
+            raise ValueError(f"weights has an unknown dimension: {dimension!r}")
+        # A weight from a JSON or YAML config can be text or true/false.
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            raise ValueError(f"weights[{dimension}] must be a number, got {weight!r}")
+        if not 0.0 <= weight < math.inf:
+            raise ValueError(
+                f"weights[{dimension}] must be >= 0 and finite, got {weight}")
+    total = sum(weights.values())
+    if not total > 0:
+        raise ValueError("at least one weight must be above 0")
+    if total == math.inf:
+        raise ValueError("the sum of the weights must be finite")
 
 
 def _check_unit(name: str, value: float) -> None:
@@ -130,20 +173,39 @@ class EvaluationConfig:
     runs_per_task: int = 3
     judge_provider: str = ""
     judge_model: str = ""
+    # Times a judge reply that does not fit its schema is asked for again (judge.md 2.4).
+    judge_retries: int = 1
+    # Characters of a skill the judge is sent; larger skills are cut (judge.md 2.3).
+    judge_max_chars: int = 100_000
     safety_tier: SafetyTier = SafetyTier.STATIC
-    # [OPEN] weighting of overall (evaluate.md, open question 1). Equal weights for now.
+    # Relative weight of each dimension in overall (evaluate.md 5.1); overall divides by
+    # their sum. A dimension left out weighs 0.
     weights: dict[Dimension, float] = field(
-        default_factory=lambda: {d: 1 / len(Dimension) for d in Dimension})
-    # [OPEN] truncation length for TestResult.output (evaluate.md, section 2.1).
+        default_factory=lambda: dict(DEFAULT_WEIGHTS))
+    # Characters of the agent's output kept in TestResult.output; the log has it all.
     output_max_chars: int = 2000
+    # Size of each run's folder in the sandbox (runner.md 2.6); fixtures must fit too.
+    sandbox_disk: str = "16m"
     output_dir: Path = Path("evaluation-reports")  # each run writes [timestamp]/ here
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
             raise ValueError(
                 f"runs_per_task must be >= 1, got {self.runs_per_task}")
-        for dimension, weight in self.weights.items():
-            _check_unit(f"weights[{dimension}]", weight)
+        if self.judge_retries < 0:
+            raise ValueError(
+                f"judge_retries must be >= 0, got {self.judge_retries}")
+        if self.judge_max_chars < 1:
+            raise ValueError(
+                f"judge_max_chars must be >= 1, got {self.judge_max_chars}")
+        if not isinstance(self.sandbox_disk, str) or not DISK_SIZE.fullmatch(self.sandbox_disk):
+            raise ValueError(
+                f"sandbox_disk must be a size like 16m, got {self.sandbox_disk!r}")
+        if size_bytes(self.sandbox_disk) >= size_bytes(SANDBOX_MEMORY):
+            # The folder is in memory, so a larger one could never be filled.
+            raise ValueError(f"sandbox_disk must be under the sandbox's memory limit of "
+                             f"{SANDBOX_MEMORY}, got {self.sandbox_disk}")
+        check_weights(self.weights)
 
     def hash(self) -> str:
         """Hash of the settings that affect scores; becomes ReportMeta.config.
@@ -173,9 +235,12 @@ class EvaluationConfig:
             "runs_per_task": self.runs_per_task,
             "judge_provider": self.judge_provider,
             "judge_model": self.judge_model,
+            "judge_retries": self.judge_retries,
+            "judge_max_chars": self.judge_max_chars,
             "safety_tier": self.safety_tier.value,
             "weights": {d.value: w for d, w in self.weights.items()},
             "output_max_chars": self.output_max_chars,
+            "sandbox_disk": self.sandbox_disk,
             "output_dir": str(self.output_dir),
         }
 
@@ -185,9 +250,12 @@ class EvaluationConfig:
             runs_per_task=data.get("runs_per_task", 3),
             judge_provider=data.get("judge_provider", ""),
             judge_model=data.get("judge_model", ""),
+            judge_retries=data.get("judge_retries", 1),
+            judge_max_chars=data.get("judge_max_chars", 100_000),
             safety_tier=SafetyTier(
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             output_max_chars=data.get("output_max_chars", 2000),
+            sandbox_disk=data.get("sandbox_disk", "16m"),
             output_dir=Path(data.get("output_dir", "evaluation-reports")),
         )
         if "weights" in data:
@@ -535,8 +603,8 @@ class DimensionStatus:
 class Scores:
     """Return type of the overall scoring function.
 
-    None means the dimension was skipped or failed. [OPEN] how overall treats it
-    (evaluate.md, section 2.1).
+    None means the dimension was skipped or failed. overall is then None too, and the
+    skill is listed below the ranked ones (evaluate.md 5.2). Built by rank.make_scores.
     """
 
     overall: float | None
@@ -577,6 +645,40 @@ class Scores:
 
 
 @dataclass
+class LocalWarning:
+    """Running the skill on this machine could delete something important.
+
+    Specific to the machine that ran the evaluation, never scored
+    (docs/safety/local.md). Holds real local paths: remove before sharing a report.
+    """
+
+    target: str  # as written in the skill, e.g. "~/Documents/drafts"
+    resolved: str  # the real path on this machine
+    location: str  # where the delete is in the skill, e.g. "SKILL.md:14"
+    reasons: list[str]  # e.g. ["contains 312 files", "is a git repository"]
+    message: str  # one sentence for the user
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target,
+            "resolved": self.resolved,
+            "location": self.location,
+            "reasons": self.reasons,
+            "message": self.message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LocalWarning:
+        return LocalWarning(
+            target=data["target"],
+            resolved=data["resolved"],
+            location=data["location"],
+            reasons=data["reasons"],
+            message=data["message"],
+        )
+
+
+@dataclass
 class SkillResult:
     """Everything evaluated for one skill."""
 
@@ -587,6 +689,12 @@ class SkillResult:
     tests: list[TestResult] = field(default_factory=list)
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
+
+    def __post_init__(self) -> None:
+        # Also refuses NaN, which would make the ranking's order depend on input order.
+        if not -1.0 <= self.lift <= 1.0:
+            raise ValueError(f"lift must be in [-1, 1], got {self.lift}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -597,6 +705,7 @@ class SkillResult:
             "tests": [t.to_dict() for t in self.tests],
             "rubric": [r.to_dict() for r in self.rubric],
             "findings": [f.to_dict() for f in self.findings],
+            "local_warnings": [w.to_dict() for w in self.local_warnings],
         }
 
     @classmethod
@@ -611,6 +720,7 @@ class SkillResult:
             tests=[TestResult.from_dict(t) for t in data["tests"]],
             rubric=[RubricRating.from_dict(r) for r in data["rubric"]],
             findings=[Finding.from_dict(f) for f in data["findings"]],
+            local_warnings=[LocalWarning.from_dict(w) for w in data.get("local_warnings", [])],
         )
 
 

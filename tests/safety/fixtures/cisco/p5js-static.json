@@ -1,0 +1,94 @@
+{
+  "analyzers_used": [
+    "static_analyzer",
+    "bytecode",
+    "pipeline",
+    "correlation"
+  ],
+  "duration_ms": 379,
+  "findings": [
+    {
+      "analyzer": "static",
+      "category": "command_injection",
+      "description": "Pattern detected: Function('",
+      "file_path": "scripts/export-frames.js",
+      "id": "COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR_73e072afbc",
+      "line_number": 128,
+      "metadata": {
+        "aitech": "AITech-9.1",
+        "aitech_name": "Model or Agentic System Manipulation",
+        "category_normalization": "native",
+        "matched_pattern": "(?<!\\.)Function\\s*\\(\\s*['\"]",
+        "matched_text": "Function('",
+        "scan_policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+        "scan_policy_name": "default",
+        "scan_policy_preset_base": "balanced",
+        "scan_policy_version": "1.0",
+        "scanner_category": "INJECTION ATTACK",
+        "semantic_facts": {
+          "context_kind": "code",
+          "evidence_kind": "signature_pattern",
+          "signals": [
+            {
+              "file_path": "scripts/export-frames.js",
+              "kind": "signature_polarity",
+              "rule_id": "COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR",
+              "value_class": "active"
+            }
+          ]
+        },
+        "signature_context": "code",
+        "signature_match_end": 28,
+        "signature_match_start": 18,
+        "signature_pattern_index": 1,
+        "signature_pattern_sha256": "3a5cc07b10fb4b6da4c8ca5ac2ec334c1f8798c052896791c677f1beae01e2c4",
+        "signature_polarity": "active",
+        "source_category": "command_injection"
+      },
+      "remediation": "Avoid new Function() and string arguments to setTimeout/setInterval. Use direct function references instead",
+      "rule_id": "COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR",
+      "severity": "CRITICAL",
+      "snippet": "await page.waitForFunction('window._p5Ready === true', { timeout: 5000 });",
+      "title": "Dynamic code execution via Function constructor or string-based setTimeout/setInterval"
+    }
+  ],
+  "findings_count": 1,
+  "is_safe": false,
+  "max_severity": "CRITICAL",
+  "scan_duration_seconds": 0.379321813583374,
+  "scan_metadata": {
+    "cel": {
+      "elapsed_ms": 0.0,
+      "errors": [],
+      "evaluated": 0,
+      "evaluation_ms": 0.0,
+      "expression_set_hash": "f26459b8f4a46a974d7ab0aaae34127b5b6a40d693e266e12fca03a69a6d26aa",
+      "fact_schema": "v1",
+      "fallbacks": 0,
+      "mode": "shadow",
+      "per_rule": {},
+      "projection_incomplete": 0,
+      "projection_ms": 0.0,
+      "retained": 1,
+      "runtime": "cel-go",
+      "runtime_version": "v0.32.0;helper=2.2.1",
+      "suppressed": 0,
+      "suppressed_candidates": [],
+      "would_suppress": 0
+    },
+    "policy_fingerprint_sha256": "627216a0144b6f3b9f1739ad040b81fbfc73f3a8e50a55473c2e1828b15ec2d0",
+    "policy_name": "default",
+    "policy_preset_base": "balanced",
+    "policy_version": "1.0",
+    "rule_contract": {
+      "checked": 0,
+      "errors": [],
+      "invalid_findings": 0,
+      "schema_version": 2,
+      "status": "passed"
+    }
+  },
+  "skill_name": "p5js",
+  "skill_path": "<skills>/creative/p5js",
+  "timestamp": "2026-10-18T23:49:14.932818+00:00"
+}
