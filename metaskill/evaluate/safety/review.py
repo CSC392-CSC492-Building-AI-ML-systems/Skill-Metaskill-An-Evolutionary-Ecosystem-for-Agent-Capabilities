@@ -13,10 +13,10 @@ import random
 from dataclasses import replace
 from typing import Any
 
-from metaskill.evaluate.judge import Judge, JudgeUnavailable, strip_hidden
-from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Skill
-from metaskill.evaluate.safety.checks import SkippedWarning, skipped_warnings
-from metaskill.evaluate.safety.findings import BackendResult, BackendStatus, SEVERITY_RANK
+from ..judge import Judge, JudgeUnavailable, strip_hidden
+from ..models import Dimension, Finding, SafetyTier, Skill
+from .checks import SkippedWarning, skipped_warnings
+from .findings import BackendResult, BackendStatus, SEVERITY_RANK
 
 NAME = "llm-review"
 # Skipped matches sent in one re-check, most severe first; the rest are reported as not
