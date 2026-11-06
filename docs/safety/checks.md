@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "2"
+CHECKS_VERSION = "3"
 
 class ChecksBackend:
     name = "own-checks"
@@ -19,7 +19,10 @@ class ChecksBackend:
     def scan(self, skill: Skill, tier: SafetyTier) -> BackendResult: ...
 
 def delete_targets(skill: Skill) -> list[DeleteTarget]: ...
+def skipped_warnings(skill: Skill) -> list[SkippedWarning]: ...
 ```
+
+`skipped_warnings(skill)` returns each prose match skipped as a warning, with its sentence, paragraph and the finding it would become, for the deep review's re-check ([review.md](review.md)). Matches that were also confirmed are left out.
 
 `delete_targets()` returns every unconfirmed delete with its target as data: the path as written, its location, whether the command follows symlinks, and the severity it was given. The local warnings in [local.md](local.md) use it to look the targets up on the user's machine. `scan()` uses the same parsing, so the two never disagree.
 
@@ -43,19 +46,24 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 Only for matches in prose. A command in a code block or a script is never skipped as a warning; it can only be cleared by the confirmation check below.
 
 1. **Find the sentence** containing the match, splitting at `.`, `!`, `?` and line breaks.
-2. **Look for a warning before the command** in that sentence: a negation (never, don't, do not, must not, should not, avoid, not) or a warning label (warning, caution, danger, important:, ⚠️). It must come before the command: in "Run `rm -rf build/`; never touch src/" the "never" is about something else.
+2. **Look for a warning that governs the command:** a negation directly before it (never, don't, do not, must not, should not, avoid, not, not to, under no circumstances), optionally with a verb such as "run" or "use", and possibly other commands joined by "or" / "and". For example "never run `x`", "do not `x`", "avoid running `x` or `y`". Or a warning label at the start of the sentence (Warning, Caution, Danger, ⚠️). A negation elsewhere in the sentence does not count: "don't hesitate to run `x`" and "don't forget to run `x`" are instructions, and in "Run `rm -rf build/`; never touch src/" the "never" is about something else.
 3. **Warning blocks count too**, with or without a warning word: GitHub alerts (`> [!WARNING]`, `> [!CAUTION]`) and blockquotes starting with **Warning**, **Caution** or **Danger**.
-4. **Exceptions** that look like warnings but are instructions are not skipped: "don't forget to", "do not skip", "never mind", "avoid ... by running".
+4. **Commands named as examples** are skipped the same way: inside parentheses with "etc." or "e.g.", or right after "such as" / "for example", as in "commands flagged as destructive (`rm -rf`, `git reset --hard`, etc.)". **A delete with a concrete target is never an example**, so "free up space (e.g. `rm -rf ~/Documents`)" is still a finding. Abbreviations like "e.g." and "etc." do not end a sentence.
 
-A skipped match is not dropped silently. Each one is listed in `detail` with its location, e.g. `skipped as a warning: SKILL.md:12 (rm -rf)`, so a reader can check it. At the `deep` tier the LLM review re-checks them and can restore any that are real instructions ([review.md](review.md)).
+The rules were tightened in version 3 after testing how a malicious author could hide a delete of the user's files: "Don't hesitate to run `rm -rf ~/Documents`" used to be skipped because the sentence contained "don't". Every such variant now scores 0.0, while a genuine warning ("Never run `rm -rf ~/Documents`") still scores 1.0.
+
+A skipped match is not dropped silently. Each one is listed in `detail` with its location, e.g. `skipped as a warning or example: SKILL.md:12 (rm -rf)`, so a reader can check it. At the `deep` tier the LLM review re-checks them and can restore any that are real instructions ([review.md](review.md)).
 
 | Text | Result | Correct? |
 |---|---|---|
 | "Never run `rm -rf` on the project root." | Skipped | Yes |
 | `> [!WARNING]` block mentioning `git push --force` | Skipped | Yes |
 | "Clean up by running `rm -rf ~/.cache/x`." | Finding | Yes |
-| "Don't forget to run `rm -rf build/`." | Finding (exception) | Yes |
-| "It is not uncommon to `rm -rf build/` here." | Skipped | No: a miss |
+| "Don't forget to run `rm -rf build/`." | Finding | Yes |
+| "Don't hesitate to run `rm -rf ~/Documents`." | Finding | Yes |
+| "Be careful not to run `rm -rf ~/Documents`." | Skipped | Yes |
+| "It is not uncommon to `rm -rf build/` here." | Finding | Yes (a miss in version 1) |
+| "Flagged as destructive (`rm -rf`, `git reset --hard`, etc.)" | Skipped as an example | Yes |
 
 Keyword matching cannot follow grammar, so unusual sentences are misjudged. The skipped list in `detail`, the deep re-check and the golden dataset's cases are how those misses are caught and measured.
 
@@ -91,7 +99,7 @@ The check cannot see the user's machine, so it cannot know what is actually at a
 
 | Target | Examples | Severity |
 |---|---|---|
-| System or home | `/`, `~`, `$HOME`, `/etc`, `/usr`, `/var`, `~/.ssh`, `~/.config`, `~/.gnupg`, `.git`, `..` | CRITICAL |
+| System, home or personal | `/`, `~`, `$HOME`, `/etc`, `/usr`, `/var`, `~/.ssh`, `~/.config`, `~/.gnupg`, `.git`, `..`; the user's personal folders `~/Documents`, `~/Desktop`, `~/Pictures`, `~/Downloads`, `~/Music`, `~/Videos` (also under `/home/<user>`, `/Users/<user>`, `C:\Users\<user>`) | CRITICAL |
 | Unguarded variable that may be empty | `rm -rf $DIR/` or `rm -rf "$DIR"/*`: an empty `DIR` turns it into `rm -rf /` | CRITICAL |
 | Unknown | `data/`, `~/Documents/x`, `"$OUTPUT_DIR"`, `{{path}}`, `*`, `.`, any absolute path not listed here | HIGH |
 | Rebuildable | `build/`, `dist/`, `out/`, `target/`, `node_modules/`, `__pycache__/`, `.cache/`, `.pytest_cache/`, `/tmp/...` | MEDIUM |
@@ -99,6 +107,7 @@ The check cannot see the user's machine, so it cannot know what is actually at a
 Rules for judging a target:
 
 - **Rebuildable only when plain.** A relative path whose last part is in the rebuildable list, such as `build/`, `./dist` or `frontend/node_modules`, or a path under `/tmp/`. A trailing `/*` (the folder's contents) is allowed. Any `..`, other glob, variable or other absolute path makes it unknown. A path ending in `..`, such as `build/../../`, resolves to `..` and is CRITICAL, so it never passes as `build/`.
+- **Python home-folder expressions are understood:** `os.path.expanduser("~/x")`, `os.path.join(os.environ["HOME"], "x")` (also `os.getenv` and `USERPROFILE`), `Path.home() / "x"` and `Path("~/x").expanduser()`, also when assigned to a variable first.
 - **Variables set in the same script are followed once.** `DIR=build` followed by `rm -rf "$DIR"` is judged as `build`. Only one literal assignment in the same file; anything else is unknown.
 - **Empty-variable guard.** `${DIR:?}` aborts when `DIR` is empty, so a guarded variable is judged as unknown, not CRITICAL.
 - **Placeholders are unknown.** A generalized skill's `rm -rf {{OUTPUT_DIR}}` deletes whatever folder each user configures, so it is HIGH.
@@ -148,11 +157,14 @@ What a static check cannot see is a symlink the user created on their own machin
 - In markdown: the same code block, or the paragraph or list item directly before it.
 - In scripts: the same line, or the 5 lines before it.
 
-Confirmation means any of:
+Confirmation means an actual step, not just the word. Any of:
 
-- Words: ask, confirm, confirmation, "are you sure", dry run, backup, back up.
-- Flags: `--dry-run`, `-n` on `git clean`, `-i` or `--interactive` on `rm`.
-- Code: `read -p`, `input(`, `confirm(`.
+- Asking: "ask the user", "ask for confirmation", "confirm with the user", "get the user's approval", "wait for permission", "are you sure".
+- A dry run: "dry run", `--dry-run`, `-WhatIf`, `-n` on `git clean`.
+- A backup: "make a backup", "back up first", "back everything up".
+- Flags and code: `-i` or `--interactive` on `rm`, `read -p`, `input(`, `confirm(`, `Read-Host`, `-Confirm`, `set /p`, `choice`.
+
+A phrase negated just before it does not count: "no need to confirm", "skip the backup", "do not ask the user". Neither does the bare word: "Confirm the export finished" is not a confirmation step. Version 1 accepted any occurrence of "ask", "confirm" or "backup", which a malicious author could simply include.
 
 This is a heuristic (limitation in section 9 of the safety design). A confirmation written further away, or phrased differently, is missed and the command is reported.
 
@@ -206,13 +218,15 @@ None of the 58 Hermes skills triggers any of the three rules.
 
 ## Results on real skills
 
-Run on 19 Oct 2026 against the 59 skills in a local `~/.hermes/skills`, static only:
+Run on 19 Oct 2026 against the 59 skills in a local `~/.hermes/skills`, static only, then again on 21 Oct with version 3. The hidden-characters rule (version 2) found nothing in any of them:
 
-| Worst finding | Skills |
-|---|---|
-| None | 43 |
-| LOW (unpinned installs) | 10 |
-| HIGH | 6 |
+| Worst finding | Version 1 | Version 3 |
+|---|---|---|
+| None | 43 | 42 |
+| LOW (unpinned installs) | 10 | 10 |
+| HIGH | 6 | 7 |
+
+Version 3's stricter warning and confirmation checks first added three skills at HIGH, all from text that mentions a command rather than instructs it. The example rule cleared two (`hermes-agent`'s and `computer-use`'s lists of destructive commands). The one left is `claude-code`: a JSON permissions file whose `deny` list blocks `Bash(rm -rf *)`, and a hook that greps for `rm -rf` in order to block it. Both are in code blocks, which are never skipped; a known false positive.
 
 The first run had 18 skills at HIGH or above. Three rules were then narrowed: `curl | python3 -c` (parsing JSON, not running code), `` `env` `` in prose (a config key), and names like `TOKEN_PATH` (a path, not a secret). The six left:
 
@@ -247,7 +261,8 @@ Fixture skills in `tests/safety/fixtures/skills/`: `clean`, `destructive`, `cred
 - Delete targets: one case per row of the target table; `build/../../` judged unknown; `DIR=build` followed by `rm -rf "$DIR"` judged rebuildable; `rm -rf $DIR/` CRITICAL and `rm -rf "${DIR:?}"/` HIGH; a placeholder HIGH; two targets in one command take the worse.
 - A skill that only warns about dangerous commands in prose: no findings, and each skipped match listed in `detail`.
 - A dangerous command in prose with no warning: a finding.
-- Each row of the warning-check table above, including the known miss, so a change to the word lists shows up in tests.
+- Each row of the warning-check table above, so a change to the rules shows up in tests.
+- Personal folders are CRITICAL; the malicious phrasings ("don't hesitate to run", an example list with a real target, "confirm" or "no need to confirm" near the command) are findings; genuine warnings and real confirmation steps are not.
 - A command in a code block next to a warning sentence: still a finding.
 - A script with a confirmation 3 lines up (no finding) and 10 lines up (finding).
 - Locations and quotes are exact.

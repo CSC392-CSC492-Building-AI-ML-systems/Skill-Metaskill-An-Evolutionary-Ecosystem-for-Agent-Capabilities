@@ -116,7 +116,7 @@ Hermes never gives plugins API keys: a plugin asks Hermes for a completion throu
 
 So Cisco's LLM layer runs on whichever model the user has configured in Hermes, with Hermes's auth and permission settings. Without `ctx.llm`, Cisco runs static only.
 
-For now the adapter uses the user's active model. `judge.py` registers its own model setting, `metaskill_judge`, so a user can pin a judge model; the adapter should pass that task too, so Cisco and our review always use the same model.
+The adapter calls through `judge.py`'s model setting, `metaskill_judge` (`CiscoBackend(llm, task=JUDGE_TASK)`), so Cisco and the review always run on the same model, including when the user pins a judge model in `config.yaml`.
 
 `judge.py` reaches `ctx.llm` the same way and makes the same choice about the schema: it sends the schema as guidance, checks the reply itself and asks again up to `EvaluationConfig.judge_retries` times ([judge.md](../evaluate/judge.md) 2.4).
 
