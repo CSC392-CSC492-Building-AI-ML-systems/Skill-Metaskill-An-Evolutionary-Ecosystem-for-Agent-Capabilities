@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from metaskill.evaluate import runner
-from metaskill.evaluate.judge import Judge, JudgeError, TokenUsage
+from metaskill.evaluate.judge import MAX_REASON_CHARS, Judge, JudgeError, TokenUsage
 from metaskill.evaluate.models import (
     Check,
     CheckKind,
@@ -226,6 +226,26 @@ def test_agent_failure_is_a_failed_run(skill, run_dir):
     assert all(w.closed for w in sandbox.opened)
 
 
+def test_an_agent_failure_is_cleaned_before_it_is_stored(skill, run_dir):
+    def crash(prompt, skill, workdir):
+        raise RuntimeError("bad\x1b[31m\nnext​ " + "x" * 2000)
+
+    result = run_tasks(skill, [task()], FakeAgent(crash), config=config(runs=1),
+                       run_dir=run_dir)
+    reason = result.tests[0].reason
+    assert reason.startswith("agent failed: RuntimeError: bad [31m next x")
+    assert len(reason) == MAX_REASON_CHARS
+
+
+def test_an_error_is_cleaned_before_it_is_listed(skill, run_dir):
+    def docker_failed(prompt, skill, workdir):
+        raise JudgeError("docker said\x1b[2J\nbad")
+
+    result = run_tasks(skill, [task()], FakeAgent(docker_failed), config=config(runs=1),
+                       run_dir=run_dir)
+    assert result.errors[0] == "write-report with_skill r1: JudgeError: docker said [2J bad"
+
+
 # --- Logs and output --------------------------------------------------------
 
 
@@ -240,6 +260,17 @@ def test_full_log_is_written_and_output_points_to_it(skill, run_dir):
     text = (run_dir / log).read_text(encoding="utf-8")
     assert "x" * 50 in text and "tool: ls" in text and "Write report.txt" in text
     assert (run_dir / "cleanup/logs/write-report-baseline-r1.txt").exists()
+
+
+def test_output_that_cannot_be_encoded_does_not_stop_the_runs(skill, run_dir):
+    def cut_emoji(prompt, skill, workdir):
+        return AgentRun(output="half \ud83d an emoji", transcript="\ud83d")
+
+    result = run_tasks(skill, [task(checks=[output_check("half")])], FakeAgent(cut_emoji),
+                       config=config(runs=1), run_dir=run_dir)
+    assert [t.passed for t in result.tests] == [True, True] and result.errors == []
+    log = run_dir / "cleanup/logs/write-report-with_skill-r1.txt"
+    assert r"half \ud83d an emoji" in log.read_text(encoding="utf-8")
 
 
 def test_timestamp_and_report_dir():
