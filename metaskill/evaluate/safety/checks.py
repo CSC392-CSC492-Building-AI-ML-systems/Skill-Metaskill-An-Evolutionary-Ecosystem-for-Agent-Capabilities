@@ -66,7 +66,8 @@ REBUILDABLE = {
 HOME_FORMS = ("~", "$HOME", "${HOME}")
 HOME_CRITICAL = (".ssh", ".config", ".gnupg", "appdata")  # compared case-insensitively
 # The user's personal files: deleting one of these folders is as bad as deleting home.
-HOME_PERSONAL = ("documents", "desktop", "pictures", "downloads", "music", "videos")
+HOME_PERSONAL = ("documents", "desktop", "pictures", "downloads", "music", "videos",
+                 "movies", "library", "onedrive")  # macOS Movies/Library, Windows OneDrive
 SYSTEM_EXACT = {
     "/", "/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/opt",
     "/home", "/root", "/Users", "/System", "/Library", "/Applications",
@@ -751,12 +752,17 @@ def _unpinned_pip(args: list[str]) -> bool:
 # "don't forget to run `x`" are instructions, not warnings.
 _GOVERNING_NEGATION = re.compile(
     r"(?:\bnever|\bdon['’]?t|\bdo\s+not|\bmust\s+not|\bmustn['’]?t|\bshould\s+not|\bshouldn['’]?t"
-    r"|\bavoid|\bnot(?:\s+to)?|\bunder\s+no\s+circumstances(?:\s+should\s+you)?)\s+"
+    r"|\bavoid|(?<!why\s)\bnot(?:\s+to)?|\bunder\s+no\s+circumstances(?:\s+should\s+you)?)\s+"
     r"(?:(?:run|running|use|using|execute|executing|type|typing|call|calling|invoke|invoking"
     r"|do|doing|try|trying)\s+)?"
     r"(?:`[^`]*`\s*(?:,|\bor\b|\band\b|\bnor\b)?\s*)*$", re.I)
 # A warning label at the start of the sentence.
 _WARNING_LABEL = re.compile(r"^\W*(?:warning|caution|danger)\b|^\W*⚠", re.I)
+# Verbs that tell the agent to run the command, so a warning label before one of them
+# ("Warning: run `rm -rf ~`") is an instruction, not a warning.
+_IMPERATIVE = re.compile(
+    r"\b(?:run|running|use|using|execute|executing|type|typing|call|calling"
+    r"|invoke|invoking|do|doing|try|trying)\b", re.I)
 
 
 def _sentence_span(unit: _Unit, line_index: int, col: int) -> tuple[str, int, int, int]:
@@ -780,16 +786,36 @@ def _sentence(unit: _Unit, line_index: int, col: int) -> str:
 
 _EXAMPLE_LEAD = re.compile(r"(?:such\s+as|e\.g\.,?|for\s+example,?|for\s+instance,?|including)\s*$", re.I)
 _EXAMPLE_MARK = re.compile(r"\betc\b|\be\.g\.|\bfor\s+example\b|\bsuch\s+as\b", re.I)
+# Destructive rules whose match stops at the flags, so a trailing positional operand (a
+# remote and branch, a ref) marks a concrete instruction rather than a bare example.
+_BARE_RULES = {"force-push", "history-rewrite"}
+
+
+def _has_operand(text: str, col: int) -> bool:
+    """Whether the git command at `col` has a positional argument after its subcommand
+    and flags: `git push --force origin main` does, bare `git push --force` does not."""
+    rest = text[col:]
+    tokens = rest[:_command_end(rest)].split()
+    return any(not t.startswith("-") for t in tokens[2:])  # after "git <subcommand>"
 
 
 def _is_example(unit: _Unit, line_index: int, hit: _Hit) -> bool:
     """A command named as an example in prose rather than given as an instruction:
     inside parentheses with "etc." or "e.g.", or right after "such as" / "for example".
 
-    A delete with a concrete target is never an example, so "free up space (e.g.
-    `rm -rf ~/Documents`)" is still a finding.
+    Only a bare destructive command (`rm -rf`, `git reset --hard`) with no concrete
+    operand can be a prose example. A delete with a real target, a force-push to a
+    remote and branch, or a reset to a ref is a concrete instruction, as is any
+    download/credential rule (`curl ... | bash`, `echo $SECRET`) whose dangerous operand
+    is part of the match: those are flagged wherever they appear.
     """
-    if hit.rule == "recursive-delete" and any(t != "(unspecified)" for t, _ in hit.targets):
+    if hit.rule == "recursive-delete":
+        if any(t != "(unspecified)" for t, _ in hit.targets):
+            return False
+    elif hit.rule in _BARE_RULES:
+        if _has_operand(unit.lines[line_index][1], hit.start):
+            return False
+    else:
         return False
     joined, start, position, end = _sentence_span(unit, line_index, hit.start)
     prefix = joined[start:position].rstrip().rstrip("`").rstrip()
@@ -809,9 +835,12 @@ def _is_warning(unit: _Unit, line_index: int, col: int) -> bool:
         return True
     joined, start, position, _ = _sentence_span(unit, line_index, col)
     prefix = joined[start:position]
-    if _WARNING_LABEL.search(prefix.lstrip()):
+    if _GOVERNING_NEGATION.search(prefix.rstrip().rstrip("`").rstrip() + " "):
         return True
-    return bool(_GOVERNING_NEGATION.search(prefix.rstrip().rstrip("`").rstrip() + " "))
+    # A label (Warning/Caution/Danger/⚠) marks a warning only when it does not then tell
+    # the agent to run the command: "Warning: run `rm -rf ~`" is an instruction.
+    label = _WARNING_LABEL.search(prefix.lstrip())
+    return bool(label and not _IMPERATIVE.search(prefix.lstrip()[label.end():]))
 
 
 # An actual confirmation step, not just the word: asking the user, getting their
