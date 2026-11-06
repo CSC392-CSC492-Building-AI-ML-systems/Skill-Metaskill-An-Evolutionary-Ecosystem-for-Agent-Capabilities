@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
-from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, Skill
+from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 
 # Most severe first. Used to pick the worst finding and to order merged output.
 SEVERITY_RANK = {

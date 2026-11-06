@@ -14,9 +14,9 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from metaskill.evaluate.judge import mark_hidden
-from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, Skill
-from metaskill.evaluate.safety.findings import SEVERITY_RANK, BackendResult, BackendStatus
+from ..judge import mark_hidden
+from ..models import Dimension, Finding, SafetyTier, Severity, Skill
+from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
 CHECKS_VERSION = "2"
