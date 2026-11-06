@@ -1,43 +1,106 @@
-# Quality: pilot specification
+# Quality: implementation and provisional scoring rule
 
-Status: draft for independent review. Owner: Quality metric workstream.
+Status: implemented over recorded evidence; numeric formula is a placeholder pending team discussion. No live agent validation is claimed.
 
-## Purpose
+Code: [quality.py](../../metaskill/evaluate/quality.py). Tests: [test_quality.py](../../tests/test_quality.py).
+Design authority: [evaluate.md](../evaluate.md), section 3.1. [The scoring draft](../evaluation/scoring.md#quality) provides the current provisional formula.
 
-Quality measures task success and added value relative to the same agent without the skill. [The overview](../evaluate.md) defines this intent; [the scoring draft](../evaluation/scoring.md#quality) proposes, but does not finalize, its formula. No new Quality implementation or formula approval is claimed here.
+## Purpose and boundary
 
-## Inputs and outputs
+Quality measures task success and added value relative to the same agent without the skill. The module is a pure consumer of recorded TestResult objects. It does not read skill contents, execute the agent, call a judge, retry failed runs, compute other dimensions, or rank skills.
 
-The planned scorer consumes complete paired TestResult records, grouped by task_id, variant, and run. It is a pure function over recorded outcomes, not an agent runner or judge. Its output should be DimensionScore for quality; the report also needs pass rates and lift with explanatory evidence. The final function signature and how supporting statistics reach SkillResult require agreement with the runner/report owners.
+Task-level pass/fail is supplied by the existing judge and runner. The module does not replace that decision with a new threshold on TestResult.score. Partial-credit scores remain evidence for other analyses but do not enter this initial pass-rate formula.
 
-Use the same tasks, full success contract, configuration, model, tools, limits, and repetition counts in both conditions. Do not give the skill hidden task requirements and then interpret the information advantage as general skill quality.
+## Interface
 
-## Pilot task and checks
+| Function | Result |
+| --- | --- |
+| `assess(results, *, task_ids, runs_per_task, runner_errors=())` | QualityAssessment containing a DimensionScore, with-skill pass rate, baseline pass rate, and lift. |
+| `score(skill, config, results, *, task_ids, runner_errors=())` | DimensionScore only, using config.runs_per_task. The skill parameter preserves the common scoring-module shape; it is not read or executed. |
 
-[The ticket-summary pilot](../../metaskill/evaluate/golden/synthetic/ticket-summary/README.md) has eight hand-authored input scenarios, explicitly scheduled across five candidate variants and two profiles (80 logical cases), covering totals, cancellation, sorting, empty lists, invalid types, and exact team names. Expected JSON is distinct from runtime output and remains evaluator-only.
+The planned task IDs must come from loaded tasks, not the observed results. Otherwise an entirely absent task could disappear from the denominator. Supply only one skill's results from one compatible evaluation and pass the associated RunnerResult.errors.
 
-Its trusted semantic verifier accepts object-key reordering but rejects wrong counts/totals, missing or extra output fields, duplicate keys, Boolean/integer substitution, and explanatory text outside the JSON. Each case currently has one all-or-nothing content assertion: pass yields task score 1, fail yields 0. This pilot does not adopt the scoring draft's richer partial-credit proposal.
+Example from trusted orchestration code:
 
-Source preservation and network restrictions require separate runtime observations. Correct JSON alone does not establish either.
+```python
+from metaskill.evaluate.quality import assess
 
-## Calculation proposal
+assessment = assess(
+    runner_result.tests,
+    task_ids=[task.task_id for task in tasks],
+    runs_per_task=config.runs_per_task,
+    runner_errors=runner_result.errors,
+)
+quality_dimension = assessment.dimension_score
+# Only when quality_dimension.status is OK:
+# assessment.lift is the unrounded value intended for SkillResult.lift.
+```
 
-For each task, average accepted pass indicators across its planned repetitions. Then average across tasks equally, separately for with_skill and baseline. Lift is the difference between the two rates, in [-1, 1].
+QualityAssessment is an evaluator-side helper, not a new serialized report field. The DimensionScore uses existing value/status/reason/detail fields and round-trips through existing serialization. Its reason records pass counts, rates, lift, and the placeholder formula version.
 
-The current draft formula is Q = P_skill * (0.75 + 0.25 * lift). Retain it only as a proposal for review. It yields Q=1 when skill passes everything and baseline fails everything; Q=0.75 when both pass everything; Q=0 when the skill never passes. Ask whether the reduced score at zero lift captures the team's intended meaning.
+This change does not connect the module to the plugin or report orchestrator. In particular, missing lift remains None in QualityAssessment; the current SkillResult requires a numeric lift. The integration owner must resolve how an unavailable comparison is represented without silently inventing zero lift.
 
-This pilot can produce zero lift on a capable agent. Do not weaken the baseline to manufacture a positive result.
+## Evidence validation
 
-## Availability and validation
+A complete comparison requires each planned task to have exactly one record for every run index from 1 through runs_per_task, for both with_skill and baseline.
 
-Missing logical runs after bounded infrastructure retries leave Quality unscored with a reason. A valid failed task is a zero, not missing evidence. Missing or duplicate run identities, unequal task sets, and incompatible settings must be identified before computing a comparable score.
+The module checks:
 
-Before implementation, agree whether absent baseline permits absolute success reporting without a Quality score; do not silently assume zero baseline success. Validate scoring on recorded all-pass, all-fail, positive/negative-lift, and invalid/incomplete run matrices once the interface is agreed.
+- Planned IDs are distinct nonempty strings and runs_per_task is a positive integer.
+- Each record belongs to a planned task and a recognized variant.
+- Run indices are integers in the planned range, with no duplicate identities.
+- Pass indicators are actual Booleans and task scores are finite numbers in [0, 1].
+- Every planned task/variant/run slot is present.
+- No runner errors were supplied.
 
-The offline pilot tests validate gold consistency, verifier behaviour, and an injected semantic judge through the existing loader and runner with inert agent/sandbox doubles. They do not measure agent pass rates, lift, robustness, or Quality scores. Human review and live runs remain pending.
+Invalid plans raise ValueError because the caller must fix its configuration. Malformed or incomplete observed evidence produces a null Quality score with error status. Nonempty runner errors also produce error status, even if record counts happen to look complete. Detailed runner errors stay in runner diagnostics rather than copying candidate-controlled text into score explanations.
 
-## Runner integration milestone
+No tasks or no records without runner errors produce skipped status with null score and unavailable supporting rates/lift. Records without a task plan produce error status. A valid completed failure remains part of the matrix and counts as a failure, not missing evidence.
 
-The pilot now prepares real Task/Check-compatible task files with safe runtime IDs and uses an evaluator-owned TaskJudge injected through run_tasks. Expected outputs stay outside staged agent fixtures. See [the adapter procedure](../../metaskill/evaluate/golden/synthetic/ticket-summary/README.md#integration-status).
+The scorer cannot verify model, prompt, tool, permission, or fixture equivalence from TestResult alone: those settings are not all in that model. The caller must establish that both conditions used the same task requirements, configuration, settings, and resources.
 
-This preserves the shared report models and runner implementation. Tests verify accepted and failed TestResult records and logs; Quality aggregation is still not implemented. Live execution still requires a compatible Agent and the runner's sandbox.
+## Calculation
+
+For each task, average its pass indicators over the planned repetitions; then average the task rates equally:
+
+```text
+P_skill = mean_t(mean_r(passed[t, with_skill, r]))
+P_base  = mean_t(mean_r(passed[t, baseline, r]))
+lift    = P_skill - P_base
+```
+
+Lift is in [-1, 1]. Rates and scores retain calculation precision; formatting in the reason is for display only. One repetition can establish a Quality observation, although it is not sufficient to measure repeatability for Robustness.
+
+### PLACEHOLDER: replace after team discussion
+
+The implementation isolates this temporary rule in _provisional_score and identifies it as provisional-v1:
+
+```text
+Q = P_skill * (0.75 + 0.25 * lift)
+```
+
+The coefficients are not calibrated or approved as a final definition. The source contains a TODO to replace this calculation after discussion, and every successful score explanation explicitly labels it PLACEHOLDER. Do not interpret implementation as approval.
+
+| With-skill rate | Baseline rate | Lift | Temporary Q |
+| --- | --- | --- | --- |
+| 1 | 0 | 1 | 1 |
+| 1 | 1 | 0 | 0.75 |
+| 0 | 0 | 0 | 0 |
+| 1/3 | 2/3 | -1/3 | 2/9 |
+
+In particular, perfect success receives only 0.75 when the baseline is also perfect. Decide whether Quality should combine added value and correctness this way, or keep lift separate. Update the implementation, formula identifier, tests, and scoring documentation together after that decision.
+
+## Pilot and validation
+
+[The ticket-summary pilot](../../metaskill/evaluate/golden/synthetic/ticket-summary/README.md) schedules eight input scenarios across five candidate variants and two profiles. Its existing semantic judge produces Boolean pass decisions and all-or-nothing content scores, without exposing expected answers to the agent.
+
+The pilot adapter already exercises the real task loader, runner, log writer, and TestResult shape with inert agent/sandbox doubles. This module's tests consume controlled recorded evidence to verify positive, zero, and negative lift, consistent failure, multiple tasks, record ordering, null/error cases, malformed evidence, and unchanged DimensionScore serialization. No model, network, or Docker execution is needed.
+
+These checks verify arithmetic and evidence handling, not live skill performance, detection accuracy, or independent approval of gold labels. A capable agent may show zero lift on this simple task; do not weaken its baseline to manufacture improvement.
+
+## Remaining integration decisions
+
+- Have the orchestration owner call assess and transfer a valid lift and DimensionScore into existing report structures.
+- Agree how reports represent unavailable lift without changing it into a measured zero.
+- Review the numeric Quality definition and replace the placeholder after discussion.
+- Independently review gold expectations, then run a small controlled live experiment when the Agent adapter is available.
