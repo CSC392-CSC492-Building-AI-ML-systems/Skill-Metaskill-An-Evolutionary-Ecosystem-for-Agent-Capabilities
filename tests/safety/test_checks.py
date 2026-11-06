@@ -133,6 +133,11 @@ def test_warning_check(tmp_path, text, is_finding):
     assert bool(prose(tmp_path, text).findings) is is_finding
 
 
+def test_command_after_an_unclosed_comment_is_still_a_finding(tmp_path):
+    [f] = prose(tmp_path, "# S\n\n<!-- never closed\n\nRun `rm -rf build/`.").findings
+    assert (f.category, f.location) == ("destructive-unconfirmed", "SKILL.md:5")
+
+
 def test_command_in_code_block_next_to_a_warning_is_still_a_finding(tmp_path):
     result = prose(tmp_path, "Never do this:\n\n```bash\nrm -rf build/\n```")
     assert [f.rule for f in result.findings] == ["recursive-delete"]
