@@ -40,31 +40,35 @@ class PluginLlm(Protocol):
                             json_schema: Any = None, json_mode: bool = False,
                             temperature: float | None = None, max_tokens: int | None = None,
                             timeout: float | None = None, purpose: str | None = None,
-                            task: str | None = None) -> Any: ...
+                            task: str | None = None, provider: str | None = None,
+                            model: str | None = None) -> Any: ...
 
 
 class UnsupportedRequest(ValueError):
     """Cisco sent something ctx.llm cannot express (tools, multi-turn history)."""
 
 
-_llms: dict[str, tuple[PluginLlm, str | None]] = {}  # scan id -> (ctx.llm, model setting)
+_llms: dict[str, tuple[PluginLlm, str | None, str, str]] = {}  # id -> (ctx.llm, task, provider, model)
 _lock = threading.Lock()
 _handler: Any = None
 
 
 @contextmanager
-def routed(llm: PluginLlm, task: str | None = None) -> Iterator[str]:
+def routed(llm: PluginLlm, task: str | None = None, provider: str = "",
+           model: str = "") -> Iterator[str]:
     """Make `llm` reachable by Cisco for the duration of a scan.
 
     Yields the model name to give Cisco. Each scan gets its own name, so
-    concurrent scans with different `ctx.llm` objects do not mix. `task` is the
-    Hermes model setting to call through, e.g. judge.py's `metaskill_judge`, so
-    Cisco runs on the same model as the judge; None means the user's active model.
+    concurrent scans with different `ctx.llm` objects do not mix. `task`, `provider`
+    and `model` are the Hermes model settings to call through (judge.py's
+    `metaskill_judge` and EvaluationConfig.judge_provider/judge_model), so Cisco runs
+    on the same model as the judge, including when the user pins one through
+    judge_provider/judge_model rather than the auxiliary task. Empty means the default.
     """
     _install()
     token = uuid.uuid4().hex
     with _lock:
-        _llms[token] = (llm, task)
+        _llms[token] = (llm, task, provider, model)
     try:
         yield f"{PROVIDER}/{token}"
     finally:
@@ -126,7 +130,7 @@ def _text(content: Any) -> str:
     raise UnsupportedRequest(f"unexpected message content: {type(content).__name__}")
 
 
-def _llm_for(model: str) -> tuple[PluginLlm, str | None]:
+def _llm_for(model: str) -> tuple[PluginLlm, str | None, str, str]:
     token = model.split("/", 1)[1] if "/" in model else model
     with _lock:
         entry = _llms.get(token)
@@ -149,10 +153,16 @@ def _install() -> None:
             def completion(self, model: str, messages: list, *args: Any,
                            optional_params: dict | None = None, **kwargs: Any) -> Any:
                 params = optional_params or {}
-                llm, task = _llm_for(model)
+                llm, task, provider, pinned = _llm_for(model)
                 kwargs = translate(messages, params)
                 if task:
                     kwargs["task"] = task
+                # Pin the same provider/model the judge uses, so Cisco and the review
+                # run on one model even when the user set these rather than the task.
+                if provider:
+                    kwargs["provider"] = provider
+                if pinned:
+                    kwargs["model"] = pinned
                 result, usage = complete_with_retry(llm, kwargs, _schema(params))
                 return _response(ModelResponse, result, usage)
 

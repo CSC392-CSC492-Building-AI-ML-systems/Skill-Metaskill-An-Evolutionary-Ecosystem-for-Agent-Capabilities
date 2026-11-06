@@ -309,3 +309,21 @@ def test_review_is_a_default_backend_only_at_deep():
 def test_review_without_llm_shows_as_unavailable():
     [_, _, review_backend] = safety.default_backends(EvaluationConfig(safety_tier=SafetyTier.DEEP))
     assert review_backend.judge is None
+
+
+def test_cisco_and_judge_share_the_model_settings():
+    config = EvaluationConfig(safety_tier=SafetyTier.DEEP,
+                              judge_provider="anthropic", judge_model="claude-x")
+    cisco, _checks, review_backend = safety.default_backends(config, object())
+    assert (cisco.task, cisco.provider, cisco.model) == ("metaskill_judge", "anthropic", "claude-x")
+    judge = review_backend.judge
+    assert (judge.task, judge.provider, judge.model) == ("metaskill_judge", "anthropic", "claude-x")
+
+
+def test_task_none_is_threaded_to_cisco_and_the_judge():
+    # On a Hermes without auxiliary tasks the caller passes task=None, so no unregistered
+    # task reaches ctx.llm (matching Judge.from_context).
+    cisco, _checks, review_backend = safety.default_backends(
+        EvaluationConfig(safety_tier=SafetyTier.DEEP), object(), task=None)
+    assert cisco.task is None
+    assert review_backend.judge.task is None

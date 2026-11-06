@@ -140,6 +140,27 @@ def test_without_a_task_the_active_model_is_used(tiny_skill):
     assert "task" not in llm.calls[0]
 
 
+def test_pinned_provider_and_model_reach_ctx_llm():
+    pytest.importorskip("litellm")
+
+    class Recorder:  # a bare ctx.llm: no schema in the request to parse
+        def __init__(self):
+            self.calls = []
+
+        def complete_structured(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeResult(parsed={})
+
+    llm = Recorder()
+    hermes_bridge._handler = None
+    with hermes_bridge.routed(llm, "metaskill_judge", "anthropic", "claude-x") as model:
+        hermes_bridge._install()
+        hermes_bridge._handler.completion(
+            model, [{"role": "user", "content": "hi"}], optional_params={})
+    call = llm.calls[0]
+    assert (call["task"], call["provider"], call["model"]) == ("metaskill_judge", "anthropic", "claude-x")
+
+
 def test_ctx_llm_failure_falls_back_to_static(tiny_skill):
     pytest.importorskip("skill_scanner")
     from metaskill.evaluate.safety.cisco import CiscoBackend
@@ -155,7 +176,7 @@ def test_registration_is_removed_after_the_scan(tiny_skill):
     llm = FakeLlm()
     with hermes_bridge.routed(llm, "metaskill_judge") as model:
         assert model.startswith(f"{hermes_bridge.PROVIDER}/")
-        assert hermes_bridge._llm_for(model) == (llm, "metaskill_judge")
+        assert hermes_bridge._llm_for(model) == (llm, "metaskill_judge", "", "")
     with pytest.raises(RuntimeError):
         hermes_bridge._llm_for(model)
 
