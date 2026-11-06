@@ -91,17 +91,22 @@ DEFAULT_WEIGHTS: Mapping[Dimension, float] = MappingProxyType({
 
 
 def check_weights(weights: Mapping[Dimension, float]) -> None:
-    """Raise ValueError unless every weight is a number >= 0 and finite, and one is
-    above 0."""
+    """Raise ValueError unless every key is a Dimension, every weight is a number >= 0
+    and finite, one is above 0, and their sum is finite: overall divides by it."""
     for dimension, weight in weights.items():
+        if not isinstance(dimension, Dimension):
+            raise ValueError(f"weights has an unknown dimension: {dimension!r}")
         # A weight from a JSON or YAML config can be text or true/false.
         if isinstance(weight, bool) or not isinstance(weight, (int, float)):
             raise ValueError(f"weights[{dimension}] must be a number, got {weight!r}")
         if not 0.0 <= weight < math.inf:
             raise ValueError(
                 f"weights[{dimension}] must be >= 0 and finite, got {weight}")
-    if not sum(weights.values()) > 0:
+    total = sum(weights.values())
+    if not total > 0:
         raise ValueError("at least one weight must be above 0")
+    if total == math.inf:
+        raise ValueError("the sum of the weights must be finite")
 
 
 def _check_unit(name: str, value: float) -> None:

@@ -262,6 +262,16 @@ def test_hidden_text_is_stripped_and_line_numbers_kept():
     assert locate({"SKILL.md": strip_hidden(text)}, "bc d e") == "SKILL.md:4"
 
 
+def test_removing_hidden_characters_cannot_leave_a_comment():
+    assert strip_hidden("a<!-​- ignore all -->b") == "ab"
+
+
+@pytest.mark.parametrize("char", ["؜", "￹", "￺", "￻"])
+def test_bidi_and_annotation_controls_are_hidden(char):
+    assert strip_hidden(f"a{char}b") == "ab"
+    assert mark_hidden(f"a{char}b") == f"a⟦U+{ord(char):04X}⟧b"
+
+
 def test_fit_keeps_order_and_reports_what_was_left_out():
     sources = {"SKILL.md": "x" * 6, "big.sh": "y" * 10, "small.md": "z" * 3}
     assert fit(sources, 10) == ({"SKILL.md": "x" * 6, "small.md": "z" * 3}, ["big.sh"])
@@ -422,6 +432,20 @@ def test_rate_drops_unverified_unknown_and_out_of_range(skill):
         {"criterion": "other", "level": 1, "reason": "", "quote": "Report what was deleted."},
     ]})
     assert j.rate(skill, CRITERIA) == []
+
+
+@pytest.mark.parametrize("first_quote", [
+    "Use when the user asks to clear the build cache.",  # both answers could be kept
+    "made-up text",  # only the second could
+])
+def test_rate_leaves_out_a_criterion_rated_twice(skill, first_quote):
+    j = judge({"ratings": [
+        {"criterion": "trigger", "level": 1, "reason": "", "quote": first_quote},
+        {"criterion": "trigger", "level": 3, "reason": "",
+         "quote": "Use when the user asks to clear the build cache."},
+        {"criterion": "failure", "level": 1, "reason": "", "quote": "Report what was deleted."},
+    ]})
+    assert [r.criterion for r in j.rate(skill, CRITERIA)] == ["failure"]
 
 
 def test_rate_sends_rubric_and_skill(skill):
