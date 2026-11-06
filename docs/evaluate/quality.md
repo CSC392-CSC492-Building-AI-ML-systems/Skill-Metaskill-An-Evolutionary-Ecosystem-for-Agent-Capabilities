@@ -34,4 +34,10 @@ Missing logical runs after bounded infrastructure retries leave Quality unscored
 
 Before implementation, agree whether absent baseline permits absolute success reporting without a Quality score; do not silently assume zero baseline success. Validate scoring on recorded all-pass, all-fail, positive/negative-lift, and invalid/incomplete run matrices once the interface is agreed.
 
-The existing offline pilot tests validate gold consistency and verifier behaviour. They do not measure agent pass rates, lift, robustness, or Quality scores. Human review and live runs remain pending.
+The offline pilot tests validate gold consistency, verifier behaviour, and an injected semantic judge through the existing loader and runner with inert agent/sandbox doubles. They do not measure agent pass rates, lift, robustness, or Quality scores. Human review and live runs remain pending.
+
+## Runner integration milestone
+
+The pilot now prepares real Task/Check-compatible task files with safe runtime IDs and uses an evaluator-owned TaskJudge injected through run_tasks. Expected outputs stay outside staged agent fixtures. See [the adapter procedure](../../metaskill/evaluate/golden/synthetic/ticket-summary/README.md#integration-status).
+
+This preserves the shared report models and runner implementation. Tests verify accepted and failed TestResult records and logs; Quality aggregation is still not implemented. Live execution still requires a compatible Agent and the runner's sandbox.
