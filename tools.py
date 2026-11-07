@@ -17,10 +17,15 @@ import re
 
 DEFAULT_OUTPUT_DIR = "metaskill-output"
 
+SKILL_HELP = (
+    "Give a skill by its name, its category/name or a path: /metaskill evaluate claude-code, "
+    "/metaskill evaluate autonomous-ai-agents/claude-code or /metaskill evaluate ./my-skill. "
+    "rank takes a comma separated list. `hermes skills list` shows the installed skills."
+)
 USAGE = (
     "usage: /metaskill generalize <skill> | "
     "/metaskill personalize <skill> --config <file> | "
-    "/metaskill evaluate <skill> | /metaskill rank <skills>"
+    f"/metaskill evaluate <skill> | /metaskill rank <skills>\n{SKILL_HELP}"
 )
 
 # operation -> (module, entry point)
@@ -66,14 +71,59 @@ def _session_cwd(ctx):
     return session_cwd() if callable(session_cwd) else ""
 
 
-def _skill_paths(operation, skill_path, cwd=""):
-    """The skills of a request, under cwd. rank takes a comma separated list
+def _skill_names(operation, skill_path, cwd=""):
+    """The skills of a request as given. rank takes a comma separated list
     (docs/evaluate.md 2); a path that exists is one skill, even with a comma in it."""
-    whole = os.path.join(cwd, skill_path)
-    if operation != "rank" or os.path.exists(whole):
-        return [whole]
-    paths = (path.strip().strip("\"'") for path in skill_path.split(","))
-    return [os.path.join(cwd, path) for path in paths if path]
+    if operation != "rank" or os.path.exists(os.path.join(cwd, skill_path)):
+        return [skill_path]
+    names = (name.strip().strip("\"'") for name in skill_path.split(","))
+    return [name for name in names if name]
+
+
+def _installed_skills():
+    """(folder, the lowercase names it goes by) of each skill Hermes has installed: its
+    folder name, category/name and frontmatter name. Empty outside Hermes."""
+    try:
+        from agent.skill_utils import (
+            get_all_skills_dirs,
+            iter_skill_index_files,
+            parse_frontmatter,
+        )
+    except ImportError:
+        return []
+    skills = []
+    for root in get_all_skills_dirs():
+        for skill_md in iter_skill_index_files(root, "SKILL.md"):
+            folder = skill_md.parent
+            names = {folder.name, folder.relative_to(root).as_posix()}
+            try:
+                frontmatter, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8-sig"))
+                names.add(str(frontmatter.get("name") or folder.name))
+            except (OSError, UnicodeDecodeError):
+                pass  # still found by its folder
+            skills.append((str(folder), {name.casefold() for name in names}))
+    return skills
+
+
+def _find_skills(operation, skills, cwd):
+    """The folders of the skills in a command, and what could not be found. A path that
+    exists wins over a name."""
+    paths, problems, installed = [], [], None
+    for name in _skill_names(operation, skills, cwd):
+        path = os.path.join(cwd, name)
+        if os.path.exists(path):
+            paths.append(path)
+            continue
+        installed = _installed_skills() if installed is None else installed
+        wanted = name.replace("\\", "/").strip("/").casefold()
+        found = [folder for folder, names in installed if wanted in names]
+        if len(found) == 1:
+            paths.append(found[0])
+        elif found:
+            problems.append(f"{name} matches {len(found)} skills: {', '.join(found)}")
+        else:
+            problems.append(f"No skill found for {name}.")
+    return paths, problems
 
 
 def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
@@ -83,7 +133,9 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
     cwd = _session_cwd(ctx)
     config_path = config_path and os.path.join(cwd, config_path)
     output_path = output_path and os.path.join(cwd, output_path)
-    paths = _skill_paths(operation, skill_path, cwd) if skill_path else []
+    names = skill_path if isinstance(skill_path, list) else (
+        _skill_names(operation, skill_path, cwd) if skill_path else [])
+    paths = [os.path.join(cwd, name) for name in names]
     if not paths:
         if operation in EVALUATION:  # docs/evaluate.md section 7
             return _error(operation, "skill_path is required; ask the user which skills "
@@ -185,10 +237,10 @@ def _summary(result):
 def make_command_handler(ctx):
     """Build the /metaskill handler.
 
-    A request naming skills by path runs here and prints its result. Anything else, such
-    as a skill name, goes to the agent as a user message, so the model can find the skill
-    and call the metaskill tool. Hermes only allows that for a plugin with
+    An operation runs here and prints its result, or says how to name the skill. Anything
+    else goes to the agent as a user message. Hermes only allows that for a plugin with
     allow_gateway_injection, and a classic CLI session does not show the agent's reply.
+    Every path returns text: Hermes prints nothing for a handler that returns None.
     """
 
     def handle_command(raw_args):
@@ -196,17 +248,22 @@ def make_command_handler(ctx):
         if not request:
             return USAGE
         try:
+            if request in _ENTRY_POINTS:
+                return f"metaskill {request}: which skill?\n{SKILL_HELP}"
             parsed = _parse_command(request)
             if parsed:
                 operation, skills, config_path = parsed
-                paths = _skill_paths(operation, skills, _session_cwd(ctx))
-                if all(os.path.exists(path) for path in paths):
-                    return _summary(run(operation, skills, config_path=config_path, ctx=ctx))
+                paths, problems = _find_skills(operation, skills, _session_cwd(ctx))
+                if problems or not paths:
+                    return "\n".join([*problems, SKILL_HELP])
+                target = paths if operation == "rank" else paths[0]
+                return _summary(run(operation, target, config_path=config_path, ctx=ctx))
             if not ctx.inject_message(f"Use the metaskill tool to: {request}"):
-                return ("metaskill: could not send the request to the agent. Give the skill's "
-                        "path, or set plugins.entries.metaskill.allow_gateway_injection: true "
-                        "in config.yaml to let the agent find it by name.")
-            return None
+                return ("metaskill: could not send the request to the agent. Set "
+                        "plugins.entries.metaskill.allow_gateway_injection: true in "
+                        f"config.yaml to allow that, or use a command.\n{USAGE}")
+            return ("metaskill: sent to the agent. A classic CLI session (hermes chat) does "
+                    "not show its reply.")
         except Exception as exc:  # report the type only: messages may echo file contents
             return f"metaskill failed: {type(exc).__name__}"
 

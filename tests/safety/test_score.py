@@ -108,7 +108,7 @@ def test_routed_findings_are_kept_but_not_scored():
     result = run(FakeBackend("cisco", OK, [secret]))
     assert result.value == 1.0
     assert result.findings == [secret]
-    assert result.reason == "No findings at static tier"
+    assert result.reason == "No safety findings at static tier"
 
 
 # --- Reason and detail ---------------------------------------------------------
@@ -127,7 +127,7 @@ def test_reason_for_a_whole_skill_finding():
 
 def test_reason_reports_the_tier_that_actually_ran():
     result = run(FakeBackend("cisco", LLM_UNAVAILABLE, tier=SafetyTier.STATIC), config=DEEP)
-    assert result.reason == "No findings at static tier"
+    assert result.reason == "No safety findings at static tier"
 
 
 def test_reason_when_nothing_ran():

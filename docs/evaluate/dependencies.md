@@ -2,7 +2,7 @@
 
 Code: [`metaskill/evaluate/dependencies.py`](../../metaskill/evaluate/dependencies.py). Tests: [`tests/test_dependencies.py`](../../tests/test_dependencies.py).
 
-`evaluate` needs software that a plugin cannot install: Docker for the sandbox ([runner.md](runner.md) 2.6), and Cisco's scanner for safety ([safety/score.md](../safety/score.md)). This module lists what is missing so the agent can ask the user, the same way safety already does for Cisco. It never installs or prompts.
+`evaluate` needs software that the plugin does not install itself: Docker for the sandbox ([runner.md](runner.md) 2.6), and Cisco's scanner for safety ([safety/score.md](../safety/score.md)), which Hermes installs from `plugin.yaml` when the plugin is enabled. This module lists what is missing so the agent can tell the user. It never installs or prompts.
 
 Only `evaluate` needs these. `generalize` rewrites skill files and runs no code from them, so it needs no Docker and never calls this.
 
@@ -37,7 +37,7 @@ def require_dependencies(sandbox: DockerSandbox | None = None) -> None: ...  # r
 | Docker installed but not answering or refusing access (`not-running`) | `Docker`, with Docker's own message as `reason`. The user starts Docker, or on Linux gets access to its socket | Yes |
 | Image not pulled (`no-image`) | The image, with its `docker pull` command | Yes |
 | Python too old for tarfile's fixes (`old-python`) | `Python`, by hand (`install_url`). Needs 3.12.11, 3.13.4 or later ([runner.md](runner.md) 2.6). Checked first, so Docker is listed only once this is solved | Yes |
-| Cisco's scanner not installed | `cisco-ai-skill-scanner`, with its `pip install` command | No: safety is scored by our own checks only, as `partial` |
+| Cisco's scanner not installed | `cisco-ai-skill-scanner`, with the `hermes plugins` commands that install it | No: safety is scored by our own checks only, as `partial` |
 
 When Docker is not installed, the image is listed too, so the user sees both steps at once instead of one per attempt.
 

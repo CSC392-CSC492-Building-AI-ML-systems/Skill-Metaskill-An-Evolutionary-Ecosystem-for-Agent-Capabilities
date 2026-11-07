@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 
 from metaskill.evaluate.models import Dimension, SafetyTier, Severity, Skill
-from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, CiscoBackend, LLMSetupError, convert
+from metaskill.evaluate.safety.cisco import (
+    INSTALL_COMMAND,
+    PACKAGE,
+    TESTED_VERSION,
+    CiscoBackend,
+    LLMSetupError,
+    convert,
+)
 from metaskill.evaluate.safety.findings import BackendStatus, score_from_findings
 
 FIXTURES = Path(__file__).parent / "fixtures" / "cisco"
@@ -139,6 +146,11 @@ def test_deep_scan_without_llm_analyzer_is_not_reported_as_deep():
 
 
 # --- scan() -------------------------------------------------------------------
+
+
+def test_plugin_declares_the_tested_version():
+    manifest = Path(__file__).parents[2] / "plugin.yaml"
+    assert f'"{PACKAGE}=={TESTED_VERSION}"' in manifest.read_text(encoding="utf-8")
 
 
 def test_not_installed():

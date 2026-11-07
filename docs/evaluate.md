@@ -364,7 +364,7 @@ Dependencies:
 
 ## 7. Tool surface
 
-Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g. `/metaskill evaluate ./skills/gcp-file-transfer` or "rank my skills". Given paths that exist, the command runs the operation itself and prints the result. Anything else, such as a skill name, it passes to the agent, which resolves names to paths and calls the tool with `operation` `evaluate` or `rank`; Hermes only allows that with `plugins.entries.metaskill.allow_gateway_injection`. Both are routed to `evaluate_skill` / `rank_skills` in `__init__.py`.
+Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g. `/metaskill evaluate gcp-file-transfer` or "rank my skills". The command takes each skill as a path, an installed skill's name, or its `category/name`, runs the operation itself and prints the result. A path that exists wins over a name. A name it cannot find, or one that matches several skills, runs nothing: the command says so and how to name the skill. A request that is not an operation goes to the agent, which resolves names to paths and calls the tool with `operation` `evaluate` or `rank`; Hermes only allows that with `plugins.entries.metaskill.allow_gateway_injection`. Both are routed to `evaluate_skill` / `rank_skills` in `__init__.py`.
 
 | Argument | Description |
 |---|---|

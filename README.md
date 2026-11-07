@@ -17,6 +17,8 @@ New-Item -ItemType Junction -Path "$env:LOCALAPPDATA\hermes\plugins\metaskill" -
 hermes plugins enable metaskill
 ```
 
+Enabling asks to install Cisco's skill scanner, which `plugin.yaml` declares. Run it in a terminal, and restart Hermes afterwards. Use this command rather than `pip install`, which would reach a different Python.
+
 Once `evaluate` runs test tasks, it also needs [Docker](https://docs.docker.com/get-started/get-docker/), installed and running, to run the agent's actions and task checks in a sandbox, and the sandbox image, pinned by digest:
 
 ```bash
@@ -34,9 +36,9 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not 
 /metaskill rank <skill>, <skill>
 ```
 
-`<skill>` is a path to the skill's folder, relative to your session's folder or absolute. The command runs it directly and prints the result.
+`<skill>` is an installed skill's name (`claude-code`), its category and name (`autonomous-ai-agents/claude-code`), or a path to the skill's folder, relative to your session's folder or absolute. A path that exists wins over a name. If a name matches several skills, the command lists them and runs nothing, so you can give the one you mean. `hermes skills list` shows what is installed.
 
-`<skill>` can also be a skill name. The command then asks the agent to find the skill, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply, so use a path there.
+The command runs these itself and prints the result when it finishes. Anything else after `/metaskill` goes to the agent, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply.
 
 ```yaml
 plugins:

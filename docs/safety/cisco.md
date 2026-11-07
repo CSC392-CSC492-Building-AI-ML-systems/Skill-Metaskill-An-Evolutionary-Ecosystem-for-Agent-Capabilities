@@ -64,7 +64,7 @@ The sketch's `except SkillScannerError` would catch neither: a setup failure wou
 
 ### `available()`
 
-True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. This is what the install prompt uses: before evaluation starts, the tool calls it and, if false, the agent asks the user whether to install `cisco-ai-skill-scanner==2.2.1` (section 3.1 of the safety design).
+True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. Hermes installs the scanner from `plugin.yaml`, so this is normally true. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
 
 ### `scan(skill, tier)`
 

@@ -22,7 +22,9 @@ from .hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
 TESTED_VERSION = "2.2.1"
-INSTALL_COMMAND = f"pip install {PACKAGE}=={TESTED_VERSION}"
+# Hermes installs what plugin.yaml declares when the plugin is enabled. pip would reach
+# another Python: Hermes' own environment has no pip.
+INSTALL_COMMAND = "hermes plugins disable metaskill; hermes plugins enable metaskill"
 
 # Name the scanner gives its LLM analyzer in analyzers_used and analyzers_failed.
 LLM_ANALYZER = "llm_analyzer"
@@ -33,8 +35,8 @@ LLM_ANALYZER = "llm_analyzer"
 SCANNER_NOTICES = {"LLM_ANALYSIS_FAILED", "LLM_CONTEXT_BUDGET_EXCEEDED"}
 _BUDGET_NOTICE = "LLM_CONTEXT_BUDGET_EXCEEDED"
 
-# [OPEN] evaluate-safety.md, open question 6. These are not about harm to the user,
-# so they are kept as evidence under Configuration Cleanliness and not scored here.
+# These are not about harm to the user, so they are kept as evidence under
+# Configuration Cleanliness and not scored here (docs/safety/cisco.md).
 ROUTED_CATEGORIES = {
     "hardcoded_secrets": Dimension.CONFIG_CLEANLINESS,
     "policy_violation": Dimension.CONFIG_CLEANLINESS,

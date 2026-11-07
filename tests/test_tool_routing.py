@@ -247,11 +247,11 @@ class FakeCtx:
         return self.accepts
 
 
-def test_command_forwards_request_to_agent():
+def test_command_forwards_other_requests_and_says_so():
     ctx = FakeCtx()
-    handler = tools.make_command_handler(ctx)
-    assert handler("generalize gcp-file-transfer") is None
-    assert ctx.injected == ["Use the metaskill tool to: generalize gcp-file-transfer"]
+    out = tools.make_command_handler(ctx)("compare my skills")
+    assert ctx.injected == ["Use the metaskill tool to: compare my skills"]
+    assert "sent to the agent" in out
 
 
 def test_command_without_args_shows_usage():
@@ -262,8 +262,8 @@ def test_command_without_args_shows_usage():
 
 
 def test_command_reports_when_message_not_accepted():
-    out = tools.make_command_handler(FakeCtx(accepts=False))("generalize gcp-file-transfer")
-    assert "could not send" in out and "allow_gateway_injection" in out
+    out = tools.make_command_handler(FakeCtx(accepts=False))("compare my skills")
+    assert "could not send" in out and "allow_gateway_injection" in out and "usage:" in out
 
 
 def test_command_runs_a_path_itself_and_prints_the_result(fake_evaluate):
@@ -288,12 +288,100 @@ def test_command_takes_a_path_with_spaces(fake_evaluate, workspace, request_text
     assert fake_evaluate["evaluate"][0] == "my skills"
 
 
-@pytest.mark.parametrize("request_text", ["rank my skills", "compare x", "evaluate"])
-def test_command_sends_what_is_not_a_path_to_the_agent(fake_evaluate, request_text):
+@pytest.fixture
+def installed(monkeypatch, workspace):
+    """Two installed skills in different categories, and one name they share."""
+    folders = {}
+    for category, name, also in (("devops", "deploy", "ship"), ("web", "crawl", "ship")):
+        folder = workspace / "home" / category / name
+        folder.mkdir(parents=True)
+        folders[name] = str(folder)
+        names = {name, f"{category}/{name}", also}
+        folders.setdefault("all", []).append((str(folder), names))
+    monkeypatch.setattr(tools, "_installed_skills", lambda: folders["all"])
+    return folders
+
+
+@pytest.mark.parametrize("name", ["deploy", "DEPLOY", "devops/deploy", "devops\\deploy"])
+def test_command_finds_an_installed_skill_by_name(fake_evaluate, installed, name):
     ctx = FakeCtx()
-    assert tools.make_command_handler(ctx)(request_text) is None
-    assert ctx.injected == [f"Use the metaskill tool to: {request_text}"]
-    assert fake_evaluate == {}
+    out = tools.make_command_handler(ctx)(f"evaluate {name}")
+    assert fake_evaluate["evaluate"][0] == installed["deploy"]
+    assert ctx.injected == [] and "report.json" in out
+
+
+def test_command_ranks_a_mix_of_names_and_paths(fake_evaluate, installed):
+    tools.make_command_handler(FakeCtx())("rank deploy, skills/gcp, web/crawl")
+    assert fake_evaluate["rank"][0] == [installed["deploy"], "skills/gcp", installed["crawl"]]
+
+
+def test_a_path_wins_over_a_name(fake_evaluate, installed, workspace):
+    (workspace / "deploy").mkdir()
+    tools.make_command_handler(FakeCtx())("evaluate deploy")
+    assert fake_evaluate["evaluate"][0] == "deploy"
+
+
+def test_a_name_with_several_skills_lists_them_and_runs_nothing(fake_evaluate, installed):
+    ctx = FakeCtx()
+    out = tools.make_command_handler(ctx)("evaluate ship")
+    assert "ship matches 2 skills" in out
+    assert installed["deploy"] in out and installed["crawl"] in out
+    assert tools.SKILL_HELP in out
+    assert fake_evaluate == {} and ctx.injected == []
+
+
+@pytest.mark.parametrize("request_text", ["evaluate nothing-here", "rank my skills",
+                                          "rank deploy, nothing-here"])
+def test_an_unknown_skill_says_how_to_name_one_and_runs_nothing(fake_evaluate, installed,
+                                                                request_text):
+    ctx = FakeCtx()
+    out = tools.make_command_handler(ctx)(request_text)
+    assert "No skill found for" in out and tools.SKILL_HELP in out
+    assert fake_evaluate == {} and ctx.injected == []
+
+
+@pytest.mark.parametrize("request_text", ["evaluate", "rank", "rank ,"])
+def test_an_operation_without_skills_says_how_to_name_one(fake_evaluate, request_text):
+    ctx = FakeCtx()
+    assert tools.SKILL_HELP in tools.make_command_handler(ctx)(request_text)
+    assert fake_evaluate == {} and ctx.injected == []
+
+
+def test_usage_says_how_to_name_a_skill():
+    assert tools.SKILL_HELP in tools.make_command_handler(FakeCtx())("")
+
+
+@pytest.fixture
+def hermes_skills(monkeypatch, workspace):
+    """A stand-in for Hermes' agent.skill_utils over one skills folder."""
+    root = workspace / "home"
+    utils = types.ModuleType("agent.skill_utils")
+    utils.get_all_skills_dirs = lambda: [root]
+    utils.iter_skill_index_files = lambda folder, name: sorted(folder.rglob(name))
+    utils.parse_frontmatter = lambda text: ({"name": text.strip()} if text.strip() else {}, text)
+    monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.skill_utils", utils)
+    return root
+
+
+def test_installed_skills_go_by_folder_category_and_frontmatter_name(hermes_skills):
+    folder = hermes_skills / "devops" / "deploy"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("Ship-It", encoding="utf-8")
+    assert tools._installed_skills() == [(str(folder), {"deploy", "devops/deploy", "ship-it"})]
+
+
+def test_an_unreadable_skill_is_still_found_by_its_folder(hermes_skills):
+    folder = hermes_skills / "devops" / "deploy"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_bytes(b"\xff\xfe not utf-8")
+    assert tools._installed_skills() == [(str(folder), {"deploy", "devops/deploy"})]
+
+
+def test_there_are_no_names_outside_hermes(monkeypatch):
+    monkeypatch.setitem(sys.modules, "agent.skill_utils", None)
+    assert tools._installed_skills() == []
+    assert "No skill found" in tools.make_command_handler(FakeCtx())("evaluate deploy")
 
 
 def test_command_prints_a_failure(monkeypatch):
@@ -444,5 +532,5 @@ def test_register_wires_tool_and_command():
     assert ctx.tasks == ["metaskill_judge"]
     name, handler, _, hint = ctx.commands[0]
     assert name == "metaskill" and hint
-    handler("generalize my-skill")
-    assert ctx.injected == ["Use the metaskill tool to: generalize my-skill"]
+    handler("compare my-skill")
+    assert ctx.injected == ["Use the metaskill tool to: compare my-skill"]
