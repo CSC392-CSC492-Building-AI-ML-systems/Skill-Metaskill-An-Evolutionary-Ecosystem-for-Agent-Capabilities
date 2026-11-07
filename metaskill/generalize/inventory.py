@@ -9,6 +9,10 @@ import os
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+import json
+import re
+import tomllib
+from pathlib import PurePosixPath
 
 EXTENSIONS = frozenset({
     ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
@@ -33,10 +37,19 @@ class SkipReason(StrEnum):
     SYMLINK = "symlink"
     UNREADABLE = "unreadable"  # permission denied or another OS error
 
+@dataclass
+class SkillProject:
+    """Parsed skill information. Source files are read as data and never executed."""
+
+    metadata: dict[str, object] = field(default_factory=dict)
+    prompt: str = ""
+    tools: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    referenced_files: list[str] = field(default_factory=list)
+    environment_variables: list[str] = field(default_factory=list)
 
 class InventoryError(ValueError):
     """The skill is over the file-count or total-size limit, so it is not scanned at all."""
-
 
 @dataclass(frozen=True)
 class SourceFile:
@@ -60,6 +73,7 @@ class Inventory:
     root: Path
     files: list[SourceFile] = field(default_factory=list)
     skipped: list[SkippedFile] = field(default_factory=list)
+    project: SkillProject = field(default_factory=SkillProject)
 
 
 def is_eligible(path: Path) -> bool:
@@ -134,8 +148,224 @@ def load_inventory(
             continue
         inventory.files.append(SourceFile(rel, text))
     inventory.skipped = sorted(skipped, key=lambda s: s.path)
+    inventory.project = _parse_project(inventory.files)
     return inventory
 
+_ENV_REFERENCE = re.compile(
+    r"""os\.(?:getenv|environ\.get)\(\s*['"](?P<os>[A-Za-z_]\w*)['"]"""
+    r"""|process\.env\.(?P<node>[A-Za-z_]\w*)"""
+    r"""|\$\{(?P<braced>[A-Za-z_]\w*)\}"""
+)
+_MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)#?]+)(?:#[^)]*)?\)")
+_PY_IMPORT = re.compile(
+    r"^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import|import\s+([A-Za-z_][\w.]*))",
+    re.M,
+)
+_JS_IMPORT = re.compile(
+    r"""^\s*import\s+(?:[^\n]*?\s+from\s+)?['"]([^./][^'"]*)['"]""",
+    re.M,
+)
+
+
+def _scalar(value: str) -> object:
+    """Parse common frontmatter scalar and inline-list values without running YAML."""
+    value = value.strip()
+
+    if value.startswith('"'):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value.strip('"')
+
+    if value.startswith("'") and value.endswith("'"):
+        return value[1:-1].replace("''", "'")
+
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        return [_scalar(part) for part in inner.split(",") if part.strip()]
+
+    if value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+
+    if value.lower() in {"null", "~"}:
+        return None
+
+    return value
+
+
+def _frontmatter(text: str) -> tuple[dict[str, object], str]:
+    """Read simple YAML-style SKILL.md frontmatter and return the remaining prompt."""
+    lines = text.splitlines(keepends=True)
+
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+
+    closing = next(
+        (i for i in range(1, len(lines)) if lines[i].strip() in {"---", "..."}),
+        None,
+    )
+    if closing is None:
+        return {}, text
+
+    metadata: dict[str, object] = {}
+    active_list: str | None = None
+    active_block: tuple[str, int, str] | None = None
+
+    for line in lines[1:closing]:
+        indent = len(line) - len(line.lstrip())
+
+        if active_block and indent >= active_block[1] and line.strip():
+            key, _, style = active_block
+            current = str(metadata.get(key, ""))
+            separator = " " if style.startswith(">") else "\n"
+            metadata[key] = current + (separator if current else "") + line.strip()
+            continue
+
+        active_block = None
+
+        item = re.match(r"^\s+-\s+(.+?)\s*$", line)
+        if item and active_list:
+            current = metadata.setdefault(active_list, [])
+            if isinstance(current, list):
+                current.append(_scalar(item.group(1)))
+            continue
+
+        pair = re.match(r"^([A-Za-z0-9_.-]+)\s*:\s*(.*)$", line)
+        if not pair:
+            continue
+
+        key, value = pair.groups()
+        value = value.strip()
+
+        if value in {"|", ">", "|-", ">-", "|+", ">+"}:
+            metadata[key] = ""
+            active_block = (key, indent + 1, value)
+            active_list = None
+        elif not value:
+            metadata.setdefault(key, [])
+            active_list = key
+        else:
+            metadata[key] = _scalar(value)
+            active_list = None
+
+    return metadata, "".join(lines[closing + 1:])
+
+
+def _safe_reference(value: str) -> str | None:
+    value = value.strip().strip("<>")
+
+    if not value or value.startswith(("/", "\\")) or "://" in value:
+        return None
+
+    path = PurePosixPath(value)
+    if ".." in path.parts:
+        return None
+
+    return path.as_posix()
+
+
+def _parse_project(files: list[SourceFile]) -> SkillProject:
+    """Extract project information from inventoried text without executing files."""
+    contents = {source.path: source.text for source in files}
+    metadata, prompt = _frontmatter(contents.get("SKILL.md", ""))
+
+    tools: list[str] = []
+    for key, value in metadata.items():
+        if key != "tools" and not key.endswith(".tools"):
+            continue
+
+        entries = value if isinstance(value, list) else [value]
+        for entry in entries:
+            if entry in (None, ""):
+                continue
+
+            match = re.search(r"(?:^|\s)name\s*:\s*([^,\s]+)", str(entry))
+            tools.append(match.group(1).strip("'\"") if match else str(entry))
+
+    for match in re.finditer(r"(?im)^\s*tools?\s*:\s*([^\n]+)$", prompt):
+        tools.extend(
+            part.strip(" `,*")
+            for part in match.group(1).split(",")
+            if part.strip(" `,*")
+        )
+
+    dependencies: set[str] = set()
+
+    for path, text in contents.items():
+        filename = PurePosixPath(path).name
+
+        if filename == "requirements.txt":
+            for line in text.splitlines():
+                entry = line.split("#", 1)[0].strip()
+                if entry and not entry.startswith(("-", ".", "/")):
+                    dependencies.add(entry)
+
+        elif filename == "package.json":
+            try:
+                manifest = json.loads(text)
+            except json.JSONDecodeError:
+                manifest = {}
+
+            if isinstance(manifest, dict):
+                for section in (
+                    "dependencies",
+                    "devDependencies",
+                    "optionalDependencies",
+                ):
+                    entries = manifest.get(section, {})
+                    if isinstance(entries, dict):
+                        dependencies.update(
+                            f"{name}@{version}" for name, version in entries.items()
+                        )
+
+        elif filename == "pyproject.toml":
+            try:
+                manifest = tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                manifest = {}
+
+            project = manifest.get("project", {})
+            if isinstance(project, dict):
+                dependencies.update(
+                    str(item) for item in project.get("dependencies", [])
+                )
+
+                optional = project.get("optional-dependencies", {})
+                if isinstance(optional, dict):
+                    for group in optional.values():
+                        if isinstance(group, list):
+                            dependencies.update(str(item) for item in group)
+
+        if path.lower().endswith((".py", ".js", ".ts")):
+            for match in _PY_IMPORT.finditer(text):
+                dependencies.add(match.group(1) or match.group(2))
+            dependencies.update(_JS_IMPORT.findall(text))
+
+    references: set[str] = set()
+    for text in contents.values():
+        for raw in _MARKDOWN_LINK.findall(text):
+            reference = _safe_reference(raw)
+            if reference:
+                references.add(reference)
+
+    environment_variables: set[str] = set()
+    for text in contents.values():
+        for match in _ENV_REFERENCE.finditer(text):
+            name = next(
+                (value for value in match.groupdict().values() if value),
+                None,
+            )
+            if name:
+                environment_variables.add(name)
+
+    return SkillProject(
+        metadata=metadata,
+        prompt=prompt,
+        tools=sorted(set(tools)),
+        dependencies=sorted(dependencies, key=str.casefold),
+        referenced_files=sorted(references),
+        environment_variables=sorted(environment_variables),
+    )
 
 def _walk(root: Path) -> tuple[list[Path], list[SkippedFile]]:
     files: list[Path] = []
@@ -167,4 +397,4 @@ def _walk(root: Path) -> tuple[list[Path], list[SkippedFile]]:
                     files.append(file)
             except OSError:
                 skip(file, SkipReason.UNREADABLE)
-    return sorted(files), skipped
+    return sorted(files, key=lambda path: path.as_posix()), skipped
