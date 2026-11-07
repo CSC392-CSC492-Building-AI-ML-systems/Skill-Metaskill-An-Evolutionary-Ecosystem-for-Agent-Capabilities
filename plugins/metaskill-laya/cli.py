@@ -56,7 +56,11 @@ def status() -> int:
     print(f"torch:  {_version('torch')}")
     print(f"model:  {detector.HUB_REPO}@{detector.MODEL_REVISION[:7]}, {_model_cached()}")
     setting = os.environ.get(detector.DEVICE_ENV, "")
-    device = detector.resolve_device(setting)
+    try:
+        device = detector.resolve_device(setting)
+    except detector.LayaError as exc:
+        print(f"device: refused ({exc.hint})")
+        return 1
     if setting.strip().lower() == "gpu" and device == "cpu":
         print(f"device: cpu ({detector.DEVICE_ENV}=gpu, but PyTorch sees no CUDA or ROCm GPU; "
               f"see skills/setup/SKILL.md in this add-on)")

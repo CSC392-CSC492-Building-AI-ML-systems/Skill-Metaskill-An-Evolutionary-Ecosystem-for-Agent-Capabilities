@@ -27,8 +27,9 @@ class FakeRedactor:
     def __init__(self):
         self.calls = []
 
-    def detect(self, text, threshold=0.5, region="US", skip=()):
+    def detect(self, text, threshold=0.5, region="US", skip=(), deadline=None):
         self.calls.append((threshold, list(skip)))
+        self.deadline = deadline
         start = text.find("Priya Nair")
         hit = SimpleNamespace(start=start, end=start + 10, label="given name", score=0.98765)
         overlaps = any(s < hit.end and hit.start < e for s, e in skip)
@@ -105,8 +106,8 @@ def test_setup_skill_covers_setup_gpu_and_warnings(addon):
 def test_setup_skill_quotes_the_real_warnings(addon):
     # The skill tells the agent what each generalize warning means; keep it in step.
     text = addon.SETUP_SKILL.read_text(encoding="utf-8")
-    assert addon.detector.INSTALL_HINT.startswith("the laya package is not importable")
-    assert "`the laya package is not importable`" in text
+    assert addon.detector.install_hint("<name>").startswith("the <name> package is not importable")
+    assert "`the <name> package is not importable`" in text
     assert "`laya stopped at the time limit after N of M files`" in text
 
 
@@ -129,6 +130,30 @@ def test_detect_returns_plain_hits_and_passes_skip(monkeypatch, addon):
     hits = addon.detector.detect(TEXT, [(22, 44)])
     assert hits == [{"start": 8, "end": 18, "label": "given name", "score": 0.9877}]
     assert fake.calls == [(addon.detector.THRESHOLD, [(22, 44)])]
+
+
+def test_detect_passes_the_deadline_to_the_model(monkeypatch, addon):
+    fake = FakeRedactor()
+    monkeypatch.setattr(addon.detector, "load", lambda: fake)
+    addon.detector.detect(TEXT, deadline=123.0)
+    assert fake.deadline == 123.0
+
+
+def test_scoring_stops_between_batches_at_the_deadline(monkeypatch, addon):
+    pytest.importorskip("numpy")  # pii_demo imports numpy and torch at module level
+    pytest.importorskip("torch")
+    from hermes_plugins.metaskill_laya import pii_demo
+
+    common = SimpleNamespace(QTYPES={"choice": 0}, temp_bucket=lambda *a: 0,
+                             build_sequence=None, collate_items=None)  # never reached
+    monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(common=common))
+    monkeypatch.setitem(sys.modules, "laya.common", common)
+    redactor = pii_demo.PiiRedactor.__new__(pii_demo.PiiRedactor)
+    redactor.batch_size, redactor.question = 16, {}
+    redactor.agent = SimpleNamespace(cfg={}, tok=None, temperature_by_options={}, temperature=[1.0],
+                                     _to_internal=lambda q: q)
+    with pytest.raises(TimeoutError):
+        redactor.score([{}], deadline=0.0)  # time.monotonic() is already past 0
 
 
 @pytest.mark.parametrize("value, label, expected", [
@@ -155,7 +180,7 @@ def test_detect_drops_implausible_hits(monkeypatch, addon):
     text = "Card 9f86d081884c and phone 555-0100 and Priya Nair"
 
     class Model:
-        def detect(self, text, threshold=0.5, region="US", skip=()):
+        def detect(self, text, threshold=0.5, region="US", skip=(), deadline=None):
             spans = [("9f86d081884c", "credit card number"), ("555-0100", "phone number"),
                      ("Priya Nair", "given name")]
             return SimpleNamespace(entities=[
@@ -188,11 +213,19 @@ def test_generalize_runs_the_addon_after_regex(monkeypatch, addon, ctx, tmp_path
     assert "Priya" not in json.dumps(result)
 
 
-def test_missing_laya_raises_a_hint(monkeypatch, addon):
-    monkeypatch.setitem(sys.modules, "hermes_plugins.metaskill_laya.pii_demo", None)
+@pytest.mark.parametrize("name, package", [
+    ("laya", "laya"), ("torch", "torch"), ("torch.nn", "torch"), ("numpy", "numpy"), (None, "laya"),
+])
+def test_a_missing_package_is_named_in_the_hint(monkeypatch, addon, name, package):
+    class Missing:
+        def __init__(self, **kwargs):
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+    pii_demo = SimpleNamespace(PiiRedactor=Missing)
+    monkeypatch.setitem(sys.modules, "hermes_plugins.metaskill_laya.pii_demo", pii_demo)
+    monkeypatch.setattr(sys.modules["hermes_plugins.metaskill_laya"], "pii_demo", pii_demo, raising=False)
     with pytest.raises(addon.detector.LayaError) as raised:
         addon.detector.load()
-    assert raised.value.hint == addon.detector.INSTALL_HINT
+    assert raised.value.hint.startswith(f"the {package} package is not importable")
     assert "restart Hermes" in raised.value.hint
 
 
@@ -246,7 +279,26 @@ def test_local_model_checkout_or_pii_folder(addon, tmp_path):
 
 def test_resolve_device_defaults_to_cpu_and_passes_explicit_devices(addon):
     resolve = addon.detector.resolve_device
-    assert [resolve(""), resolve("CPU"), resolve("cuda:1"), resolve("mps")] == ["cpu", "cpu", "cuda:1", "mps"]
+    assert [resolve(""), resolve("CPU"), resolve("cuda:1")] == ["cpu", "cpu", "cuda:1"]
+
+
+@pytest.mark.parametrize("setting", ["mps", "MPS", " mps ", "mps:0", "auto", "AUTO"])
+def test_resolve_device_refuses_devices_that_can_hang(addon, setting):
+    with pytest.raises(addon.detector.LayaError, match="is not supported") as raised:
+        addon.detector.resolve_device(setting)
+    assert "cpu or gpu" in raised.value.hint
+
+
+def test_refused_device_reaches_generalize_as_a_warning(monkeypatch, addon, ctx, tmp_path):
+    monkeypatch.setenv(addon.detector.DEVICE_ENV, "mps:0")
+    addon.register(ctx)
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(TEXT, encoding="utf-8", newline="")
+    result = pipeline.generalize_skill(str(skill), "out")
+    assert result["detectors"] == ["regex"]
+    assert any("METASKILL_LAYA_DEVICE=mps:0 is not supported" in w for w in result["warnings"])
+    assert addon.detector._MODELS == {}
 
 
 def test_resolve_device_gpu_uses_cuda_only_when_torch_sees_one(monkeypatch, addon):
@@ -326,6 +378,12 @@ def test_cli_status_explains_a_gpu_setting_without_a_gpu(monkeypatch, addon, cap
     assert "device: cpu (METASKILL_LAYA_DEVICE=gpu, but PyTorch sees no CUDA or ROCm GPU" in out
 
 
+def test_cli_status_reports_a_refused_device(monkeypatch, addon, capsys):
+    monkeypatch.setenv(addon.detector.DEVICE_ENV, "mps")
+    assert addon.cli.handle(_cli_args(addon, "status")) == 1
+    assert "device: refused (METASKILL_LAYA_DEVICE=mps is not supported" in capsys.readouterr().out
+
+
 def test_cli_status_shows_how_to_turn_on_the_gpu(addon, capsys):
     addon.cli.handle(_cli_args(addon, "status"))
     assert "device: cpu (to use a GPU: hermes config set METASKILL_LAYA_DEVICE gpu)" in (
@@ -355,6 +413,14 @@ def test_real_model_finds_free_form_personal_data(addon):
     assert {"given name", "surname", "street", "date"} <= labels
     [model] = addon.detector._MODELS.values()
     assert model.agent.revision == addon.detector.MODEL_REVISION
+
+
+@pytest.mark.slow
+def test_real_model_stops_at_the_deadline(addon):
+    pytest.importorskip("laya")
+    addon.detector.load()  # the limit does not cover loading
+    with pytest.raises(TimeoutError):
+        addon.detector.detect(TEXT, deadline=0.0)
 
 
 @pytest.mark.slow

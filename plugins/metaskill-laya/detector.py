@@ -8,7 +8,8 @@ Importing this module is cheap: laya, torch and the model load on the first dete
 
 Settings (environment variables):
     METASKILL_LAYA_DEVICE  "cpu" (default), "gpu" (CUDA or ROCm when PyTorch sees one,
-                           else CPU), or a torch device such as "cuda:1" or "mps".
+                           else CPU), or a torch device such as "cuda:1". "mps" and
+                           "auto" are refused: see resolve_device().
     METASKILL_LAYA_MODEL   a local copy of the model: either a checkout of
                            goku-san/laya-experts (with its pii/ folder) or the pii/ folder
                            itself. Used as given, without the revision pin or hash check.
@@ -31,11 +32,6 @@ DEVICE_ENV = "METASKILL_LAYA_DEVICE"
 MODEL_ENV = "METASKILL_LAYA_MODEL"
 THRESHOLD = 0.5
 
-INSTALL_HINT = (
-    "the laya package is not importable. If metaskill-laya was just installed, restart "
-    "Hermes; otherwise reinstall the add-on and accept its dependency install"
-)
-
 
 class LayaError(RuntimeError):
     """A known failure. metaskill passes ``hint`` on to the agent."""
@@ -45,14 +41,24 @@ class LayaError(RuntimeError):
         self.hint = hint
 
 
+def install_hint(package: str = "laya") -> str:
+    return (f"the {package} package is not importable. If metaskill-laya was just installed, "
+            "restart Hermes; otherwise reinstall the add-on and accept its dependency install")
+
+
 def resolve_device(setting: str = "") -> str:
     """Turn the METASKILL_LAYA_DEVICE setting into a torch device string.
 
     "" or "cpu" -> "cpu". "gpu" -> "cuda" when PyTorch sees an NVIDIA or AMD (ROCm) GPU,
-    else "cpu". Anything else is passed to torch as given. Never picks MPS on its own:
-    on an Apple-silicon Mac laya chose MPS and hung.
+    else "cpu". Anything else is passed to torch as given, except "mps" and "auto", which
+    raise LayaError: on an Apple-silicon Mac laya hung on MPS, and a hung device never
+    returns, so the time limit cannot end it. "auto" is laya's own choice, which is MPS
+    on such a Mac.
     """
     setting = setting.strip().lower()
+    if setting == "auto" or setting.split(":")[0] == "mps":
+        raise LayaError(f"{DEVICE_ENV}={setting} is not supported: Laya hung on Apple's GPU "
+                        "(MPS), and the time limit cannot stop a hung device. Use cpu or gpu")
     if setting != "gpu":
         return setting or "cpu"
     try:
@@ -91,7 +97,9 @@ def load():
                 from .pii_demo import PiiRedactor  # imports numpy and torch
                 _MODELS[key] = PiiRedactor(device=device, **source)
             except ImportError as exc:
-                raise LayaError(INSTALL_HINT) from exc
+                # The module name is not skill content, and pii_demo needs numpy and torch
+                # as well as laya, so name the one that is really missing.
+                raise LayaError(install_hint((exc.name or "laya").split(".")[0])) from exc
             except (OSError, ValueError, RuntimeError) as exc:
                 # Download, file and hash errors name model files, never skill content.
                 raise LayaError(f"could not load the Laya model ({type(exc).__name__}: "
@@ -127,14 +135,15 @@ def plausible(value: str, label: str) -> bool:
     return True
 
 
-def detect(text: str, skip=()) -> list[dict]:
+def detect(text: str, skip=(), deadline: float | None = None) -> list[dict]:
     """Personal data in *text*, as dicts with start, end, label and score.
 
     Candidates overlapping a span in *skip* (sorted, non-overlapping) are not scored.
+    Raises TimeoutError once time.monotonic() passes *deadline*, checked between batches.
     """
     if not text or not text.strip():
         return []
-    found = load().detect(text, threshold=THRESHOLD, skip=list(skip))
+    found = load().detect(text, threshold=THRESHOLD, skip=list(skip), deadline=deadline)
     return [
         {"start": e.start, "end": e.end, "label": e.label, "score": round(float(e.score), 4)}
         for e in found.entities

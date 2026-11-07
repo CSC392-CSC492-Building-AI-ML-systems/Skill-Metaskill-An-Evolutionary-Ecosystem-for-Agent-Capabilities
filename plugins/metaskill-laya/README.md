@@ -32,6 +32,10 @@ replaced automatically, because the model's confidence does not separate its fal
 alarms from real hits. Hits that are impossible whatever the label (a "card number"
 with letters in it, a 555 phone number, a one-character postal code) are dropped.
 
+Every file is scored with the region set to `US`, the default in the vendored code.
+Non-US postal codes and phone numbers are still proposed, but the model is told the
+document is American, and accuracy on non-US skills has not been measured separately.
+
 If Laya cannot run (the package is missing, the download fails), `generalize` still
 returns the regex results with a warning that says why.
 
@@ -39,9 +43,9 @@ returns the regex results with a warning that says why.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `METASKILL_LAYA_DEVICE` | `cpu` | `gpu` uses an NVIDIA (CUDA) or AMD (ROCm) GPU when PyTorch sees one, else the CPU. A torch device such as `cuda:1` is used as given. |
+| `METASKILL_LAYA_DEVICE` | `cpu` | `gpu` uses an NVIDIA (CUDA) or AMD (ROCm) GPU when PyTorch sees one, else the CPU. A torch device such as `cuda:1` is used as given, except `mps` (or `mps:0`) and `auto`, which are refused: Laya hung on Apple's GPU, and `auto` lets Laya pick it. |
 | `METASKILL_LAYA_MODEL` | unset | A local copy of the model: a checkout of `goku-san/laya-experts` or its `pii/` folder. Used as given, without the revision pin or hash check. |
-| `METASKILL_EXTRAS_MAX_SECONDS` | `600` | Time limit for add-on detectors per `generalize` call. Detection stops at the next file and says so. |
+| `METASKILL_EXTRAS_MAX_SECONDS` | `600` | Time limit for add-on detectors per `generalize` call. Laya checks it between batches of 16 candidates, then stops and says so; the file it was in is not counted and its hits are dropped. The limit does not interrupt the first model download, and it cannot stop a device that has hung. |
 
 Set them with `hermes config set NAME value` (saved to `~/.hermes/.env`), then restart
 Hermes. `hermes metaskill-laya status` shows the installed versions, whether the model

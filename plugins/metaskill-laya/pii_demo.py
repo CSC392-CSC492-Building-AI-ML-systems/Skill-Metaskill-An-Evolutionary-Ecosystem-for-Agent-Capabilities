@@ -1,8 +1,8 @@
 # Vendored from goku-san/laya-experts (https://huggingface.co/goku-san/laya-experts),
 # demo/pii_demo.py at revision 73d5a0883e7000ffac3bdf7bd7de83c5f484e7f4, under the
 # Apache License 2.0 (see LICENSE and NOTICE in this folder). Changed here, marked
-# "Local addition": skip_nested_pieces(), the skip argument of PiiRedactor.detect(),
-# and the revision and expected_sha256 arguments of PiiRedactor.
+# "Local addition": skip_nested_pieces(), the skip and deadline arguments of
+# PiiRedactor.detect(), and the revision and expected_sha256 arguments of PiiRedactor.
 """Laya Experts PII: find personal data in free text and redact it.
 
 A regex detector proposes candidate spans, and the fine-tuned Laya `pii` flavour labels each
@@ -20,6 +20,7 @@ from __future__ import annotations
 import bisect
 import collections
 import re
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -298,9 +299,12 @@ class PiiRedactor:
         self.question = {"type": "choice", "instructions": INSTRUCTIONS, "criteria": LABELS}
 
     @torch.no_grad()
-    def score(self, states: list[dict]) -> list[dict[str, float]]:
+    def score(self, states: list[dict], deadline: float | None = None) -> list[dict[str, float]]:
         """Label probabilities for many states, batched. Same maths as `laya.Agent.predict`,
-        which only takes one state per call."""
+        which only takes one state per call.
+
+        Local addition: raises TimeoutError at the first batch that starts after `deadline`
+        (a time.monotonic() value), because one file can hold thousands of candidates."""
         from laya.common import QTYPES, build_sequence, collate_items, temp_bucket
         ag = self.agent
         max_len, head_max_len = ag.cfg.get("max_len", 512), ag.cfg.get("head_max_len", 192)
@@ -309,6 +313,8 @@ class PiiRedactor:
         t = ag.temperature_by_options.get(temp_bucket(qt, len(LABELS)), ag.temperature[qt])
         out = []
         for i in range(0, len(states), self.batch_size):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("time limit reached")
             items = []
             for st in states[i:i + self.batch_size]:
                 seq, markers = build_sequence(ag.tok, st, q, max_len, head_max_len)
@@ -323,9 +329,10 @@ class PiiRedactor:
             out += [dict(zip(LABELS, map(float, row))) for row in p]
         return out
 
-    def detect(self, text: str, threshold: float = 0.5, region: str = "US", skip=()) -> Detection:
+    def detect(self, text: str, threshold: float = 0.5, region: str = "US", skip=(),
+               deadline: float | None = None) -> Detection:
         rows = skip_claimed(skip_nested_pieces(build_states(text, region)), skip)
-        probs = self.score([st for _, _, st in rows])
+        probs = self.score([st for _, _, st in rows], deadline)
         kept = []
         for ((s, e), fams, _), pr in zip(rows, probs):
             pii = 1.0 - pr[NOT_PII]

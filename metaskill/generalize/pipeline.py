@@ -5,6 +5,9 @@ detectors from add-on plugins (extras.py), and reports counts. Placeholders and 
 template output are the generalization pipeline's job (MET-12) and are not written
 yet, so nothing is created under output_path and the skill is never modified.
 
+Until then the status is "partial", so the tool reports success: false: a caller that
+checks only that flag must not tell the user the skill was generalized.
+
 The result goes into the agent's context, so it carries counts only, never a
 detected value.
 """
@@ -60,8 +63,10 @@ def generalize_skill(skill_path: str, output_path: str) -> dict:
         warnings.append("skipped files: " + ", ".join(f"{n} {r}" for r, n in sorted(reasons.items())))
 
     result = {
-        "status": "ok",
-        "message": "detection complete; no files were written",
+        "status": "partial",
+        "message": ("detection only: the skill was NOT generalized. Placeholders and the "
+                    "template are not implemented yet, so no files were written. The counts "
+                    "are valid; tell the user nothing was generalized."),
         "detectors": detectors,
         "artifacts": [],
         "counts": {

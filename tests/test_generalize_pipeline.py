@@ -32,7 +32,7 @@ def skill(tmp_path):
 
 
 def fake_extra(name="fake", hits=None, calls=None, error=None):
-    def detect(text, skip):
+    def detect(text, skip, deadline):
         if calls is not None:
             calls.append((text, list(skip)))
         if error is not None:
@@ -46,7 +46,7 @@ def fake_extra(name="fake", hits=None, calls=None, error=None):
 
 def test_regex_only_reports_counts_and_offers_the_addon(skill):
     result = pipeline.generalize_skill(str(skill), "out")
-    assert result["status"] == "ok"
+    assert result["status"] == "partial"
     assert result["detectors"] == ["regex"]
     assert result["counts"]["files_scanned"] == 1
     assert result["counts"]["by_category"] == {"email": 1}
@@ -107,7 +107,7 @@ def test_extra_failure_keeps_regex_results_and_passes_the_hint(skill, clean_regi
     clean_registry["fake"] = fake_extra(error=error)
     result = pipeline.generalize_skill(str(skill), "out")
 
-    assert result["status"] == "ok"
+    assert result["status"] == "partial"
     assert result["detectors"] == ["regex"]
     assert result["counts"]["findings"] == 1
     assert result["warnings"] == ["fake detector failed (RuntimeError): restart Hermes"]
@@ -122,6 +122,23 @@ def test_extra_stops_at_the_time_limit(skill, clean_registry, monkeypatch):
     assert calls == []
     assert result["warnings"] == [
         f"fake stopped at the time limit after 0 of 1 files; raise {extras.TIME_LIMIT_ENV} to scan more"]
+
+
+def test_extra_gets_the_deadline_and_can_stop_inside_a_file(clean_registry):
+    seen = []
+
+    def detect(text, skip, deadline):
+        seen.append(deadline)
+        if len(seen) == 2:
+            raise TimeoutError
+        return []
+    entry = {"api": extras.API, "name": "fake", "detect": detect}
+    files = [SourceFile(name, TEXT) for name in ("a.md", "b.md", "c.md")]
+    run = extras.run_extra(entry, files, {}, deadline=1e12)
+    assert seen == [1e12, 1e12]  # c.md was not started
+    assert run.files_scanned == 1  # b.md was cut off, so it does not count
+    assert run.warning == (
+        f"fake stopped at the time limit after 1 of 3 files; raise {extras.TIME_LIMIT_ENV} to scan more")
 
 
 @pytest.mark.parametrize("value, expected", [("", 600.0), ("12.5", 12.5), ("-3", 0.0), ("soon", 600.0)])
@@ -178,7 +195,9 @@ def test_claims_cover_findings_and_rejected_example_values():
 
 def test_tool_routes_generalize_to_the_pipeline(skill, clean_registry):
     result = json.loads(tools.metaskill({"operation": "generalize", "skill_path": str(skill)}))
-    assert result["success"] is True
+    assert result["success"] is False  # nothing was generalized yet (MET-12)
+    assert result["status"] == "partial"
+    assert "NOT generalized" in result["message"] and result["artifacts"] == []
     assert result["operation"] == "generalize"
     assert result["detectors"] == ["regex"]
     assert result["counts"]["findings"] == 1

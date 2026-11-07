@@ -10,6 +10,8 @@ Changes made here, each marked "Local addition" in the file:
 - skip_claimed() and the skip argument of PiiRedactor.detect(): drop candidates that
   another detector already claimed.
 - The revision and expected_sha256 arguments of PiiRedactor, passed to laya.Agent.
+- The deadline argument of PiiRedactor.score() and PiiRedactor.detect(): stops scoring
+  between batches once a time limit has passed.
 
 The Laya Experts model weights are downloaded at run time from the same repository
 (Apache License 2.0) and are not included here.

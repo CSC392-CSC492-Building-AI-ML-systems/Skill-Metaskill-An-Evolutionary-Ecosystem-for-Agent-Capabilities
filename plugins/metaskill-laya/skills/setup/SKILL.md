@@ -52,8 +52,9 @@ What works depends on the machine. Run `status` first.
   Hermes has no supported way to switch it to a CUDA or ROCm build. Tell the user it
   stays on the CPU. Do not try to replace PyTorch in Hermes's environment.
 
-- **Mac:** not supported. Laya hung on Apple's GPU (MPS) in testing, so the add-on
-  never uses it by itself.
+- **Mac:** not supported. Laya hung on Apple's GPU (MPS) in testing, and the time limit
+  cannot stop a hung device, so the add-on refuses `mps` and `auto` with a warning.
+  Leave the setting at `cpu`.
 
 If `METASKILL_LAYA_DEVICE` is `gpu` but no GPU is usable, the add-on uses the CPU, and
 `status` says so.
@@ -65,15 +66,16 @@ warning says why:
 
 | Warning | What to do |
 |---|---|
-| `the laya package is not importable` | If the add-on was just installed, restart Hermes. Otherwise the dependency install was declined or failed: ask the user whether to reinstall the add-on and accept the dependency install. |
+| `the <name> package is not importable` | `<name>` is the package that failed to import, such as `laya`, `numpy` or `torch`. If the add-on was just installed, restart Hermes. Otherwise the dependency install was declined or failed: ask the user whether to reinstall the add-on and accept the dependency install. |
 | `could not load the Laya model (...)` | Usually the download failed. Check the network, then run `hermes metaskill-laya download` to see the full error. |
-| `laya stopped at the time limit after N of M files` | The skill is large for a CPU. Offer a GPU if the machine supports one (see above), or raise the limit: `hermes config set METASKILL_EXTRAS_MAX_SECONDS 1800`. |
+| `METASKILL_LAYA_DEVICE=mps is not supported` (or `=auto`) | Ask the user, then set it back with `hermes config set METASKILL_LAYA_DEVICE cpu` and restart Hermes. |
+| `laya stopped at the time limit after N of M files` | The skill is large for a CPU, or the first run spent the time downloading the model. Offer a GPU if the machine supports one (see above), or raise the limit: `hermes config set METASKILL_EXTRAS_MAX_SECONDS 1800`. |
 
 ## Settings
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `METASKILL_LAYA_DEVICE` | `cpu` | `gpu` uses an NVIDIA (CUDA) or AMD (ROCm) GPU when PyTorch sees one, else the CPU. |
+| `METASKILL_LAYA_DEVICE` | `cpu` | `gpu` uses an NVIDIA (CUDA) or AMD (ROCm) GPU when PyTorch sees one, else the CPU. `mps` and `auto` are refused. |
 | `METASKILL_LAYA_MODEL` | unset | Folder with a local copy of the model, used instead of downloading it. |
 | `METASKILL_EXTRAS_MAX_SECONDS` | `600` | Time limit for add-on detection per `generalize` call. |
 

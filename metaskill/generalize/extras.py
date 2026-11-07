@@ -15,9 +15,11 @@ An entry is a dict:
 
     api     API (1)
     name    short detector name for results, e.g. "laya"
-    detect  callable(text, skip) -> list of {"start", "end", "label", "score"}.
+    detect  callable(text, skip, deadline) -> list of {"start", "end", "label", "score"}.
             skip is a sorted list of (start, end) spans the regex layer already
             claimed; the detector should not score candidates that overlap them.
+            deadline is a time.monotonic() value; a detector that takes long on one
+            file should check it and raise TimeoutError once it has passed.
 
 An add-on signals a known failure (its dependency is missing, a download failed)
 by raising an exception with a ``hint`` attribute; the hint is passed on to the
@@ -41,7 +43,9 @@ REGISTRY = "metaskill_extras"
 API = 1
 
 # The extras together get this long per generalize call. A tool call that runs for
-# many minutes looks hung, so detection stops at the next file boundary and says so.
+# many minutes looks hung, so detection stops and says so: at the next file, or inside
+# a file when the detector honors the deadline it is given. A call that never returns
+# cannot be interrupted, so a detector must not use a device that can hang.
 TIME_LIMIT_ENV = "METASKILL_EXTRAS_MAX_SECONDS"
 DEFAULT_TIME_LIMIT = 600.0
 
@@ -84,16 +88,21 @@ def run_extra(entry: dict, files: list[SourceFile], claimed: dict[str, list[Span
               deadline: float, clock: Callable[[], float] = time.monotonic) -> ExtraRun:
     """Run one extra detector over every file, until it fails or the deadline passes."""
     run = ExtraRun(entry["name"])
+
+    def limit_warning() -> str:
+        return (f"{run.name} stopped at the time limit after {run.files_scanned} of "
+                f"{len(files)} files; raise {TIME_LIMIT_ENV} to scan more")
+
     for source in files:
         if clock() >= deadline:
-            run.warning = (
-                f"{run.name} stopped at the time limit after {run.files_scanned} of "
-                f"{len(files)} files; raise {TIME_LIMIT_ENV} to scan more"
-            )
+            run.warning = limit_warning()
             break
         skip = claimed.get(source.path, [])
         try:
-            hits = entry["detect"](source.text, skip)
+            hits = entry["detect"](source.text, skip, deadline)
+        except TimeoutError:  # stopped partway through this file, which is not counted
+            run.warning = limit_warning()
+            break
         except Exception as exc:  # an add-on failing must not fail generalize
             hint = getattr(exc, "hint", "")
             run.warning = f"{run.name} detector failed ({type(exc).__name__})" + (
