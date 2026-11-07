@@ -10,7 +10,8 @@ METASKILL = {
     "name": "metaskill",
     "description": (
         "Generalize a Hermes skill into a template, or personalize a template "
-        "from a config. Read skill metaskill:guide first."
+        "from a config. Read skill metaskill:guide first. Returns counts and paths, "
+        "never detected values; do not quote them to the user."
     ),
     "parameters": {
         "type": "object",

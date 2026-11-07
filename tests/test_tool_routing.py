@@ -103,6 +103,8 @@ def test_missing_config_file_rejected(fake_pipelines):
 
 def test_schema_points_to_guide_skill():
     assert "metaskill:guide" in schemas.METASKILL["description"]
+    # The guide is loaded only if the model chooses it, so this rule stays in the schema.
+    assert "never detected values" in schemas.METASKILL["description"]
     description = schemas.METASKILL["parameters"]["properties"]["skill_path"]["description"]
     assert "not a name" in description
 
@@ -242,17 +244,35 @@ def test_register_skill_falls_back_to_name_and_path():
     assert [name for name, _ in ctx.skills] == ["guide"]
 
 
+def test_register_skill_keeps_the_description_without_frontmatter():
+    class MiddleSkillCtx(RegisteringCtx):
+        def __init__(self):
+            super().__init__()
+            self.skills = []
+
+        def register_skill(self, name, path, description=""):
+            self.skills.append((name, description))
+
+    ctx = MiddleSkillCtx()
+    plugin = load_plugin()
+    plugin.register(ctx)
+    assert ctx.skills == [("guide", plugin.GUIDE_DESCRIPTION)]
+
+
 def test_guide_frontmatter_matches_registration():
     # Hermes gates the index on the registered frontmatter; keep SKILL.md saying the same.
     text = load_plugin().GUIDE_SKILL.read_text(encoding="utf-8")
     header = text.split("---")[1]
     assert "requires_tools: [metaskill]" in header
+    # Hermes shows the registered description in <available_skills>, not the file's.
+    assert f"\ndescription: {load_plugin().GUIDE_DESCRIPTION}\n" in header
+    assert ": " not in load_plugin().GUIDE_DESCRIPTION  # would break the YAML line
 
 
 def test_guide_skill_covers_the_steps_removed_from_the_schema():
     text = load_plugin().GUIDE_SKILL.read_text(encoding="utf-8")
     for step in ("skill name", "skill_view", "skill_dir", "generalize", "personalize",
-                 "config_path", "metaskill("):
+                 "config_path", "metaskill(", "`partial`"):
         assert step in text
 
 

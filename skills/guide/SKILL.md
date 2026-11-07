@@ -1,6 +1,6 @@
 ---
 name: guide
-description: How to run the metaskill tool - find the skill's path, choose generalize or personalize, find the config, then call metaskill.
+description: How to run the metaskill tool - find the skill's path, pick generalize or personalize, find the config.
 metadata:
   hermes:
     requires_tools: [metaskill]
@@ -62,3 +62,6 @@ The response contains counts, artifact paths, `unresolved` items and `warnings`.
 contains the detected values themselves. Tell the user where the output was written, how
 many values were found or substituted, and anything left unresolved. Do not open the
 outputs to quote the user's personal values back to them.
+
+If `status` is `partial`, the job did not finish, and there may be no output. Pass on
+`message` and `warnings`, and do not say the skill was generalized or personalized.

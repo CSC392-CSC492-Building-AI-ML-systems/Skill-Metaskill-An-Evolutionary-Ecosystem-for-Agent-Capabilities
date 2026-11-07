@@ -6,9 +6,12 @@ from pathlib import Path
 from . import schemas, tools
 from .metaskill.evaluate.judge import JUDGE_TASK
 
+# Keep this a Path: Hermes from April to September 2026 calls path.exists() on it, so a str
+# raises AttributeError there and Hermes undoes the whole plugin.
 GUIDE_SKILL = Path(__file__).parent / "skills" / "guide" / "SKILL.md"
+# The same text as the SKILL.md frontmatter; a colon here would break that YAML line.
 GUIDE_DESCRIPTION = (
-    "How to run the metaskill tool: find the skill's path, pick generalize or personalize, "
+    "How to run the metaskill tool - find the skill's path, pick generalize or personalize, "
     "find the config."
 )
 # Hermes reads index conditions from what is registered, not from the file, so this repeats
@@ -39,12 +42,17 @@ def register(ctx):
     # How-to guidance for the tool, loaded on demand as metaskill:guide so it stays out of
     # the schema. Same guard as above: older Hermes has no plugin skills.
     if hasattr(ctx, "register_skill"):
-        try:
-            ctx.register_skill(
-                "guide", GUIDE_SKILL, description=GUIDE_DESCRIPTION, frontmatter=GUIDE_FRONTMATTER
-            )
-        except TypeError:  # versions documented as register_skill(name, path) only
-            ctx.register_skill("guide", GUIDE_SKILL)
+        # Newest signature first, so each older Hermes keeps as much as it accepts.
+        for extras in (
+            {"description": GUIDE_DESCRIPTION, "frontmatter": GUIDE_FRONTMATTER},
+            {"description": GUIDE_DESCRIPTION},
+            {},  # versions documented as register_skill(name, path) only
+        ):
+            try:
+                ctx.register_skill("guide", GUIDE_SKILL, **extras)
+                break
+            except TypeError:
+                continue
     ctx.register_command(
         "metaskill",
         handler=tools.make_command_handler(ctx),
