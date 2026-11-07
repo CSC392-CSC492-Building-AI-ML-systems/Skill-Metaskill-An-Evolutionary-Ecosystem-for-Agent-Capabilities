@@ -1,6 +1,6 @@
 """evaluate_skill and rank_skills, end to end on skills written to a temporary folder.
 
-SKILL.md files here have no frontmatter, so these tests do not need PyYAML.
+SKILL.md files here have no frontmatter, so these tests do not need Hermes' YAML loader.
 """
 
 import importlib

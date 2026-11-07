@@ -13,7 +13,7 @@ CRITICAL, HIGH, MEDIUM, LOW = Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM,
 
 
 def load(path):
-    """Like Skill.load(), without needing PyYAML for the frontmatter."""
+    """Like Skill.load(), without needing Hermes' YAML loader for the frontmatter."""
     path = Path(path)
     files = sorted(p.relative_to(path) for p in path.rglob("*") if p.is_file() and p.name != "SKILL.md")
     return Skill(path=path, name=path.name, body=(path / "SKILL.md").read_text(), files=files)

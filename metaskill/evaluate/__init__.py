@@ -73,6 +73,10 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     except (OSError, ValueError, TypeError, AttributeError):
         # Not the exception's message: it may echo the file (tools.py).
         return {"status": "error", "error": "config_path is not a valid evaluation config"}
+    # A relative folder means the user's session, not the gateway's own folder (tools.py).
+    session_cwd = getattr(ctx, "session_cwd", None)
+    if callable(session_cwd):
+        config.output_dir = Path(session_cwd()) / config.output_dir
 
     # Only what safety needs: no built dimension runs tasks, so Docker is not asked for.
     # Once one does, this is dependencies.missing_dependencies(), and evaluate calls

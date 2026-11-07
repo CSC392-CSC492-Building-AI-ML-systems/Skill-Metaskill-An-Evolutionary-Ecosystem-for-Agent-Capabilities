@@ -47,7 +47,7 @@ A skill loaded from disk. Every scoring module takes one.
 | `frontmatter` | Parsed YAML frontmatter; `{}` if there is none |
 | `files` | Bundled files relative to `path`, sorted. Excludes `SKILL.md`, anything under a dot-prefixed path, `__pycache__` and `node_modules` |
 
-`Skill.load(path)` builds one from a directory. PyYAML is only needed if `SKILL.md` has frontmatter. Frontmatter that is not a mapping raises `ValueError`.
+`Skill.load(path)` builds one from a directory. Frontmatter is parsed by Hermes' own YAML loader (`load_yaml`, over `hermes_yaml`), since Hermes' runtime has no PyYAML, so it only loads inside Hermes. That loader rejects duplicate keys. Frontmatter that is not a mapping raises `ValueError`.
 
 ### `EvaluationConfig`
 

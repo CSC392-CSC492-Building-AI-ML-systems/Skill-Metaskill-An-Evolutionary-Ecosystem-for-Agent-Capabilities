@@ -262,8 +262,137 @@ def test_command_without_args_shows_usage():
 
 
 def test_command_reports_when_message_not_accepted():
-    out = tools.make_command_handler(FakeCtx(accepts=False))("generalize x")
-    assert "could not send" in out
+    out = tools.make_command_handler(FakeCtx(accepts=False))("generalize gcp-file-transfer")
+    assert "could not send" in out and "allow_gateway_injection" in out
+
+
+def test_command_runs_a_path_itself_and_prints_the_result(fake_evaluate):
+    ctx = FakeCtx()
+    out = tools.make_command_handler(ctx)("evaluate skills/gcp")
+    assert ctx.injected == []
+    assert fake_evaluate["evaluate"] == (
+        "skills/gcp", {"config_path": None, "output_path": None, "ctx": ctx})
+    assert "report.json" in out
+
+
+def test_command_splits_a_rank_list_and_reads_config(fake_evaluate):
+    tools.make_command_handler(FakeCtx())('rank x, "skills/gcp" --config c.json')
+    target, kwargs = fake_evaluate["rank"]
+    assert target == ["x", "skills/gcp"] and kwargs["config_path"] == "c.json"
+
+
+@pytest.mark.parametrize("request_text", ["evaluate my skills", 'evaluate "my skills"'])
+def test_command_takes_a_path_with_spaces(fake_evaluate, workspace, request_text):
+    (workspace / "my skills").mkdir()
+    tools.make_command_handler(FakeCtx())(request_text)
+    assert fake_evaluate["evaluate"][0] == "my skills"
+
+
+@pytest.mark.parametrize("request_text", ["rank my skills", "compare x", "evaluate"])
+def test_command_sends_what_is_not_a_path_to_the_agent(fake_evaluate, request_text):
+    ctx = FakeCtx()
+    assert tools.make_command_handler(ctx)(request_text) is None
+    assert ctx.injected == [f"Use the metaskill tool to: {request_text}"]
+    assert fake_evaluate == {}
+
+
+def test_command_prints_a_failure(monkeypatch):
+    module = types.ModuleType("metaskill.evaluate")
+    module.evaluate_skill = lambda target, **kwargs: {
+        "status": "error", "error": "no skill could be evaluated",
+        "warnings": ["x could not be evaluated: ImportError"]}
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
+    out = tools.make_command_handler(FakeCtx())("evaluate x")
+    assert "evaluate failed: no skill could be evaluated" in out
+    assert "x could not be evaluated: ImportError" in out
+
+
+def test_command_prints_the_table_and_what_is_missing(monkeypatch):
+    module = types.ModuleType("metaskill.evaluate")
+    module.evaluate_skill = lambda target, **kwargs: {
+        "table": "| Rank |", "warnings": ["Partial result"], "dependencies": [
+            {"package": "scanner", "install_command": "pip install scanner", "install_url": ""}]}
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
+    out = tools.make_command_handler(FakeCtx())("evaluate x").split("\n")
+    assert out == ["| Rank |", "Warning: Partial result",
+                   "Not installed: scanner (pip install scanner)"]
+
+
+def test_command_does_not_leak_or_raise_on_failure(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("leaky-message-123")
+
+    monkeypatch.setattr(tools, "run", boom)
+    assert tools.make_command_handler(FakeCtx())("evaluate x") == "metaskill failed: RuntimeError"
+
+
+class SessionCtx(FakeCtx):
+    """A session whose folder is not the process's own, as in the Hermes gateway."""
+
+    def __init__(self, cwd):
+        super().__init__()
+        self.cwd = cwd
+
+    def session_cwd(self):
+        return str(self.cwd)
+
+
+@pytest.fixture
+def gateway_cwd(tmp_path_factory, monkeypatch):
+    """The process runs somewhere else, so a path only resolves through the session."""
+    folder = tmp_path_factory.mktemp("gateway")
+    monkeypatch.chdir(folder)
+    return folder
+
+
+def in_session(workspace, *parts):
+    return os.path.join(str(workspace), *parts)
+
+
+def test_relative_paths_mean_the_session_folder(fake_evaluate, workspace, gateway_cwd):
+    args = {"operation": "evaluate", "skill_path": "skills/gcp", "config_path": "c.json",
+            "output_path": "out/t"}
+    result = json.loads(tools.metaskill(args, ctx=SessionCtx(workspace)))
+    assert result["success"] is True
+    target, kwargs = fake_evaluate["evaluate"]
+    assert target == in_session(workspace, "skills/gcp")
+    assert kwargs["config_path"] == in_session(workspace, "c.json")
+    assert kwargs["output_path"] == in_session(workspace, "out/t")
+
+
+def test_an_absolute_path_is_left_alone(fake_evaluate, workspace, gateway_cwd):
+    path = in_session(workspace, "skills", "gcp")
+    tools.metaskill({"operation": "evaluate", "skill_path": path}, ctx=SessionCtx(gateway_cwd))
+    assert fake_evaluate["evaluate"][0] == path
+
+
+def test_rank_list_means_the_session_folder(fake_evaluate, workspace, gateway_cwd):
+    tools.metaskill({"operation": "rank", "skill_path": "x, skills/gcp"},
+                    ctx=SessionCtx(workspace))
+    assert fake_evaluate["rank"][0] == [in_session(workspace, "x"),
+                                        in_session(workspace, "skills/gcp")]
+
+
+def test_default_generalize_output_is_in_the_session_folder(fake_pipelines, workspace, gateway_cwd):
+    tools.metaskill({"operation": "generalize", "skill_path": "skills/gcp"},
+                    ctx=SessionCtx(workspace))
+    assert fake_pipelines["generalize"][1] == in_session(
+        workspace, "metaskill-output", "gcp-template")
+
+
+def test_command_finds_a_relative_path_in_the_session_folder(fake_evaluate, workspace, gateway_cwd):
+    ctx = SessionCtx(workspace)
+    tools.make_command_handler(ctx)("evaluate ./skills/gcp")
+    assert ctx.injected == []
+    assert fake_evaluate["evaluate"][0] == in_session(workspace, "./skills/gcp")
+
+
+def test_reports_land_in_the_session_folder(workspace, gateway_cwd):
+    (workspace / "x" / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+    out = tools.make_command_handler(SessionCtx(workspace))("evaluate x")
+    reports = list((workspace / "evaluation-reports").rglob("ranked-evaluation.json"))
+    assert len(reports) == 1 and str(reports[0]) in out
+    assert list(gateway_cwd.iterdir()) == []
 
 
 def load_plugin():

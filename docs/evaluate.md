@@ -364,13 +364,15 @@ Dependencies:
 
 ## 7. Tool surface
 
-Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g. `/metaskill evaluate gcp-file-transfer` or "rank my skills". The command passes the request to the agent, which resolves skill names to paths and calls the tool with `operation` `evaluate` or `rank`. These are routed to `evaluate_skill` / `rank_skills` in `__init__.py`.
+Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g. `/metaskill evaluate ./skills/gcp-file-transfer` or "rank my skills". Given paths that exist, the command runs the operation itself and prints the result. Anything else, such as a skill name, it passes to the agent, which resolves names to paths and calls the tool with `operation` `evaluate` or `rank`; Hermes only allows that with `plugins.entries.metaskill.allow_gateway_injection`. Both are routed to `evaluate_skill` / `rank_skills` in `__init__.py`.
 
 | Argument | Description |
 |---|---|
 | `skill_path` | A skill's folder or its `SKILL.md`. For `rank`, a comma separated list (section 2) |
 | `config_path` | Optional JSON file for `EvaluationConfig.from_dict` |
 | `output_path` | Optional; replaces `EvaluationConfig.output_dir` |
+
+A relative path, `EvaluationConfig.output_dir` included, means the folder of the user's session (`ctx.session_cwd()`), since the plugin runs in the Hermes gateway, whose own folder is the Hermes install.
 
 If a request does not name the skills, such as "rank my skills", the agent asks the user which skills to rank: all installed skills, or a set they list. The answer becomes the skill list in section 2.
 

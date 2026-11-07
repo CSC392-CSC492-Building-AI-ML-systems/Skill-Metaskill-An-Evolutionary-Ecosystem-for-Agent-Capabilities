@@ -117,6 +117,17 @@ def _check_unit(name: str, value: float) -> None:
 # --- Inputs ---------------------------------------------------------------
 
 
+def load_yaml(text: str) -> Any:
+    """text parsed by Hermes' own YAML loader. The plugin runs inside Hermes, whose runtime
+    has this and not PyYAML, so the plugin needs no YAML package of its own."""
+    try:
+        from hermes_yaml import safe_load
+    except ImportError as e:
+        raise ImportError("Hermes' YAML loader (hermes_yaml) was not found: reading YAML "
+                          "needs Hermes") from e
+    return safe_load(text)
+
+
 @dataclass
 class Skill:
     """A skill loaded from disk. Every scoring module takes one of these."""
@@ -137,14 +148,7 @@ class Skill:
         match = re.match(
             r"---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", body, re.DOTALL)
         if match:
-            try:
-                import yaml
-            except ImportError as e:
-                raise ImportError(
-                    "PyYAML is required to parse SKILL.md frontmatter. "
-                    "Install it with `pip install pyyaml`."
-                ) from e
-            parsed = yaml.safe_load(match.group(1)) or {}
+            parsed = load_yaml(match.group(1)) or {}
             if not isinstance(parsed, dict):
                 raise ValueError(
                     f"{path / 'SKILL.md'}: frontmatter is not a mapping")

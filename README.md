@@ -5,8 +5,15 @@ evaluate, and merge Hermes skills.
 
 ## Install
 
+Link this folder into the `plugins` folder of your Hermes home, then enable it. The home is `~/.hermes` on macOS and Linux, and `%LOCALAPPDATA%\hermes` on Windows.
+
 ```bash
 ln -s "$PWD" ~/.hermes/plugins/metaskill
+hermes plugins enable metaskill
+```
+
+```powershell
+New-Item -ItemType Junction -Path "$env:LOCALAPPDATA\hermes\plugins\metaskill" -Target "$PWD"
 hermes plugins enable metaskill
 ```
 
@@ -25,6 +32,17 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not 
 /metaskill personalize <skill> --config <file>
 /metaskill evaluate <skill>
 /metaskill rank <skill>, <skill>
+```
+
+`<skill>` is a path to the skill's folder, relative to your session's folder or absolute. The command runs it directly and prints the result.
+
+`<skill>` can also be a skill name. The command then asks the agent to find the skill, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply, so use a path there.
+
+```yaml
+plugins:
+  entries:
+    metaskill:
+      allow_gateway_injection: true
 ```
 
 `evaluate` and `rank` print a table and write a report to `evaluation-reports/[timestamp]/`. Only the Safety dimension is built so far. The others are left empty, so every skill is listed as unranked and none is recommended ([docs/evaluate.md](docs/evaluate.md), section 7).
