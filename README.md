@@ -46,9 +46,9 @@ and accuracy figures are in [plugins/metaskill-laya](plugins/metaskill-laya/READ
 | `metaskill/personalize/` | Part 1: rebuild a skill from a template + config |
 | `metaskill/evaluate/` | Part 2: scoring and ranking skills |
 | `metaskill/merge/` | Part 3 (stretch): skill breeding |
-| `plugins/metaskill-laya/` | Optional add-on: Laya PII detection for generalize |
-| `benchmarks/` | Detector comparisons on labeled samples |
 | `skills/` | Skills bundled with the plugin |
 | `tests/` | pytest tests and sample skills |
+| `plugins/metaskill-laya/` | Optional add-on: Laya PII detection for generalize |
+| `benchmarks/` | Detector comparisons on labeled samples |
 | `examples/` | Example config files and demos |
 | `docs/` | Design docs, limitations, meeting notes |
