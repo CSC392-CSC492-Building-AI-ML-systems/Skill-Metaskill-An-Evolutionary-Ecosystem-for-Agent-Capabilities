@@ -84,6 +84,18 @@ def test_register_skill_falls_back_to_name_and_path(addon):
     assert ctx.skills == ["setup"]
 
 
+def test_register_skill_keeps_the_description_without_frontmatter(addon):
+    class MiddleCtx:
+        def __init__(self):
+            self.skills = []
+
+        def register_skill(self, name, path, description=""):
+            self.skills.append((name, description))
+    ctx = MiddleCtx()
+    addon.register(ctx)
+    assert ctx.skills == [("setup", addon.SETUP_DESCRIPTION)]
+
+
 def test_setup_skill_frontmatter_matches_the_registration(addon):
     text = addon.SETUP_SKILL.read_text(encoding="utf-8")
     header = text.split("---")[1]

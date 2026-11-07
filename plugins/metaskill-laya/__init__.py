@@ -22,6 +22,8 @@ ENTRY = {"api": 1, "name": "laya", "detect": detector.detect}
 
 # Setup and GPU instructions, offered to the agent as metaskill-laya:setup and loaded on
 # demand. The same file is the setup documentation in the repo.
+# Keep this a Path: Hermes from April to September 2026 calls path.exists() on it, so a str
+# raises AttributeError there and Hermes undoes the whole plugin.
 SETUP_SKILL = Path(__file__).parent / "skills" / "setup" / "SKILL.md"
 SETUP_DESCRIPTION = (
     "Set up or troubleshoot the metaskill-laya add-on: model download, GPU acceleration, "
@@ -57,8 +59,14 @@ def register(ctx):
             handler_fn=cli.handle,
         )
     if hasattr(ctx, "register_skill"):
-        try:
-            ctx.register_skill("setup", SETUP_SKILL, description=SETUP_DESCRIPTION,
-                               frontmatter=SETUP_FRONTMATTER)
-        except TypeError:  # versions documented as register_skill(name, path) only
-            ctx.register_skill("setup", SETUP_SKILL)
+        # Newest signature first, so each older Hermes keeps as much as it accepts.
+        for extras in (
+            {"description": SETUP_DESCRIPTION, "frontmatter": SETUP_FRONTMATTER},
+            {"description": SETUP_DESCRIPTION},
+            {},  # versions documented as register_skill(name, path) only
+        ):
+            try:
+                ctx.register_skill("setup", SETUP_SKILL, **extras)
+                break
+            except TypeError:
+                continue
