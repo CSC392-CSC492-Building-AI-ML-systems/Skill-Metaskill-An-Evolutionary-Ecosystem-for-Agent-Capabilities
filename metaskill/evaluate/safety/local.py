@@ -15,8 +15,8 @@ import re
 import time
 from pathlib import Path
 
-from metaskill.evaluate.models import LocalWarning, Skill
-from metaskill.evaluate.safety.checks import DeleteTarget, is_system_path
+from ..models import LocalWarning, Skill
+from .checks import DeleteTarget, is_system_path
 
 MANY_FILES = 100
 RECENT_DAYS = 7

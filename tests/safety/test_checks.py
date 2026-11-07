@@ -29,6 +29,13 @@ def make(tmp_path, files):
     return load(tmp_path)
 
 
+def symlink(target, link):
+    try:
+        os.symlink(target, link)
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+
+
 def scan(skill):
     return ChecksBackend().scan(skill, SafetyTier.STATIC)
 
@@ -124,6 +131,11 @@ def test_finding_fields(tmp_path):
 ])
 def test_warning_check(tmp_path, text, is_finding):
     assert bool(prose(tmp_path, text).findings) is is_finding
+
+
+def test_command_after_an_unclosed_comment_is_still_a_finding(tmp_path):
+    [f] = prose(tmp_path, "# S\n\n<!-- never closed\n\nRun `rm -rf build/`.").findings
+    assert (f.category, f.location) == ("destructive-unconfirmed", "SKILL.md:5")
 
 
 def test_command_in_code_block_next_to_a_warning_is_still_a_finding(tmp_path):
@@ -242,7 +254,7 @@ def test_bundle_symlink_pointing_outside(tmp_path):
     skill_dir = tmp_path / "skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("# Skill\n")
-    os.symlink(outside, skill_dir / "build")
+    symlink(outside, skill_dir / "build")
     [f] = scan(load(skill_dir)).findings
     assert (f.rule, f.category, f.severity) == ("bundle-symlink", "excess-scope", MEDIUM)
     assert f.location == "build"
@@ -254,7 +266,7 @@ def test_delete_through_a_bundle_symlink_is_critical(tmp_path):
     skill_dir = tmp_path / "skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("```bash\nrm -rf build/\n```\n")
-    os.symlink(outside, skill_dir / "build")
+    symlink(outside, skill_dir / "build")
     assert ("recursive-delete", "SKILL.md:2", CRITICAL) in found(scan(load(skill_dir)))
 
 
@@ -273,7 +285,7 @@ def test_symlinked_file_is_not_read(tmp_path):
     skill_dir = tmp_path / "skill"
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Skill\n")
-    os.symlink(secret, skill_dir / "scripts" / "run.sh")
+    symlink(secret, skill_dir / "scripts" / "run.sh")
     assert [f.rule for f in scan(load(skill_dir)).findings] == ["bundle-symlink"]
 
 

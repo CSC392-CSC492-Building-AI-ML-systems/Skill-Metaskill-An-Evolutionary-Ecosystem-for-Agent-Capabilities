@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from metaskill.evaluate.models import (
+from ..models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
-from metaskill.evaluate.safety import local
-from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend, delete_targets
-from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
-from metaskill.evaluate.safety.findings import (
+from . import local
+from .checks import CHECKS_VERSION, ChecksBackend, delete_targets
+from .cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
+from .findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
-from metaskill.evaluate.safety.hermes_bridge import PluginLlm
+from .hermes_bridge import PluginLlm
 
 # Statuses that still produced findings the score can rely on. A deep scan that
 # fell back to static is usable: its static findings are real.
@@ -29,7 +29,12 @@ class Dependency:
 
     backend: str
     package: str
-    install_command: str
+    install_command: str  # "" when the user has to install it by hand (install_url)
+    # Required: evaluate does not run without it. Otherwise it only runs with less, as
+    # safety does without Cisco's scanner.
+    required: bool = False
+    install_url: str = ""  # where to get it, when no command installs it
+    reason: str = ""  # what is wrong, e.g. "Docker is not usable: ..."
 
 
 def score(skill: Skill, config: EvaluationConfig,
