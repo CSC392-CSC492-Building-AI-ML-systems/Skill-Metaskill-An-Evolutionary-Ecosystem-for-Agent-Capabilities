@@ -1,0 +1,3 @@
+# For development and CI outside Hermes. Hermes installs this from plugin.yaml
+# (python_dependencies) when the add-on is installed; keep the two in sync.
+laya>=0.4.17,<0.5

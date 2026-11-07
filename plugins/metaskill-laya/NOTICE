@@ -1,0 +1,17 @@
+metaskill-laya
+
+pii_demo.py is copied from Laya Experts (https://huggingface.co/goku-san/laya-experts),
+file demo/pii_demo.py at revision 73d5a0883e7000ffac3bdf7bd7de83c5f484e7f4, which is
+licensed under the Apache License, Version 2.0 (see LICENSE in this folder).
+
+Changes made here, each marked "Local addition" in the file:
+- skip_nested_pieces(): drops candidates that are only pieces of a larger email, URL,
+  card or phone candidate.
+- skip_claimed() and the skip argument of PiiRedactor.detect(): drop candidates that
+  another detector already claimed.
+- The revision and expected_sha256 arguments of PiiRedactor, passed to laya.Agent.
+- The deadline argument of PiiRedactor.score() and PiiRedactor.detect(): stops scoring
+  between batches once a time limit has passed.
+
+The Laya Experts model weights are downloaded at run time from the same repository
+(Apache License 2.0) and are not included here.
