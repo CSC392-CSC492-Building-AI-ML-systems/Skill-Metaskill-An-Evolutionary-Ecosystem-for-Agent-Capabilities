@@ -162,7 +162,7 @@ def test_missing_dependencies_lists_cisco_when_not_installed(monkeypatch):
     monkeypatch.setattr(CiscoBackend, "available", lambda self: False)
     [dep] = safety.missing_dependencies()
     assert dep.backend == "cisco"
-    assert dep.install_command == INSTALL_COMMAND
+    assert dep.install_command == "" and INSTALL_COMMAND in dep.reason
 
 
 def test_missing_dependencies_is_empty_when_installed(monkeypatch):

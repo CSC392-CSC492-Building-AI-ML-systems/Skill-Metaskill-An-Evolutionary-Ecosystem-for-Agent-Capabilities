@@ -63,6 +63,12 @@ def test_generalize_routes_with_default_output(fake_pipelines):
     assert result["unresolved"] == [] and result["warnings"] == []
 
 
+def test_a_list_of_one_skill_gets_the_default_output(fake_pipelines):
+    result = json.loads(tools.metaskill({"operation": "generalize", "skill_path": ["skills/gcp"]}))
+    assert result["success"] is True
+    assert fake_pipelines["generalize"] == ("skills/gcp", os.path.join("metaskill-output", "gcp-template"))
+
+
 def test_default_output_uses_directory_name_for_skill_md():
     path = tools.default_output_path("generalize", os.path.join("skills", "gcp", "SKILL.md"))
     assert path == os.path.join("metaskill-output", "gcp-template")
@@ -369,6 +375,38 @@ def test_installed_skills_go_by_folder_category_and_frontmatter_name(hermes_skil
     (folder / "SKILL.md").write_text("Ship-It", encoding="utf-8")
     assert tools._installed_skills() == [
         (str(folder), "devops/deploy", {"deploy", "devops/deploy", "ship-it"})]
+
+
+def test_an_installed_name_that_is_not_text_is_ignored(hermes_skills, monkeypatch):
+    class CannotPrint:
+        def __str__(self):
+            raise AssertionError("str() was called on a frontmatter value")
+
+    folder = hermes_skills / "devops" / "deploy"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("x", encoding="utf-8")
+    utils = sys.modules["agent.skill_utils"]
+    monkeypatch.setattr(utils, "parse_frontmatter", lambda text: ({"name": CannotPrint()}, text))
+    assert tools._installed_skills() == [(str(folder), "devops/deploy", {"deploy", "devops/deploy"})]
+
+
+def test_command_output_has_no_terminal_escapes(workspace, monkeypatch):
+    evil = "evil\x1b]0;owned\x07\x1b[2J"
+    monkeypatch.setattr(tools, "_local_skills", lambda cwd: ([f"{evil}/skill"], False))
+    monkeypatch.setattr(tools, "_installed_skills", lambda: [])
+    for request in ("skills", f"evaluate {evil}x"):
+        out = tools.make_command_handler(SessionCtx(workspace))(request)
+        assert not any(c in out for c in "\x1b\x07") and "evil" in out
+
+
+def test_a_dependency_without_a_command_shows_what_to_do(monkeypatch):
+    module = types.ModuleType("metaskill.evaluate")
+    module.evaluate_skill = lambda target, **kwargs: {"dependencies": [
+        {"package": "scanner", "install_command": "", "install_url": "",
+         "reason": "run `hermes plugins enable x` in a terminal"}]}
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
+    out = tools.make_command_handler(FakeCtx())("evaluate x")
+    assert "Not installed: scanner (run `hermes plugins enable x` in a terminal)" in out
 
 
 def test_an_unreadable_skill_is_still_found_by_its_folder(hermes_skills):

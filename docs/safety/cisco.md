@@ -69,6 +69,7 @@ True if `skill_scanner` can be imported, checked with `importlib.util.find_spec`
 ### `scan(skill, tier)`
 
 1. **Not installed:** return `not-installed`, no findings, `detail` with the install command.
+   - **Frontmatter that would stall the scanner:** return `error` without running it, when the frontmatter holds more than `MAX_FRONTMATTER_VALUES` (100,000) values once its YAML aliases are expanded, or is nested too deep to count (`frontmatter_too_large` in checks.py). The scanner parses the frontmatter itself, and its time doubles with each level of nested aliases: with 2.2.1, 6 s at 2^24 values and minutes past 2^28, from a frontmatter of a few hundred bytes. Real skills have a few hundred values. Safety is then `partial`, and our own checks report the frontmatter as a HIGH `frontmatter-aliases` finding ([checks.md](checks.md)).
 2. **Static:** run `SkillScanner().scan_skill(skill.path)`.
 3. **Deep:**
    1. Without `ctx.llm` (outside Hermes, as in tests and CI), run the static scan and return `llm-unavailable`, with `detail` saying there is no Hermes LLM access.

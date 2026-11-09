@@ -37,7 +37,7 @@ def require_dependencies(sandbox: DockerSandbox | None = None) -> None: ...  # r
 | Docker installed but not answering or refusing access (`not-running`) | `Docker`, with Docker's own message as `reason`. The user starts Docker, or on Linux gets access to its socket | Yes |
 | Image not pulled (`no-image`) | The image, with its `docker pull` command | Yes |
 | Python too old for tarfile's fixes (`old-python`) | `Python`, by hand (`install_url`). Needs 3.12.11, 3.13.4 or later ([runner.md](runner.md) 2.6). Checked first, so Docker is listed only once this is solved | Yes |
-| Cisco's scanner not installed | `cisco-ai-skill-scanner`, with the `hermes plugins` commands that install it | No: safety is scored by our own checks only, as `partial` |
+| Cisco's scanner not installed | `cisco-ai-skill-scanner`, with the `hermes plugins` commands that install it in `reason`, for the user to run. `install_command` is empty: Hermes asks for consent, and run by the agent without a terminal the commands can leave the plugin disabled | No: safety is scored by our own checks only, as `partial` |
 
 When Docker is not installed, the image is listed too, so the user sees both steps at once instead of one per attempt.
 

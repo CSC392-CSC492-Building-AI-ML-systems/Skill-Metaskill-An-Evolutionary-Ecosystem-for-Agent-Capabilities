@@ -53,6 +53,25 @@ def test_frontmatter_that_is_not_a_mapping_is_an_error(tmp_path, monkeypatch):
         Skill.load(write(tmp_path))
 
 
+class CannotPrint:
+    """A frontmatter value that must never be turned into text."""
+
+    def __str__(self):
+        raise AssertionError("str() was called on a frontmatter value")
+
+    __repr__ = __str__
+
+
+@pytest.mark.parametrize("value, expected", [
+    (CannotPrint(), None), (["a", ["b"]], None), ({"x": 1}, None), (True, None),
+    ("", None), ("  ", None), (2024, "2024"), (1.5, "1.5"),
+])
+def test_only_a_text_or_number_name_is_used(tmp_path, monkeypatch, value, expected):
+    fake = types.SimpleNamespace(safe_load=lambda text: {"name": value})
+    monkeypatch.setitem(sys.modules, "hermes_yaml", fake)
+    assert Skill.load(write(tmp_path)).name == (expected or tmp_path.name)
+
+
 def test_real_hermes_loader_reads_frontmatter(tmp_path):
     pytest.importorskip("hermes_yaml")  # only inside Hermes
     assert load_yaml("name: a\nenabled: yes\n") == {"name": "a", "enabled": True}

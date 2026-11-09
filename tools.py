@@ -100,7 +100,9 @@ def _installed_skills():
             names = {folder.name, relative}
             try:
                 frontmatter, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8-sig"))
-                names.add(str(frontmatter.get("name") or folder.name))
+                name = frontmatter.get("name")
+                if isinstance(name, str) and name:  # str() of a crafted value takes minutes
+                    names.add(name)
             except (OSError, UnicodeDecodeError):
                 pass  # still found by its folder
             skills.append((str(folder), relative, {name.casefold() for name in names}))
@@ -250,7 +252,8 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
         # output_path stays None by default: the config says where reports go.
         kwargs = {"config_path": config_path, "output_path": output_path, "ctx": ctx}
     else:
-        default = os.path.join(cwd, default_output_path(operation, skill_path))
+        # From the resolved path: skill_path can be a list, which has no name to take.
+        default = os.path.join(cwd, default_output_path(operation, target))
         kwargs = {"output_path": output_path or default}
         if operation == "personalize":
             kwargs["config_path"] = config_path
@@ -308,10 +311,16 @@ _CELL = re.compile(r"(?<!\\)\|")  # a column border, not an escaped | in a name
 _ESCAPED = re.compile(r"\\([\\`\[\]<>|])")  # what rank.py escapes for Markdown
 
 
+def _printable(text):
+    """text without control characters other than line breaks, so that nothing read from
+    disk or from a skill can send the terminal an escape sequence."""
+    return "".join(c if c == "\n" or unicodedata.category(c) != "Cc" else " " for c in text)
+
+
 def _plain(text):
     """A Markdown table and the lines after it as plain text: columns lined up and the
     Markdown escapes removed, since Hermes prints a command's output as it is."""
-    text = "".join(c if c == "\n" or unicodedata.category(c) != "Cc" else " " for c in text)
+    text = _printable(text)
     out, rows = [], []
 
     def flush():
@@ -379,7 +388,7 @@ def _summary(result, paths=()):
                      else f"metaskill {result['operation']} finished.")
     lines += [f"Warning: {warning}" for warning in result.get("warnings", [])]
     for missing in result.get("dependencies", []):
-        how = missing["install_command"] or missing["install_url"]
+        how = missing["install_command"] or missing["install_url"] or missing.get("reason")
         lines.append(f"Not installed: {missing['package']}" + (f" ({how})" if how else ""))
     if result.get("unresolved"):
         lines.append(f"Unresolved: {len(result['unresolved'])}")
@@ -398,6 +407,11 @@ def make_command_handler(ctx):
     """
 
     def handle_command(raw_args):
+        # Hermes prints this as ANSI text. Folder names and paths come from disk, and on
+        # Linux or macOS a folder name can hold an escape sequence.
+        return _printable(respond(raw_args))
+
+    def respond(raw_args):
         request = (raw_args or "").strip()
         try:
             cwd = _session_cwd(ctx)

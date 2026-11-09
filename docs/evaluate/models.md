@@ -42,7 +42,7 @@ A skill loaded from disk. Every scoring module takes one.
 | Field | Description |
 |---|---|
 | `path` | The skill directory |
-| `name` | `name` from the frontmatter, otherwise the directory name |
+| `name` | `name` from the frontmatter if it is text or a number (as text), otherwise the directory name. Any other value is ignored: printing a crafted YAML value, such as aliases nested in lists, can take minutes |
 | `body` | The full contents of `SKILL.md`, frontmatter included, so line numbers match the file |
 | `frontmatter` | Parsed YAML frontmatter; `{}` if there is none |
 | `files` | Bundled files relative to `path`, sorted. Excludes `SKILL.md`, anything under a dot-prefixed path, `__pycache__` and `node_modules` |

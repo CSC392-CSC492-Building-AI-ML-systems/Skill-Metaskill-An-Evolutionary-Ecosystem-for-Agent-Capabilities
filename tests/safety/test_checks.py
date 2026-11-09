@@ -373,6 +373,24 @@ def test_untrusted_source_rules(tmp_path, line, rules):
 # --- Failure handling ----------------------------------------------------------------------------------
 
 
+def test_frontmatter_that_stalls_scanners_is_a_high_finding(tmp_path):
+    bomb = ["x", "x"]
+    for _ in range(30):
+        bomb = [bomb, bomb]  # what a YAML loader builds from nested aliases
+    skill = make(tmp_path, {})
+    skill.frontmatter = {"name": "s", "tags": bomb}
+    result = scan(skill)
+    assert result.status is BackendStatus.OK
+    assert found(result) == {("frontmatter-aliases", "SKILL.md:1", HIGH)}
+    assert result.findings[0].category == checks.EXCESS_SCOPE
+
+
+def test_ordinary_frontmatter_is_not_a_finding(tmp_path):
+    skill = make(tmp_path, {})
+    skill.frontmatter = {"name": "s", "tags": ["a"] * 1000, "metadata": {"hermes": {"x": 1}}}
+    assert scan(skill).findings == []
+
+
 def test_unreadable_file_is_noted(tmp_path):
     skill = make(tmp_path, {})
     (tmp_path / "scripts").mkdir()

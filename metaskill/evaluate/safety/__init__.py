@@ -89,7 +89,10 @@ def missing_dependencies() -> list[Dependency]:
     """
     if CiscoBackend().available():
         return []
-    return [Dependency(CiscoBackend.name, PACKAGE, INSTALL_COMMAND)]
+    # No install_command: Hermes asks the user to consent, so the commands need the user's
+    # terminal. Run by the agent without one, they can leave the plugin disabled.
+    return [Dependency(CiscoBackend.name, PACKAGE, "",
+                       reason=f"run `{INSTALL_COMMAND}` in a terminal, then restart Hermes")]
 
 
 def versions() -> dict[str, str]:

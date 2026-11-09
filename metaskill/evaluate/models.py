@@ -153,6 +153,13 @@ class Skill:
                 raise ValueError(
                     f"{path / 'SKILL.md'}: frontmatter is not a mapping")
             frontmatter = parsed
+        # Only text, or a number as text. The name is printed and sorted as text, and
+        # str() of a crafted YAML value (aliases nested in lists) takes minutes.
+        name = frontmatter.get("name")
+        if isinstance(name, (int, float)) and not isinstance(name, bool):
+            name = str(name)
+        if not isinstance(name, str) or not name.strip():
+            name = path.name
         skip = {"__pycache__", "node_modules"}
         files = sorted(
             f.relative_to(path)
@@ -163,7 +170,7 @@ class Skill:
         )
         return Skill(
             path=path,
-            name=frontmatter.get("name", path.name),
+            name=name,
             body=body,  # full file, so line numbers match SKILL.md
             frontmatter=frontmatter,
             files=files,
