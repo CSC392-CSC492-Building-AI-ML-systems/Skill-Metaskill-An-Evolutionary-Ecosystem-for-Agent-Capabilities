@@ -297,7 +297,7 @@ def installed(monkeypatch, workspace):
         folder.mkdir(parents=True)
         folders[name] = str(folder)
         names = {name, f"{category}/{name}", also}
-        folders.setdefault("all", []).append((str(folder), names))
+        folders.setdefault("all", []).append((str(folder), f"{category}/{name}", names))
     monkeypatch.setattr(tools, "_installed_skills", lambda: folders["all"])
     return folders
 
@@ -324,8 +324,7 @@ def test_a_path_wins_over_a_name(fake_evaluate, installed, workspace):
 def test_a_name_with_several_skills_lists_them_and_runs_nothing(fake_evaluate, installed):
     ctx = FakeCtx()
     out = tools.make_command_handler(ctx)("evaluate ship")
-    assert "ship matches 2 skills" in out
-    assert installed["deploy"] in out and installed["crawl"] in out
+    assert "ship matches 2 skills: devops/deploy, web/crawl" in out
     assert tools.SKILL_HELP in out
     assert fake_evaluate == {} and ctx.injected == []
 
@@ -368,14 +367,15 @@ def test_installed_skills_go_by_folder_category_and_frontmatter_name(hermes_skil
     folder = hermes_skills / "devops" / "deploy"
     folder.mkdir(parents=True)
     (folder / "SKILL.md").write_text("Ship-It", encoding="utf-8")
-    assert tools._installed_skills() == [(str(folder), {"deploy", "devops/deploy", "ship-it"})]
+    assert tools._installed_skills() == [
+        (str(folder), "devops/deploy", {"deploy", "devops/deploy", "ship-it"})]
 
 
 def test_an_unreadable_skill_is_still_found_by_its_folder(hermes_skills):
     folder = hermes_skills / "devops" / "deploy"
     folder.mkdir(parents=True)
     (folder / "SKILL.md").write_bytes(b"\xff\xfe not utf-8")
-    assert tools._installed_skills() == [(str(folder), {"deploy", "devops/deploy"})]
+    assert tools._installed_skills() == [(str(folder), "devops/deploy", {"deploy", "devops/deploy"})]
 
 
 def test_there_are_no_names_outside_hermes(monkeypatch):
@@ -398,12 +398,66 @@ def test_command_prints_a_failure(monkeypatch):
 def test_command_prints_the_table_and_what_is_missing(monkeypatch):
     module = types.ModuleType("metaskill.evaluate")
     module.evaluate_skill = lambda target, **kwargs: {
-        "table": "| Rank |", "warnings": ["Partial result"], "dependencies": [
+        "table": "| Rank |", "warnings": ["x could not be evaluated"],
+        "partial": ["Partial result"], "dependencies": [
             {"package": "scanner", "install_command": "pip install scanner", "install_url": ""}]}
     monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
     out = tools.make_command_handler(FakeCtx())("evaluate x").split("\n")
-    assert out == ["| Rank |", "Warning: Partial result",
+    assert out == [f"Scanned x in {os.getcwd()}", "Rank", "----",
+                   "Warning: x could not be evaluated",
                    "Not installed: scanner (pip install scanner)"]
+
+
+TABLE = (
+    "| Rank | Skill | Overall | Safety |\n"
+    "|---|---|---|---|\n"
+    "| - | claude-code | - | 0.30 |\n"
+    "| 1 | a\\|b \\<x\\> | 0.90 | 1.00 |\n"
+    "\n"
+    "Notes:\n"
+    "- No skill is ranked: no score for clarity.\n"
+)
+
+
+def test_the_table_is_printed_as_lined_up_columns():
+    assert tools._plain(TABLE).split("\n") == [
+        "Rank  Skill        Overall  Safety",
+        "----  -----------  -------  ------",
+        "-     claude-code  -        0.30",
+        "1     a|b <x>      0.90     1.00",
+        "",
+        "Notes:",
+        "- No skill is ranked: no score for clarity.",
+        "",
+    ]
+
+
+def test_control_characters_in_the_table_are_not_printed():
+    assert "\x1b" not in tools._plain("| a\x1b[31m |\n|---|\n| b |")
+
+
+def test_files_written_to_one_folder_are_one_line():
+    artifacts = [os.path.join("out", "run", "ranked-evaluation.json"),
+                 os.path.join("out", "run", "ranked-evaluation.md")]
+    assert tools._saved(artifacts) == [
+        f"Saved ranked-evaluation.json, ranked-evaluation.md to {os.path.join('out', 'run')}"]
+
+
+def test_the_summary_says_which_skills_ran_and_where(workspace):
+    assert tools._scanned([str(workspace / "x")]) == f"Scanned x in {workspace}"
+    two_folders = [str(workspace / "x"), str(workspace / "y"), str(workspace / "skills" / "gcp")]
+    assert tools._scanned(two_folders).split("\n") == [
+        f"Scanned x, y in {workspace}", f"Scanned gcp in {workspace / 'skills'}"]
+    many = [str(workspace / f"c{i}" / "s") for i in range(4)]
+    assert tools._scanned(many) == f"Scanned 4 skills in {workspace}"
+
+
+def test_a_failure_does_not_say_what_was_scanned(monkeypatch):
+    module = types.ModuleType("metaskill.evaluate")
+    module.evaluate_skill = lambda target, **kwargs: {"status": "error", "error": "bad config"}
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
+    out = tools.make_command_handler(FakeCtx())("evaluate x")
+    assert out == "metaskill evaluate failed: bad config"
 
 
 def test_command_does_not_leak_or_raise_on_failure(monkeypatch):
@@ -479,7 +533,9 @@ def test_reports_land_in_the_session_folder(workspace, gateway_cwd):
     (workspace / "x" / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
     out = tools.make_command_handler(SessionCtx(workspace))("evaluate x")
     reports = list((workspace / "evaluation-reports").rglob("ranked-evaluation.json"))
-    assert len(reports) == 1 and str(reports[0]) in out
+    assert len(reports) == 1
+    assert f"Saved ranked-evaluation.json, ranked-evaluation.md to {reports[0].parent}" in out
+    assert "|" not in out  # the table is printed as columns
     assert list(gateway_cwd.iterdir()) == []
 
 
@@ -534,3 +590,78 @@ def test_register_wires_tool_and_command():
     assert name == "metaskill" and hint
     handler("compare my-skill")
     assert ctx.injected == ["Use the metaskill tool to: compare my-skill"]
+
+
+# --- /metaskill skills, suggestions and the folder -------------------------------------
+
+
+def skill_at(root, *parts):
+    folder = root.joinpath(*parts)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+    return folder
+
+
+def test_local_skills_are_found_below_the_folder_but_not_inside_a_skill(workspace):
+    skill_at(workspace, "fixtures", "clean")
+    skill_at(workspace, "fixtures", "clean", "examples", "nested")  # part of clean
+    skill_at(workspace, ".hidden", "secret")
+    skill_at(workspace, "node_modules", "pkg")
+    skill_at(workspace, "a", "b", "c", "d", "e", "too-deep")
+    assert tools._local_skills(str(workspace)) == (["fixtures/clean"], False)
+
+
+def test_local_search_stops_in_a_large_folder(workspace, monkeypatch):
+    monkeypatch.setattr(tools, "_SEARCH_LIMIT", 3)
+    for name in "abcdef":
+        skill_at(workspace, "many", name)
+    found, stopped = tools._local_skills(str(workspace))
+    assert stopped and len(found) < 6
+
+
+def test_skills_lists_the_folder_and_what_is_under_it_and_installed(workspace, installed):
+    skill_at(workspace, "fixtures", "clean")
+    skill_at(workspace, "fixtures", "destructive")
+    out = tools.make_command_handler(SessionCtx(workspace))("skills").split("\n")
+    assert out[0] == f"Folder: {workspace} (relative paths start here)"
+    assert "Skills under this folder (2):" in out
+    assert "  fixtures: clean, destructive" in out
+    assert "Installed skills (2):" in out
+    assert "  devops: deploy" in out and "  web: crawl" in out
+
+
+def test_skills_narrows_the_list(workspace, installed):
+    skill_at(workspace, "fixtures", "clean")
+    out = tools.make_command_handler(SessionCtx(workspace))("skills dep")
+    assert "devops: deploy" in out and "crawl" not in out and "clean" not in out
+    nothing = tools.make_command_handler(SessionCtx(workspace))("skills zzz")
+    assert "No skills match zzz." in nothing
+
+
+def test_a_long_list_is_cut(workspace, monkeypatch):
+    monkeypatch.setattr(tools, "_installed_skills", lambda: [])
+    for i in range(tools._LISTED_GROUPS + 2):
+        skill_at(workspace, f"group{i:02}", "s")
+    out = tools.make_command_handler(SessionCtx(workspace))("skills")
+    assert "  and 2 more folders" in out
+
+
+def test_a_missing_name_gets_suggestions(fake_evaluate, installed, workspace):
+    skill_at(workspace, "fixtures", "clean")
+    ctx = SessionCtx(workspace)
+    out = tools.make_command_handler(ctx)("evaluate deplyo")
+    assert "No skill found for deplyo. Did you mean devops/deploy?" in out
+    assert "fixtures/clean" in tools.make_command_handler(ctx)("evaluate claen")
+    assert fake_evaluate == {}
+
+
+def test_suggestions_take_a_part_of_the_name():
+    installed = [("f", "autonomous-ai-agents/claude-code", {"claude-code"})]
+    assert tools._suggestions("claude", installed, []) == ["autonomous-ai-agents/claude-code"]
+    assert tools._suggestions("zzz", installed, []) == []
+
+
+@pytest.mark.parametrize("request_text", ["", "evaluate", "evaluate nothing-here"])
+def test_help_says_which_folder_paths_start_from(workspace, installed, request_text):
+    out = tools.make_command_handler(SessionCtx(workspace))(request_text)
+    assert f"Folder: {workspace} (relative paths start here)" in out

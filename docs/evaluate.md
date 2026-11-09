@@ -364,7 +364,7 @@ Dependencies:
 
 ## 7. Tool surface
 
-Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g. `/metaskill evaluate gcp-file-transfer` or "rank my skills". The command takes each skill as a path, an installed skill's name, or its `category/name`, runs the operation itself and prints the result. A path that exists wins over a name. A name it cannot find, or one that matches several skills, runs nothing: the command says so and how to name the skill. A request that is not an operation goes to the agent, which resolves names to paths and calls the tool with `operation` `evaluate` or `rank`; Hermes only allows that with `plugins.entries.metaskill.allow_gateway_injection`. Both are routed to `evaluate_skill` / `rank_skills` in `__init__.py`.
+Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g. `/metaskill evaluate gcp-file-transfer` or "rank my skills". The command takes each skill as a path, an installed skill's name, or its `category/name`, runs the operation itself and prints the result. A path that exists wins over a name. A name it cannot find, or one that matches several skills, runs nothing: the command says so, suggests close names, and shows the folder relative paths start from. `/metaskill skills [text]` lists the skills under that folder and the installed ones. The command prints the table as lined-up columns and one line per folder written to. A request that is not an operation goes to the agent, which resolves names to paths and calls the tool with `operation` `evaluate` or `rank`; Hermes only allows that with `plugins.entries.metaskill.allow_gateway_injection`. Both are routed to `evaluate_skill` / `rank_skills` in `__init__.py`.
 
 | Argument | Description |
 |---|---|
@@ -376,7 +376,7 @@ A relative path, `EvaluationConfig.output_dir` included, means the folder of the
 
 If a request does not name the skills, such as "rank my skills", the agent asks the user which skills to rank: all installed skills, or a set they list. The answer becomes the skill list in section 2.
 
-The tool's response goes into the agent's context, so it holds the table with its notes and recommendation, the report paths, counts, warnings and any missing `dependencies`. Quotes, finding text and local paths stay in the reports. A skill that cannot be loaded is listed in `warnings`, and the others go on.
+The tool's response goes into the agent's context, so it holds the table with its notes and recommendation, the report paths, counts, warnings, a `partial` notice when a skill is not ranked, and any missing `dependencies`. Quotes, finding text and local paths stay in the reports. A skill that cannot be loaded is listed in `warnings`, and the others go on.
 
 **Current state.** Each dimension's module is listed in `SCORERS` in `__init__.py`. A module that does not exist yet gives a `skipped` dimension with a `null` score; one that exists but fails to import or raises gives `error`. Only Safety is built, so every skill is unranked, no skill is recommended, and `warnings` says the result is partial (section 5.2). No built dimension runs tasks, so `lift` is `null` and Docker is not asked for ([evaluate/dependencies.md](evaluate/dependencies.md)).
 

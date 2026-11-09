@@ -34,9 +34,12 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not 
 /metaskill personalize <skill> --config <file>
 /metaskill evaluate <skill>
 /metaskill rank <skill>, <skill>
+/metaskill skills [text]
 ```
 
 `<skill>` is an installed skill's name (`claude-code`), its category and name (`autonomous-ai-agents/claude-code`), or a path to the skill's folder, relative to your session's folder or absolute. A path that exists wins over a name. If a name matches several skills, the command lists them and runs nothing, so you can give the one you mean. `hermes skills list` shows what is installed.
+
+`/metaskill skills` shows the folder relative paths start from, which is your session's, and lists the skills under it and the installed ones; `/metaskill skills <text>` narrows the list. A name that is not found gets suggestions. Hermes does not autocomplete a plugin command's arguments, so this listing stands in for that.
 
 The command runs these itself and prints the result when it finishes. Anything else after `/metaskill` goes to the agent, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply.
 

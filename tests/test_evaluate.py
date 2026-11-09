@@ -90,7 +90,7 @@ def test_a_skill_with_unbuilt_dimensions_is_listed_as_unranked(tmp_path, out):
     assert result["counts"] == {"skills": 1, "ranked": 0, "unranked": 1}
     assert "| - | a | - |" in result["table"]
     assert "no skill is recommended" in result["table"]
-    assert any(w.startswith("Partial result") for w in result["warnings"])
+    assert result["partial"][0].startswith("Partial result") and result["warnings"] == []
 
 
 def test_a_new_dimension_module_is_picked_up(tmp_path, out, scorers):

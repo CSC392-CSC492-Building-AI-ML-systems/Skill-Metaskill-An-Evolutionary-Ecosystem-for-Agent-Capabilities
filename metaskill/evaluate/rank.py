@@ -175,13 +175,17 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
     # scanned in full (evaluate.md 5.2). When every skill is partial, say so once.
     statuses = {_safety_status(r) for r in results} & {Status.OK, Status.PARTIAL}
     mixed = len(statuses) == 2
+    # When no skill is ranked and all for the same reason, it is said once, not per skill.
+    reasons = {_unranked_note(e) for e in unranked}
+    shared = not ranked and len(unranked) > 1 and len(reasons) == 1
     for entry in ranked + unranked:
-        entry.notes = _notes(entry, mixed)
+        entry.notes = _notes(entry, mixed, say_unranked=not shared)
     notes = []
     if statuses == {Status.PARTIAL}:
-        notes.append("Safety is partial for every skill with a safety score (e.g. a "
-                     "scanner is not installed or a deep scan fell back to static): their "
-                     "safety scores compare with each other, not with full scans.")
+        notes.append("Safety is partial for every skill with a safety score: their safety "
+                     "scores compare with each other, not with full scans.")
+    if shared:
+        notes.append("No skill is ranked: " + reasons.pop().removeprefix("Not ranked: "))
     return Ranking(ranked=ranked, unranked=unranked, notes=notes,
                    recommendation=_recommend(ranked, unranked, mixed))
 
@@ -204,10 +208,10 @@ def _desc(value: float | None) -> tuple[int, float]:
     return (0, -round(value, _DECIMALS))
 
 
-def _notes(entry: RankedSkill, mixed: bool) -> list[str]:
+def _notes(entry: RankedSkill, mixed: bool, say_unranked: bool = True) -> list[str]:
     result = entry.result
     notes: list[str] = []
-    if not entry.ranked:
+    if not entry.ranked and say_unranked:
         notes.append(_unranked_note(entry))
     if mixed and _safety_status(result) is Status.PARTIAL:
         detail = clean(result.dimensions[Dimension.SAFETY].detail, MAX_TEXT_CHARS)
@@ -232,18 +236,23 @@ def _critical(result: SkillResult) -> list[Finding]:
 
 
 def _unranked_note(entry: RankedSkill) -> str:
-    """Why a skill is not ranked: its missing dimensions, with status and detail."""
-    why = ", ".join(_why(entry.result, d) for d in entry.missing)
+    """Why a skill is not ranked: its missing dimensions, those with the same status and
+    detail named together, e.g. `quality, clarity (skipped: not built yet)`."""
+    groups: dict[str, list[str]] = {}
+    for dimension in entry.missing:
+        groups.setdefault(_why(entry.result, dimension), []).append(dimension.value)
+    why = "; ".join(", ".join(names) + (f" ({reason})" if reason else "")
+                    for reason, names in groups.items())
     return f"Not ranked: no score for {why}."
 
 
 def _why(result: SkillResult, dimension: Dimension) -> str:
-    """A missing dimension, with whatever status and detail the result has for it."""
+    """The status and detail the result has for a missing dimension, or "" if none."""
     found = result.dimensions.get(dimension)
     if found is None:
-        return dimension.value
+        return ""
     detail = clean(found.detail, MAX_TEXT_CHARS)  # may leave nothing
-    return f"{dimension.value} ({found.status}{f': {detail}' if detail else ''})"
+    return f"{found.status}{f': {detail}' if detail else ''}"
 
 
 def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
@@ -269,7 +278,7 @@ def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
         return text + _lift_warning(first, alone)
     if unranked:  # no winner from an incomplete assessment (evaluate.md 2.1)
         return ("No complete overall comparison was available, so no skill is "
-                "recommended. The notes say which dimensions each skill is missing.")
+                "recommended.")
     return "No skills to rank."
 
 

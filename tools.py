@@ -10,22 +10,22 @@ Plugins run in the Hermes gateway, whose own folder is the Hermes install, so a 
 path means the folder of the user's session, not os.getcwd().
 """
 
+import difflib
 import importlib
 import json
 import os
 import re
+import unicodedata
 
 DEFAULT_OUTPUT_DIR = "metaskill-output"
 
 SKILL_HELP = (
-    "Give a skill by its name, its category/name or a path: /metaskill evaluate claude-code, "
-    "/metaskill evaluate autonomous-ai-agents/claude-code or /metaskill evaluate ./my-skill. "
-    "rank takes a comma separated list. `hermes skills list` shows the installed skills."
+    "A skill is a name (claude-code), a category/name (autonomous-ai-agents/claude-code) "
+    "or a path. /metaskill skills [text] lists the ones you can use."
 )
 USAGE = (
-    "usage: /metaskill generalize <skill> | "
-    "/metaskill personalize <skill> --config <file> | "
-    f"/metaskill evaluate <skill> | /metaskill rank <skills>\n{SKILL_HELP}"
+    "usage: /metaskill evaluate <skill> | rank <skill>, <skill> | generalize <skill> | "
+    f"personalize <skill> --config <file> | skills [text]\n{SKILL_HELP}"
 )
 
 # operation -> (module, entry point)
@@ -81,8 +81,9 @@ def _skill_names(operation, skill_path, cwd=""):
 
 
 def _installed_skills():
-    """(folder, the lowercase names it goes by) of each skill Hermes has installed: its
-    folder name, category/name and frontmatter name. Empty outside Hermes."""
+    """(folder, category/name, the lowercase names it goes by) of each skill Hermes has
+    installed. It goes by its folder name, category/name and frontmatter name. Empty
+    outside Hermes."""
     try:
         from agent.skill_utils import (
             get_all_skills_dirs,
@@ -95,20 +96,61 @@ def _installed_skills():
     for root in get_all_skills_dirs():
         for skill_md in iter_skill_index_files(root, "SKILL.md"):
             folder = skill_md.parent
-            names = {folder.name, folder.relative_to(root).as_posix()}
+            relative = folder.relative_to(root).as_posix()
+            names = {folder.name, relative}
             try:
                 frontmatter, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8-sig"))
                 names.add(str(frontmatter.get("name") or folder.name))
             except (OSError, UnicodeDecodeError):
                 pass  # still found by its folder
-            skills.append((str(folder), {name.casefold() for name in names}))
+            skills.append((str(folder), relative, {name.casefold() for name in names}))
     return skills
 
 
+# Folders not searched for skills, besides hidden ones such as .git and .venv.
+_NOT_SEARCHED = {"node_modules", "__pycache__", "venv", "site-packages"}
+_SEARCH_DEPTH = 5  # folders below the session folder
+_SEARCH_LIMIT = 5000  # folders looked at, so a session in a large folder stays quick
+_LISTED_GROUPS = 12  # lines of skills per section in /metaskill skills
+
+
+def _local_skills(cwd):
+    """The skill folders under cwd, relative and with /, and whether the search stopped
+    at _SEARCH_LIMIT folders."""
+    found, seen = [], 0
+    for folder, subfolders, files in os.walk(cwd):
+        seen += 1
+        relative = os.path.relpath(folder, cwd)
+        if "SKILL.md" in files:
+            found.append(relative.replace(os.sep, "/"))
+            subfolders[:] = []  # a skill's own folders are not skills
+        elif relative != "." and relative.count(os.sep) + 1 >= _SEARCH_DEPTH:
+            subfolders[:] = []
+        else:
+            subfolders[:] = sorted(name for name in subfolders
+                                   if not name.startswith(".") and name not in _NOT_SEARCHED)
+        if seen >= _SEARCH_LIMIT:
+            return sorted(found), True
+    return sorted(found), False
+
+
+def _suggestions(name, installed, local):
+    """Up to three skills that a name which was not found may have meant."""
+    wanted = name.replace("\\", "/").strip("/").casefold()
+    options = sorted({relative for _, relative, _ in installed} | set(local))
+    picks = [option for option in options if wanted and wanted in option.casefold()]
+    by_name = {}
+    for option in options:
+        by_name.setdefault(option.rpartition("/")[2].casefold(), []).append(option)
+    for close in difflib.get_close_matches(wanted.rpartition("/")[2], list(by_name), n=3):
+        picks += by_name[close]
+    return list(dict.fromkeys(picks))[:3]
+
+
 def _find_skills(operation, skills, cwd):
-    """The folders of the skills in a command, and what could not be found. A path that
-    exists wins over a name."""
-    paths, problems, installed = [], [], None
+    """The folders of the skills in a command, and what could not be found, with
+    suggestions. A path that exists wins over a name."""
+    paths, problems, installed, local = [], [], None, None
     for name in _skill_names(operation, skills, cwd):
         path = os.path.join(cwd, name)
         if os.path.exists(path):
@@ -116,14 +158,58 @@ def _find_skills(operation, skills, cwd):
             continue
         installed = _installed_skills() if installed is None else installed
         wanted = name.replace("\\", "/").strip("/").casefold()
-        found = [folder for folder, names in installed if wanted in names]
+        found = [(folder, relative) for folder, relative, names in installed if wanted in names]
         if len(found) == 1:
-            paths.append(found[0])
+            paths.append(found[0][0])
         elif found:
-            problems.append(f"{name} matches {len(found)} skills: {', '.join(found)}")
+            shown = [relative for _, relative in found]
+            if len(set(shown)) < len(shown):  # the same category/name in two skill folders
+                shown = [folder for folder, _ in found]
+            problems.append(f"{name} matches {len(found)} skills: {', '.join(shown)}")
         else:
-            problems.append(f"No skill found for {name}.")
+            local = _local_skills(cwd or os.getcwd())[0] if local is None else local
+            close = _suggestions(name, installed, local)
+            problems.append(f"No skill found for {name}."
+                            + (f" Did you mean {', '.join(close)}?" if close else ""))
     return paths, problems
+
+
+def _where(cwd):
+    """Which folder relative paths start from: the session's, not Hermes' own."""
+    return f"Folder: {cwd} (relative paths start here)"
+
+
+def _grouped(paths):
+    """`  category: name, name` lines for skill paths, at most _LISTED_GROUPS of them."""
+    groups = {}
+    for path in paths:
+        parent, _, name = path.rpartition("/")
+        groups.setdefault(parent or ".", []).append("(this folder)" if path == "." else name)
+    lines = [f"  {parent}: {', '.join(names)}" for parent, names in groups.items()]
+    if len(lines) > _LISTED_GROUPS:
+        lines = lines[:_LISTED_GROUPS] + [f"  and {len(lines) - _LISTED_GROUPS} more folders"]
+    return lines
+
+
+def _list_skills(text, cwd):
+    """`/metaskill skills [text]`: where paths start, and the skills under that folder and
+    installed in Hermes whose path or name contains text."""
+    wanted = text.strip().casefold()
+    local, stopped = _local_skills(cwd)
+    local = [path for path in local if wanted in path.casefold()]
+    installed = sorted(relative for _, relative, names in _installed_skills()
+                       if wanted in relative.casefold() or any(wanted in n for n in names))
+    lines = [_where(cwd)]
+    if local:
+        lines += [f"Skills under this folder ({len(local)}):", *_grouped(local)]
+    if stopped:
+        lines.append(f"  (only the first {_SEARCH_LIMIT} folders were searched)")
+    if installed:
+        lines += [f"Installed skills ({len(installed)}):", *_grouped(installed)]
+    if not local and not installed:
+        lines.append(f"No skills match {text.strip()}." if wanted else "No skills found.")
+    lines.append("Run one with /metaskill evaluate <name, category/name or path>.")
+    return "\n".join(lines)
 
 
 def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
@@ -218,46 +304,120 @@ def _parse_command(request):
     return operation, skills.strip("\"'"), config_path and config_path.strip("\"'")
 
 
-def _summary(result):
-    """A response as text for the user. Like the response, it holds no detected values."""
+_CELL = re.compile(r"(?<!\\)\|")  # a column border, not an escaped | in a name
+_ESCAPED = re.compile(r"\\([\\`\[\]<>|])")  # what rank.py escapes for Markdown
+
+
+def _plain(text):
+    """A Markdown table and the lines after it as plain text: columns lined up and the
+    Markdown escapes removed, since Hermes prints a command's output as it is."""
+    text = "".join(c if c == "\n" or unicodedata.category(c) != "Cc" else " " for c in text)
+    out, rows = [], []
+
+    def flush():
+        if not rows:
+            return
+        width = max(len(row) for row in rows)
+        rows[:] = [row + [""] * (width - len(row)) for row in rows]
+        sizes = [max(len(row[i]) for row in rows) for i in range(width)]
+
+        def line(cells):
+            return "  ".join(cell.ljust(size) for cell, size in zip(cells, sizes)).rstrip()
+
+        out.extend([line(rows[0]), "  ".join("-" * size for size in sizes),
+                    *(line(row) for row in rows[1:])])
+        rows.clear()
+
+    for row in text.split("\n"):
+        if row.startswith("|"):
+            cells = [_ESCAPED.sub(r"\1", cell.strip()) for cell in _CELL.split(row.strip())[1:-1]]
+            if not (cells and all(cell and set(cell) <= {"-", ":"} for cell in cells)):
+                rows.append(cells)  # the separator row is left out
+        else:
+            flush()
+            out.append(_ESCAPED.sub(r"\1", row))
+    flush()
+    return "\n".join(out)
+
+
+def _by_folder(paths):
+    """{folder: [names in it]}, in order."""
+    by_folder = {}
+    for path in paths:
+        folder, name = os.path.split(path)
+        by_folder.setdefault(folder, []).append(name)
+    return by_folder
+
+
+def _scanned(paths):
+    """Which skills ran and where, so the user sees where a name or relative path led:
+    a line per folder, or one line when they come from more than three folders."""
+    by_folder = _by_folder([os.path.abspath(path) for path in paths])
+    if len(by_folder) <= 3:
+        return "\n".join(f"Scanned {', '.join(names)} in {folder}"
+                         for folder, names in by_folder.items())
+    try:
+        return f"Scanned {len(paths)} skills in {os.path.commonpath(list(by_folder))}"
+    except ValueError:  # on different drives
+        return f"Scanned {len(paths)} skills"
+
+
+def _saved(artifacts):
+    """One line per folder written to, rather than one per file."""
+    return [f"Saved {', '.join(names)} to {folder or '.'}"
+            for folder, names in _by_folder(artifacts).items()]
+
+
+def _summary(result, paths=()):
+    """A response as text for the user. Like the response, it holds no detected values.
+    paths are the skills that ran."""
     if result["status"] == "error":
         lines = [f"metaskill {result['operation']} failed: {result['error']}"]
     else:
-        lines = [result.get("table") or f"metaskill {result['operation']} finished."]
+        lines = [_scanned(paths)] if paths else []
+        lines.append(_plain(result["table"]) if result.get("table")
+                     else f"metaskill {result['operation']} finished.")
     lines += [f"Warning: {warning}" for warning in result.get("warnings", [])]
     for missing in result.get("dependencies", []):
         how = missing["install_command"] or missing["install_url"]
         lines.append(f"Not installed: {missing['package']}" + (f" ({how})" if how else ""))
     if result.get("unresolved"):
         lines.append(f"Unresolved: {len(result['unresolved'])}")
-    lines += [f"Wrote: {path}" for path in result.get("artifacts", [])]
+    lines += _saved(result.get("artifacts", []))
     return "\n".join(lines)
 
 
 def make_command_handler(ctx):
     """Build the /metaskill handler.
 
-    An operation runs here and prints its result, or says how to name the skill. Anything
-    else goes to the agent as a user message. Hermes only allows that for a plugin with
-    allow_gateway_injection, and a classic CLI session does not show the agent's reply.
-    Every path returns text: Hermes prints nothing for a handler that returns None.
+    An operation runs here and prints its result, or says how to name the skill.
+    `skills` lists the skills it can find. Anything else goes to the agent as a user
+    message. Hermes only allows that for a plugin with allow_gateway_injection, and a
+    classic CLI session does not show the agent's reply. Every path returns text: Hermes
+    prints nothing for a handler that returns None.
     """
 
     def handle_command(raw_args):
         request = (raw_args or "").strip()
-        if not request:
-            return USAGE
         try:
+            cwd = _session_cwd(ctx)
+            where = _where(cwd or os.getcwd())
+            if not request:
+                return f"{USAGE}\n{where}"
+            command, _, rest = request.partition(" ")
+            if command == "skills":
+                return _list_skills(rest, cwd or os.getcwd())
             if request in _ENTRY_POINTS:
-                return f"metaskill {request}: which skill?\n{SKILL_HELP}"
+                return f"metaskill {request}: which skill?\n{SKILL_HELP}\n{where}"
             parsed = _parse_command(request)
             if parsed:
                 operation, skills, config_path = parsed
-                paths, problems = _find_skills(operation, skills, _session_cwd(ctx))
+                paths, problems = _find_skills(operation, skills, cwd)
                 if problems or not paths:
-                    return "\n".join([*problems, SKILL_HELP])
+                    return "\n".join([*problems, SKILL_HELP, where])
                 target = paths if operation == "rank" else paths[0]
-                return _summary(run(operation, target, config_path=config_path, ctx=ctx))
+                result = run(operation, target, config_path=config_path, ctx=ctx)
+                return _summary(result, paths)
             if not ctx.inject_message(f"Use the metaskill tool to: {request}"):
                 return ("metaskill: could not send the request to the agent. Set "
                         "plugins.entries.metaskill.allow_gateway_injection: true in "

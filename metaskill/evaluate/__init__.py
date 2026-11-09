@@ -108,7 +108,8 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
         "table": table(ranking),
         "counts": {"skills": len(results), "ranked": len(ranking.ranked),
                    "unranked": len(ranking.unranked)},
-        "warnings": warnings + _partial(ranking),
+        "warnings": warnings,
+        "partial": _partial(ranking),
         "dependencies": [asdict(d) for d in missing],
     }
 

@@ -25,6 +25,6 @@ def register(ctx):
     ctx.register_command(
         "metaskill",
         handler=tools.make_command_handler(ctx),
-        description="Generalize, personalize, evaluate or rank skills",
-        args_hint="generalize|personalize|evaluate|rank <skill> [--config FILE]",
+        description="Evaluate, rank, generalize or personalize skills",
+        args_hint="evaluate|rank|generalize|personalize <skill> [--config FILE] | skills [text]",
     )

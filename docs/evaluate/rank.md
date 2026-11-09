@@ -59,7 +59,7 @@ The order does not depend on the order of the input, and the same input always g
 
 Per skill:
 
-- **Not ranked.** Which dimensions are missing, with their status and detail when the result has them (`clarity (skipped: no API key)`).
+- **Not ranked.** Which dimensions are missing, with their status and detail when the result has them (`clarity (skipped: no API key)`). Dimensions with the same status and detail are named together (`quality, clarity (skipped: not built yet)`). When no skill is ranked and every one is missing the same, one `Ranking.notes` entry says so instead (`No skill is ranked: no score for ...`).
 - **Partial safety.** The safety status is `partial` (e.g. a `deep` scan that fell back to `static`, or a scanner that is not installed) while another skill in the ranking has `ok`. Only then is its safety score not comparable with the others. The skill is still ranked.
 - **CRITICAL safety findings.** How many, and where. The skill stays in the ranking (evaluate.md 5.2).
 
@@ -69,7 +69,7 @@ For the ranking as a whole (`Ranking.notes`): when every skill with a safety sco
 
 - At least one ranked skill: the top one, `Use [name]: highest overall (0.88) of 3 ranked skill(s).` If it has a CRITICAL safety finding, or a partial-safety flag (3), this adds `Check its safety notes before using it.`; otherwise, if its safety score is below 0.5 (`LOW_SAFETY`), it says so.
 - Several skills tied for first: all of them are named and none is picked, `Tied for highest overall (0.88) of 3 ranked skill(s): a, b. Nothing scored separates them.` The safety check is added if any of them is flagged, and the low-safety and lift warnings still apply.
-- No ranked skill: no skill is named, since no complete overall comparison was available: `No complete overall comparison was available, so no skill is recommended.`, pointing to the notes for what is missing.
+- No ranked skill: no skill is named, since no complete overall comparison was available: `No complete overall comparison was available, so no skill is recommended.` The notes say what is missing.
 - No skills: `No skills to rank.`
 - A recommended skill also gets a warning if its `lift` is 0 or less: on the tasks it does no better than having no skill (evaluate.md 4.1). A `lift` of `None`, when no tasks ran, gets no warning.
 
