@@ -347,3 +347,20 @@ def test_task_none_is_threaded_to_cisco_and_the_judge():
         EvaluationConfig(safety_tier=SafetyTier.DEEP), object(), task=None)
     assert cisco.task is None
     assert review_backend.judge.task is None
+
+
+def test_backends_from_context_drops_the_task_on_old_hermes():
+    config = EvaluationConfig(safety_tier=SafetyTier.DEEP)
+
+    class NewCtx:  # has auxiliary tasks -> the registered task is used
+        llm = object()
+        def register_auxiliary_task(self, *a):
+            ...
+
+    class OldCtx:  # no auxiliary tasks -> no task reaches ctx.llm
+        llm = object()
+
+    cisco_new, _c, review_new = safety.backends_from_context(NewCtx(), config)
+    cisco_old, _c2, review_old = safety.backends_from_context(OldCtx(), config)
+    assert (cisco_new.task, review_new.judge.task) == ("metaskill_judge", "metaskill_judge")
+    assert (cisco_old.task, review_old.judge.task) == (None, None)

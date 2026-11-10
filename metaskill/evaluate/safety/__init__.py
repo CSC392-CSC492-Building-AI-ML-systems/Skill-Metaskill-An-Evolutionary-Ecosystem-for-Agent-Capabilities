@@ -8,6 +8,7 @@ every backend.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from metaskill.evaluate.judge import JUDGE_TASK, Judge
 from metaskill.evaluate.models import (
@@ -95,6 +96,17 @@ def default_backends(config: EvaluationConfig, llm: PluginLlm | None = None,
                       retries=config.judge_retries, max_chars=config.judge_max_chars) if llm else None
         backends.append(ReviewBackend(judge))
     return backends
+
+
+def backends_from_context(ctx: Any, config: EvaluationConfig) -> list[SafetyBackend]:
+    """`default_backends` wired from a Hermes plugin context, so a caller does not have to
+    get the task right by hand. Takes `ctx.llm`, and the auxiliary task only where Hermes
+    supports it (`register_auxiliary_task`) -- matching `Judge.from_context` -- so no
+    unregistered task ever reaches `ctx.llm`. This is the constructor callers should use.
+    """
+    llm = getattr(ctx, "llm", None)
+    task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
+    return default_backends(config, llm, task)
 
 
 def missing_dependencies() -> list[Dependency]:

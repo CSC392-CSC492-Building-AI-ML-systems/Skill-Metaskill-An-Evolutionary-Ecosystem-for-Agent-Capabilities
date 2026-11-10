@@ -54,7 +54,7 @@ So a prompt injection cannot make a skill look safer than the deterministic resu
 
 **When it runs:** during the safety scan, not afterwards, because a restored finding changes the score. One batched call per skill, with all of that skill's skipped matches.
 
-**Input per match:** from `checks.skipped_warnings()`, an opaque ID, the matched command, the sentence and its paragraph, as JSON. Enough context to judge, without sending the whole skill. The location is not sent, so the known-answer items cannot be told apart from real ones; items are shuffled in an order fixed by the batch. At most `MAX_RECHECK_ITEMS` (40) matches go in one call; the rest stay skipped and `detail` says how many. Matches that were also confirmed are not re-checked, since they would not be findings either way.
+**Input per match:** from `checks.skipped_warnings()`, an opaque ID, the matched command, the sentence and its paragraph, as JSON. Enough context to judge, without sending the whole skill, and each **centred on the match** and size-capped, so padding before the command cannot push it (or the words that make it an instruction) out of what the model sees. The location is not sent, and the two known-answer items are drawn at random from a pool and shuffled with `SystemRandom`, so a skill cannot work out from its own content which IDs are the controls. Their wording is fixed in the source, though, so an injection could still recognise a control by its text: the random IDs are a canary, not a guarantee. Matches are re-checked **most severe first**, so the `MAX_RECHECK_ITEMS` (40) cap per call cannot be used to push a real match past it unnoticed; any left over are reported in `detail` and the result is flagged.
 
 **Restrictions on the call.** These also apply to the main review call above.
 
@@ -62,7 +62,7 @@ So a prompt injection cannot make a skill look safer than the deterministic resu
 |---|---|
 | No tools: a plain API call | The model doing anything: no commands, files or network |
 | Fixed answer format: JSON schema, `[{"id", "verdict": "instruction" \| "warning"}]` | Answers we did not ask for |
-| Our code validates the answer: known IDs and the two verdicts only; a missing verdict leaves the match skipped | A malformed or manipulated reply having an effect |
+| Our code validates the answer: known IDs and the two verdicts only; a missing verdict restores the match as a precaution and flags the result | A malformed or manipulated reply having an effect |
 | One direction only, enforced in code | Injection making a skill look safer |
 | The reply is only read as data, never passed to a shell, `eval` or another prompt | Its output being executed |
 | Minimal input: sentence and paragraph, not the whole skill | Room for an injection to work with |
@@ -72,9 +72,9 @@ So a prompt injection cannot make a skill look safer than the deterministic resu
 
 The re-check goes through `Judge.ask()`, not `review()`, with its own `system_prompt`: its answers carry no quotes, and the default system prompt requires one on every answer.
 
-**Known-answer items.** Each batch also contains two control items with known verdicts: a clear warning and a clear instruction. If the model gets either wrong, the whole batch is discarded and every match stays skipped. This is a direct signal that something in the batch, possibly an injection, confused the model.
+**Known-answer items.** Each batch also contains two control items with known verdicts: a clear warning and a clear instruction. If the model gets either wrong, every match in the batch is **restored as a finding** and the result is flagged, rather than left skipped with a usable score. This is a direct signal that something in the batch, possibly an injection, confused the model.
 
-**Failure:** if the re-check call fails, or the batch is discarded because a known-answer item was answered wrongly, the matches stay skipped and the backend reports `llm-unavailable`. The main review's findings are kept, since only the re-check is missing. A restored finding keeps the rule, severity and location of the own-check match it came from, with `source: "llm-review"` and a note in its message.
+**Failure:** if the re-check *call* fails, the matches stay skipped and the backend reports `llm-unavailable`, with the main review's findings kept. A wrong known-answer item is different: the batch is restored rather than skipped, and the result is flagged `llm-unavailable` too. A restored finding keeps the rule, severity and location of the own-check match it came from, with `source: "llm-review"` and a note in its message — that the review found it an instruction, or, when the batch could not be trusted, that it was restored as a precaution.
 
 What none of this restricts is the model's judgment: it still reads the skill's text, which can still sway which of the two verdicts it picks. The one-direction rule is what makes that safe.
 
@@ -84,7 +84,7 @@ What none of this restricts is the model's judgment: it still reads the skill's 
 |---|---|
 | Reviewed, and re-checked if needed | `ok` |
 | No judge (no `ctx.llm`), or `JudgeUnavailable` (no provider, or a refused override) | `llm-unavailable`, tier `static` |
-| Review done, but the re-check failed or was discarded | `llm-unavailable`, review findings kept |
+| Review done, but the re-check failed, restored a batch, or was flagged | `llm-unavailable`, review findings kept |
 | `JudgeError` (no JSON object after every retry, or a request failure), or any other error | `error` |
 
 ## Cost and privacy
