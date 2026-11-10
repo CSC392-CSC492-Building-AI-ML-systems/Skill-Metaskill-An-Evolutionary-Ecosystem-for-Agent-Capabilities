@@ -758,11 +758,17 @@ _GOVERNING_NEGATION = re.compile(
     r"(?:`[^`]*`\s*(?:,|\bor\b|\band\b|\bnor\b)?\s*)*$", re.I)
 # A warning label at the start of the sentence.
 _WARNING_LABEL = re.compile(r"^\W*(?:warning|caution|danger)\b|^\W*⚠", re.I)
-# Verbs that tell the agent to run the command, so a warning label before one of them
-# ("Warning: run `rm -rf ~`") is an instruction, not a warning.
-_IMPERATIVE = re.compile(
-    r"\b(?:run|running|use|using|execute|executing|type|typing|call|calling"
-    r"|invoke|invoking|do|doing|try|trying)\b", re.I)
+# Words that describe the danger of a command: a negation, or the harm itself. A warning
+# label ("Warning:") only marks a warning when wording like this is in the sentence --
+# otherwise "Warning: run `rm -rf ~`" or "Caution: enter `x`" is a plain instruction that
+# happens to carry a label. A listed verb on its own ("using `x`", "run `x`") does not
+# count, so a label that merely describes or instructs the command is read correctly.
+_WARNING_WORDS = re.compile(
+    r"\b(?:never|don['’]?t|do\s+not|cannot|can['’]?t|won['’]?t|must\s+not|should\s+not"
+    r"|avoid|without|irreversibl\w*|permanent\w*|unrecoverabl\w*|irrecoverabl\w*|undone"
+    r"|no\s+undo|delete[sd]|deleting|erase[sd]?|erasing|destroy(?:s|ed|ing)?|overwrit\w*"
+    r"|wipe[sd]|lose[s]?|losing|lost|gone|forever|data\s+loss)\b", re.I)
+_SQUISH = re.compile(r"\s+")
 
 
 def _sentence_span(unit: _Unit, line_index: int, col: int) -> tuple[str, int, int, int]:
@@ -833,14 +839,16 @@ def _is_warning(unit: _Unit, line_index: int, col: int) -> bool:
     """A prose match that its own sentence warns against (checks.md, warning check)."""
     if unit.warning_block:
         return True
-    joined, start, position, _ = _sentence_span(unit, line_index, col)
-    prefix = joined[start:position]
+    joined, start, position, end = _sentence_span(unit, line_index, col)
+    prefix = _SQUISH.sub(" ", joined[start:position])
+    # A negation that governs the command, optionally through a run-verb, is a warning:
+    # "never run `x`", "do not use `x`".
     if _GOVERNING_NEGATION.search(prefix.rstrip().rstrip("`").rstrip() + " "):
         return True
-    # A label (Warning/Caution/Danger/⚠) marks a warning only when it does not then tell
-    # the agent to run the command: "Warning: run `rm -rf ~`" is an instruction.
-    label = _WARNING_LABEL.search(prefix.lstrip())
-    return bool(label and not _IMPERATIVE.search(prefix.lstrip()[label.end():]))
+    # A warning label alone is not enough: "Warning: run `x`" / "Caution: enter `x`"
+    # instruct the command. A label is a warning only when the sentence also describes the
+    # danger -- a negation or harm words ("deletes", "permanently", "cannot be undone").
+    return bool(_WARNING_LABEL.search(prefix.lstrip()) and _WARNING_WORDS.search(joined[start:end]))
 
 
 # An actual confirmation step, not just the word: asking the user, getting their
