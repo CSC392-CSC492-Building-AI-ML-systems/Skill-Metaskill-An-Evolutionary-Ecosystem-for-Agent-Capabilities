@@ -206,14 +206,15 @@ evaluate.md needs a number in `[0, 1]` per dimension for the leaderboard. The sa
 | Worst finding | Score |
 |---|---|
 | None | 1.0 |
-| LOW or INFO | 0.9 |
-| MEDIUM | 0.6 |
-| HIGH | 0.3 |
+| INFO | 1.0 |
+| LOW | 0.61 |
+| MEDIUM | 0.31 |
+| HIGH | 0.11 |
 | CRITICAL | 0.0 |
 
 A CRITICAL finding gives the lowest safety score. It does not remove the skill from the ranking (section 5 of evaluate.md).
 
-**[OPEN]** These values are placeholders.
+Each level maps to the top of its CVSS v3.1 qualitative band (FIRST.org), normalized as `1 - cvss/10`, with CRITICAL gated to 0. The scale is CVSS's; the mapping is policy. [safety/severity-scale.md](safety/severity-scale.md) gives the full derivation — the cardinal scale (CVSS) and the ordinal ranking (NIST FIPS-199 magnitude + recoverability), and what is backed vs. owned.
 
 The findings, with quotes, are always written to the evidence file alongside the score.
 
@@ -270,7 +271,7 @@ Backend and unit tests in section 8 remain implementation tests. Reuse shared fi
 
 1. Does the malicious layer need our own implementation? (1)
 2. Do OpenClaw skills parse in Cisco's scanner without conversion? Hermes skills do. (3.1)
-3. Score values. (5)
+3. Decided: scores derive from CVSS v3.1 qualitative bands (cardinal) and the ordinal ranking from NIST FIPS-199 magnitude + recoverability. A full per-category rationale with CWE/OWASP tags, and a κ reproducibility check, are still owed. See [safety/severity-scale.md](safety/severity-scale.md). (5)
 4. Default token cap per scan; the per-scan cost is now measured. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
 6. Decided: Cisco is a required dependency, declared in `plugin.yaml`. (3.1)
