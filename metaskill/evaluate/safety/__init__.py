@@ -10,16 +10,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from metaskill.evaluate.judge import JUDGE_TASK, Judge
-from metaskill.evaluate.models import (
+from ..judge import JUDGE_TASK, Judge
+from ..models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
-from metaskill.evaluate.safety import local
-from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend, delete_targets
-from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
-from metaskill.evaluate.safety.findings import (
+from . import local
+from .checks import CHECKS_VERSION, ChecksBackend, delete_targets
+from .cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
+from .findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
-from metaskill.evaluate.safety.hermes_bridge import PluginLlm
-from metaskill.evaluate.safety.review import ReviewBackend
+from .hermes_bridge import PluginLlm
+from .review import ReviewBackend
 
 # Statuses that still produced findings the score can rely on. A deep scan that
 # fell back to static is usable: its static findings are real.

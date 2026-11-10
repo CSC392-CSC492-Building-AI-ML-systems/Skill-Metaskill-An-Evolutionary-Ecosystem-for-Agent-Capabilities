@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .judge import (
+    MAX_REASON_CHARS,
     DeterministicJudge,
     Judge,
     JudgeError,
@@ -30,6 +31,7 @@ from .judge import (
     TaskJudge,
     TokenUsage,
     Verdict,
+    clean,
     make_judge,
 )
 from .models import (
@@ -123,7 +125,7 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
                 unavailable = pool.unavailable(task)
                 if unavailable:
                     # Not worth an agent session that cannot be judged.
-                    result.errors.append(f"{label}: {unavailable}")
+                    result.errors.append(clean(f"{label}: {unavailable}", MAX_REASON_CHARS))
                     continue
                 try:
                     result.tests.append(
@@ -132,7 +134,8 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
                 # failing. OSError: writing the log failed. Either costs this run, not
                 # the runs already made.
                 except (JudgeError, JudgeUnavailable, OSError) as e:
-                    result.errors.append(f"{label}: {type(e).__name__}: {e}")
+                    result.errors.append(
+                        clean(f"{label}: {type(e).__name__}: {e}", MAX_REASON_CHARS))
 
     if pool.llm is not None:
         result.judge_model = pool.llm.judge_model
@@ -166,7 +169,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         seconds = time.monotonic() - start
 
         if failure:
-            verdict = Verdict(passed=False, score=0.0, reason=failure, evidence=None)
+            verdict = _failed(failure)
         else:
             verdict = _judge(task, run, workspace, pool)
     finally:
@@ -230,10 +233,17 @@ def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Ve
         pool.workspace = workspace
         return _combine([pool.get(c.judge).judge(task, c, output) for c in task.checks])
     except RunFailed as e:
-        return Verdict(passed=False, score=0.0, reason=str(e), evidence=None)
+        return _failed(str(e))
     finally:
         pool.workspace = None
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _failed(reason: str) -> Verdict:
+    """The verdict of a run that failed without being judged. `reason` can hold text the
+    run shaped, e.g. an exception the agent raised, so it is cleaned like a judge's."""
+    return Verdict(passed=False, score=0.0, reason=clean(reason, MAX_REASON_CHARS),
+                   evidence=None)
 
 
 def _combine(verdicts: list[Verdict]) -> Verdict:
@@ -321,5 +331,7 @@ def _write_log(path: Path, task: Task, variant: Variant, n: int, run: AgentRun,
         f"\n--- prompt ---\n{task.prompt}\n"
         f"\n--- output ---\n{run.output}\n"
         + (f"\n--- transcript ---\n{run.transcript}\n" if run.transcript else ""),
-        encoding="utf-8",
+        # A lone surrogate, e.g. from a cut emoji, cannot be encoded. Written as \ud83d, so
+        # one in the output does not stop the runs left to make.
+        encoding="utf-8", errors="backslashreplace",
     )

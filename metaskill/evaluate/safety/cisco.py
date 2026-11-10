@@ -16,9 +16,9 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
-from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, Skill
-from metaskill.evaluate.safety.findings import BackendResult, BackendStatus
-from metaskill.evaluate.safety.hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
+from ..models import Dimension, Finding, SafetyTier, Severity, Skill
+from .findings import BackendResult, BackendStatus
+from .hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
 TESTED_VERSION = "2.2.1"

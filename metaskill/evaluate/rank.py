@@ -232,12 +232,17 @@ def _critical(result: SkillResult) -> list[Finding]:
 
 def _unranked_note(entry: RankedSkill) -> str:
     """Why a skill is not ranked: its missing dimensions, with status and detail."""
-    statuses = entry.result.dimensions
-    why = ", ".join(
-        f"{d.value} ({statuses[d].status}: {clean(statuses[d].detail, MAX_TEXT_CHARS)})"
-        if d in statuses and statuses[d].detail else d.value
-        for d in entry.missing)
+    why = ", ".join(_why(entry.result, d) for d in entry.missing)
     return f"Not ranked: no score for {why}."
+
+
+def _why(result: SkillResult, dimension: Dimension) -> str:
+    """A missing dimension, with whatever status and detail the result has for it."""
+    found = result.dimensions.get(dimension)
+    if found is None:
+        return dimension.value
+    detail = clean(found.detail, MAX_TEXT_CHARS)  # may leave nothing
+    return f"{dimension.value} ({found.status}{f': {detail}' if detail else ''})"
 
 
 def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],

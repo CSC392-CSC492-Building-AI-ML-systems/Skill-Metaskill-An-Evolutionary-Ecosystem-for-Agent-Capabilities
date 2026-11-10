@@ -78,7 +78,7 @@ The Hermes implementation of `Agent` routes Hermes' terminal and file tools thro
 
 **[OPEN]** That implementation is not built yet: the backend itself, how to load or leave out the skill, and how to read tokens and tool calls from a Hermes session.
 
-If `agent.run` raises, the run is recorded as failed (`passed: false`, `score: 0`, reason `agent failed: ...`). The agent failing is an outcome of the task, not a runner error.
+If `agent.run` raises, the run is recorded as failed (`passed: false`, `score: 0`, reason `agent failed: ...`). The agent failing is an outcome of the task, not a runner error. The exception's text can be shaped by the skill, so this reason and the lines in `RunnerResult.errors` go through `judge.clean` ([judge.md](judge.md) 2.3), capped at `MAX_REASON_CHARS` (500).
 
 ### 2.3 Judging
 
@@ -97,7 +97,7 @@ A run that broke its own workspace is different: it stopped the container, left 
 
 ### 2.4 Logs and output
 
-Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run].txt` (evaluate.md section 2). `[skill]` is the skill's name, which comes from the skill's own frontmatter, so it must be letters, digits, `_`, `.` and `-`, starting with a letter or digit, like a `task_id`; otherwise a name such as `../x` or an absolute path would put the logs outside `run_dir`. The log holds the metrics, any skill files left out of the sandbox (2.2), the verdict, the prompt, the full output and the agent's transcript if it gave one.
+Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run].txt` (evaluate.md section 2). `[skill]` is the skill's name, which comes from the skill's own frontmatter, so it must be letters, digits, `_`, `.` and `-`, starting with a letter or digit, like a `task_id`; otherwise a name such as `../x` or an absolute path would put the logs outside `run_dir`. The log holds the metrics, any skill files left out of the sandbox (2.2), the verdict, the prompt, the full output and the agent's transcript if it gave one. Text UTF-8 cannot encode, such as a lone surrogate, is written as an escape (`\ud83d`), so it cannot stop the runs left to make.
 
 `TestResult.output` is the output cut to `config.output_max_chars`, followed by the path to the full log, relative to the run folder: `... (full log: cleanup/logs/write-report-with_skill-r1.txt)`.
 

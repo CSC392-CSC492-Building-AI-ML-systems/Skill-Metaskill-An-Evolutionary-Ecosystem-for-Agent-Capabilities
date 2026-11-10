@@ -32,6 +32,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -86,18 +87,37 @@ class PluginLlm(Protocol):
 # --- Evidence -----------------------------------------------------------------
 
 # Text an agent may act on but a human reviewer cannot see: HTML comments, and
-# characters that render as nothing (zero-width, bidi controls, tag characters).
-_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# characters that render as nothing (zero-width, bidi and annotation controls, tag
+# characters).
 _INVISIBLE = re.compile(
     "[­᠎​-‏‪-‮⁠-⁤⁦-⁩﻿"
-    "\U000e0000-\U000e007f]")
+    "؜￹-￻\U000e0000-\U000e007f]")
 
 
 def strip_hidden(text: str) -> str:
     """text without HTML comments or invisible characters. A comment is replaced by its
-    line breaks, so line numbers still match the file on disk."""
-    text = _HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), _normalize(text))
-    return _INVISIBLE.sub("", text)
+    line breaks, so line numbers still match the file on disk. Invisible characters go
+    first: removing them afterwards could join `<!-` and `-` into a comment."""
+    return _strip_comments(_INVISIBLE.sub("", _normalize(text)))
+
+
+def _strip_comments(text: str) -> str:
+    """text with each HTML comment replaced by its line breaks.
+
+    A `<!--` with no `-->` after it is not a comment: it and the text after it stay, so
+    a stray `<!--` cannot hide the rest of a file from a check. The text is untrusted, so
+    this is one pass; the regex `<!--.*?-->` takes quadratic time on many unclosed `<!--`.
+    """
+    kept: list[str] = []
+    position = 0
+    while (start := text.find("<!--", position)) != -1:
+        end = text.find("-->", start + 4)
+        if end == -1:
+            break  # no later `<!--` can be closed either
+        kept += text[position:start], "\n" * text.count("\n", start, end)
+        position = end + 3
+    kept.append(text[position:])
+    return "".join(kept)
 
 
 # Tag characters mirror ASCII (U+E0041 is "A"), so a run of them can spell out text that
@@ -109,7 +129,8 @@ _JOINERS = {"‌", "‍"}
 
 def mark_hidden(text: str) -> str:
     """text with what a person cannot see made visible, for the safety review. HTML
-    comments are kept; a run of tag characters becomes ⟦hidden text: "..."⟧ and other
+    comments are kept, and an unclosed `<!--` stays plain text, as in strip_hidden; a run
+    of tag characters becomes ⟦hidden text: "..."⟧ and other
     invisible characters ⟦U+200B⟧. Line breaks are unchanged."""
     def tags(m: re.Match[str]) -> str:
         decoded = "".join(chr(ord(c) - 0xE0000) for c in m.group(0)
@@ -533,8 +554,8 @@ class Judge:
              **options: Unpack[CallOptions]) -> list[RubricRating]:
         """Rate the skill on each criterion. A level is normalised to [0, 1].
 
-        Criteria the judge skipped, or rated with a quote not in the skill, are left
-        out; the caller decides how a missing criterion scores.
+        Criteria the judge skipped, rated twice, or rated with a quote not in the skill,
+        are left out; the caller decides how a missing criterion scores.
         """
         by_name = {c.name: c for c in criteria}
         rubric = "\n\n".join(
@@ -555,10 +576,13 @@ class Judge:
         data, _ = self._ask(task, _render(sources), schema, "rate", **options)
 
         ratings: dict[str, RubricRating] = {}
-        for item in _items(data, "ratings"):
+        items = _items(data, "ratings")
+        # Two answers for one criterion disagree or add nothing, so neither is trusted.
+        times_rated = Counter(_text(item, "criterion") for item in items)
+        for item in items:
             criterion = by_name.get(_text(item, "criterion"))
             level = item.get("level")
-            if criterion is None or criterion.name in ratings:
+            if criterion is None or times_rated[criterion.name] > 1:
                 continue
             if not isinstance(level, int) or not 1 <= level <= len(criterion.levels):
                 continue
