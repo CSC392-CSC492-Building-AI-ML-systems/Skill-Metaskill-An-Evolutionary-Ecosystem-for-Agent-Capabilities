@@ -153,18 +153,22 @@ def test_warning_verdict_leaves_it_skipped(tmp_path):
     assert "restored 0 of 1" in result.detail
 
 
-def test_missing_or_unknown_ids_leave_it_skipped(tmp_path):
+def test_a_missing_verdict_restores_the_match_and_flags_it(tmp_path):
+    # An injection could drop a real match by giving it no verdict while answering both
+    # controls. The match is restored as a precaution and the result flagged, rather than
+    # left skipped with a usable score.
     controls = {c["sentence"] for c in review._CONTROL_WARNINGS + review._CONTROL_INSTRUCTIONS}
 
     def answer(items):
-        # Both known-answer items right, but no verdict for the real match.
         data = answer_by_sentence(items)
         data["verdicts"] = [v for v, item in zip(data["verdicts"], items)
                             if item["sentence"] in controls]
-        data["verdicts"].append({"id": "item-999", "verdict": "instruction"})
         return data
     result = ReviewBackend(FakeJudge(answer=answer)).scan(skill_with(tmp_path, WARNING_TEXT), SafetyTier.DEEP)
-    assert result.findings == []
+    assert [f.rule for f in result.findings] == ["recursive-delete"]
+    assert result.status is BackendStatus.LLM_UNAVAILABLE
+    assert "no verdict" in result.detail
+    assert "could not be trusted" in result.findings[0].message
 
 
 def test_wrong_control_answer_restores_the_batch(tmp_path):
@@ -178,6 +182,9 @@ def test_wrong_control_answer_restores_the_batch(tmp_path):
     assert result.tier is SafetyTier.STATIC
     assert {f.rule for f in result.findings} == {"excess-scope", "recursive-delete"}
     assert "known-answer" in result.detail
+    # The restored match says it wasn't trusted, not that the review confirmed it.
+    restored = next(f for f in result.findings if f.rule == "recursive-delete")
+    assert "could not be trusted" in restored.message
 
 
 def test_restore_never_removes_a_review_finding(tmp_path):
@@ -229,11 +236,24 @@ def test_recheck_failure_keeps_the_review_findings(tmp_path):
 
 
 def test_long_paragraph_is_capped(tmp_path):
-    body = "Never run `rm -rf ~/`. " + "padding " * 400 + "\n"
+    body = "Never run `rm -rf ~/Documents`. " + "padding " * 400 + "\n"
     judge = FakeJudge()
     ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
-    item = next(i for i in judge.ask_calls[0]["items"] if i["command"].startswith("rm -rf"))
-    assert len(item["paragraph"]) <= review.MAX_PARAGRAPH_CHARS + 1  # + the ellipsis
+    item = next(i for i in judge.ask_calls[0]["items"] if i["command"] == "rm -rf ~/Documents")
+    assert len(item["paragraph"]) <= review.MAX_PARAGRAPH_CHARS + 2  # + up to two ellipses
+
+
+def test_window_keeps_the_command_when_padded_before(tmp_path):
+    # Padding before the match must not push the command and its context out of the window
+    # the model sees (the window is centred on the match, not the start of the text).
+    filler = "this note is long " * 70  # ~1.3k chars before the command
+    body = f"Warning: {filler}`rm -rf ~/Documents` deletes everything after this.\n"
+    judge = FakeJudge()
+    ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    item = next(i for i in judge.ask_calls[0]["items"] if i["command"] == "rm -rf ~/Documents")
+    assert "rm -rf ~/Documents" in item["paragraph"]
+    assert "deletes everything after this" in item["paragraph"]
+    assert len(item["paragraph"]) <= review.MAX_PARAGRAPH_CHARS + 2
 
 
 def test_control_item_position_is_not_predictable(tmp_path):

@@ -116,6 +116,7 @@ _CONTROL_INSTRUCTIONS = [
 ]
 
 _RESTORED = " (the deep review found this sentence is an instruction, not a warning)"
+_RESTORED_UNTRUSTED = " (restored because the deep review's re-check could not be trusted)"
 
 
 class ReviewBackend:
@@ -174,7 +175,8 @@ class ReviewBackend:
         Matches are re-checked most severe first, so padding cannot push a real one past
         the cap unnoticed. A known-answer item answered wrongly means the batch cannot be
         trusted -- possibly an injection -- so every match in it is restored rather than
-        left skipped, and the result is flagged. Raises only if the call itself fails.
+        left skipped, and the result is flagged. A real item the model gives no verdict is
+        also restored as a precaution and the result flagged. Raises only if the call fails.
         """
         skipped = skipped_warnings(skill)
         if not skipped:
@@ -193,17 +195,28 @@ class ReviewBackend:
         warning_id, instruction_id = controls
         tampered = (verdicts.get(warning_id) != "warning"
                     or verdicts.get(instruction_id) != "instruction")
+        restored: list[Finding] = []
+        no_verdict = 0
         if tampered:
-            restored = [_restore(w) for w in batch]
+            restored = [_restore(w, trusted=False) for w in batch]
             note = (f"a known-answer check failed (possible injection): all {len(batch)} "
                     "re-checked match(es) were restored as findings")
         else:
-            restored = [_restore(batch[i]) for item_id, i in index.items()
-                        if verdicts.get(item_id) == "instruction"]
+            for item_id, i in index.items():
+                verdict = verdicts.get(item_id)
+                if verdict == "instruction":
+                    restored.append(_restore(batch[i]))
+                elif verdict != "warning":
+                    # No verdict for a real item: an injection could drop a match this way
+                    # while answering both controls. Restore it as a precaution and flag.
+                    restored.append(_restore(batch[i], trusted=False))
+                    no_verdict += 1
             note = f"re-check restored {len(restored)} of {len(batch)} skipped match(es)"
+            if no_verdict:
+                note += f" ({no_verdict} with no verdict, restored as a precaution)"
         if not covered:
             note += f"; {len(ordered) - len(batch)} more were not re-checked (most severe first)"
-        return restored, note, covered and not tampered
+        return restored, note, covered and not tampered and no_verdict == 0
 
 
 def _recheck_items(batch: list[SkippedWarning]
@@ -218,8 +231,9 @@ def _recheck_items(batch: list[SkippedWarning]
     """
     rng = random.SystemRandom()
     real = [{"command": w.snippet,
-             "sentence": _cap(strip_hidden(w.sentence), MAX_SENTENCE_CHARS),
-             "paragraph": _cap(strip_hidden(w.paragraph), MAX_PARAGRAPH_CHARS)} for w in batch]
+             "sentence": _window(strip_hidden(w.sentence), w.snippet, MAX_SENTENCE_CHARS),
+             "paragraph": _window(strip_hidden(w.paragraph), w.snippet, MAX_PARAGRAPH_CHARS)}
+            for w in batch]
     entries: list[tuple[Any, dict[str, str]]] = list(enumerate(real))
     entries += [("warning", rng.choice(_CONTROL_WARNINGS)),
                 ("instruction", rng.choice(_CONTROL_INSTRUCTIONS))]
@@ -236,13 +250,23 @@ def _recheck_items(batch: list[SkippedWarning]
     return items, (controls["warning"], controls["instruction"]), index
 
 
-def _restore(w: SkippedWarning) -> Finding:
-    """A skipped match turned back into a finding, marked as the review's and why."""
-    return replace(w.finding, source=NAME, message=w.finding.message + _RESTORED)
+def _restore(w: SkippedWarning, trusted: bool = True) -> Finding:
+    """A skipped match turned back into a finding, marked as the review's and why. With
+    trusted=False -- the batch could not be trusted, or the item got no verdict -- the
+    message says so instead of claiming the review found the sentence to be an instruction."""
+    return replace(w.finding, source=NAME,
+                   message=w.finding.message + (_RESTORED if trusted else _RESTORED_UNTRUSTED))
 
 
-def _cap(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[:limit] + "…"
+def _window(text: str, needle: str, limit: int) -> str:
+    """At most `limit` characters of `text`, centred on `needle`, so padding before the
+    match cannot push the match and its surrounding words out of what the model sees."""
+    if len(text) <= limit:
+        return text
+    at = max(text.find(needle), 0)
+    start = max(0, min(at - limit // 2, len(text) - limit))
+    end = start + limit
+    return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
 
 
 def _review_notes(result: Any) -> list[str]:
