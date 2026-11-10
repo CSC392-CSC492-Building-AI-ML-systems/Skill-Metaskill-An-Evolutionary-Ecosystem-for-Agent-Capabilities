@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 
 import pytest
 
@@ -43,9 +45,16 @@ def test_loads_an_object_with_a_tasks_list(folder):
     assert len(load_tasks(write(folder, {"tasks": [TASK]}))) == 1
 
 
-def test_loads_yaml(folder):
-    yaml = pytest.importorskip("yaml")
-    assert len(load_tasks(write(folder, yaml.safe_dump({"tasks": [TASK]}), "tasks.yaml"))) == 1
+def test_yaml_goes_through_hermes_loader(folder, monkeypatch):
+    loader = types.SimpleNamespace(safe_load=lambda text: {"tasks": [TASK]})
+    monkeypatch.setitem(sys.modules, "hermes_yaml", loader)
+    assert len(load_tasks(write(folder, "tasks: []", "tasks.yaml"))) == 1
+
+
+def test_yaml_outside_hermes_says_to_use_json(folder, monkeypatch):
+    monkeypatch.setitem(sys.modules, "hermes_yaml", None)
+    with pytest.raises(TaskError, match="use JSON"):
+        load_tasks(write(folder, "tasks: []", "tasks.yaml"))
 
 
 @pytest.mark.parametrize("data, message", [

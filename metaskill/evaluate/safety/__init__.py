@@ -83,13 +83,16 @@ def default_backends(config: EvaluationConfig, llm: PluginLlm | None = None) -> 
 
 
 def missing_dependencies() -> list[Dependency]:
-    """What is not installed, so the tool can ask the user before evaluating.
+    """What is not installed, so the tool can tell the user before evaluating.
 
     Safety never installs anything itself (evaluate-safety.md, section 3.1).
     """
     if CiscoBackend().available():
         return []
-    return [Dependency(CiscoBackend.name, PACKAGE, INSTALL_COMMAND)]
+    # No install_command: Hermes asks the user to consent, so the commands need the user's
+    # terminal. Run by the agent without one, they can leave the plugin disabled.
+    return [Dependency(CiscoBackend.name, PACKAGE, "",
+                       reason=f"run `{INSTALL_COMMAND}` in a terminal, then restart Hermes")]
 
 
 def versions() -> dict[str, str]:
@@ -117,6 +120,6 @@ def _reason(findings: list[Finding], usable: list[BackendResult], tier: SafetyTi
     worst = next((f for f in findings if f.dimension is Dimension.SAFETY), None)
     if worst is None:
         ran = tier if all(r.tier is tier for r in usable) else SafetyTier.STATIC
-        return f"No findings at {ran} tier"
+        return f"No safety findings at {ran} tier"
     where = f"at {worst.location}" if worst.location else "in the skill as a whole"
     return f"Worst finding: {worst.severity} {worst.category} {where}"

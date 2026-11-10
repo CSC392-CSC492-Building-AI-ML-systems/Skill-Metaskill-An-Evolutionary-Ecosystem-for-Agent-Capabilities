@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .models import Task
+from .models import Task, load_yaml
 
 # A name that becomes part of a path: task_id in a log file name
 # ([task_id]-[variant]-r[run].txt), and the skill's name in its log folder (runner.py).
@@ -66,16 +66,13 @@ def _parse(path: Path, text: str) -> Any:
     try:
         if path.suffix.lower() in (".yaml", ".yml"):
             try:
-                import yaml
+                return load_yaml(text)
             except ImportError as e:
-                raise TaskError(
-                    "PyYAML is required for YAML task files. "
-                    "Install it with `pip install pyyaml`, or use JSON.") from e
-            return yaml.safe_load(text)
+                raise TaskError(f"{e}, or use JSON") from e
         return json.loads(text)
     except TaskError:
         raise
-    except Exception as e:  # json.JSONDecodeError, yaml.YAMLError
+    except Exception as e:  # json.JSONDecodeError, or the YAML loader's error
         raise TaskError(f"{path}: not valid {path.suffix.lstrip('.') or 'JSON'}: {e}") from e
 
 
