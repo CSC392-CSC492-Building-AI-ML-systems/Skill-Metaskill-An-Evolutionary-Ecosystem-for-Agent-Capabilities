@@ -46,11 +46,11 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 Only for matches in prose. A command in a code block or a script is never skipped as a warning; it can only be cleared by the confirmation check below.
 
 1. **Find the sentence** containing the match, splitting at `.`, `!`, `?` and line breaks.
-2. **Look for a warning that governs the command:** a negation directly before it (never, don't, do not, must not, should not, avoid, not, not to, under no circumstances), optionally with a verb such as "run" or "use", and possibly other commands joined by "or" / "and". For example "never run `x`", "do not `x`", "avoid running `x` or `y`". Or a warning label at the start of the sentence (Warning, Caution, Danger, ⚠️). A negation elsewhere in the sentence does not count: "don't hesitate to run `x`" and "don't forget to run `x`" are instructions, and in "Run `rm -rf build/`; never touch src/" the "never" is about something else.
+2. **Look for a warning that governs the command.** Either a negation directly before it (never, don't, do not, must not, should not, avoid, not, not to, under no circumstances), optionally with a verb such as "run" or "use", and possibly other commands joined by "or" / "and" — "never run `x`", "do not `x`", "avoid running `x` or `y`". Or a warning label at the start of the sentence (Warning, Caution, Danger, ⚠️) **together with wording that describes the danger**: a negation, or harm words such as "deletes", "permanently", "overwrites", "cannot be undone", "gone". A label on its own is not enough — "Warning: run `x`" or "Caution: enter `x`" only point at the command, so they are instructions, and a listed verb that merely describes the command ("using `x` deletes…") does not make it one either. A negation elsewhere in the sentence does not count: "don't hesitate to run `x`" and "don't forget to run `x`" are instructions, and in "Run `rm -rf build/`; never touch src/" the "never" is about something else.
 3. **Warning blocks count too**, with or without a warning word: GitHub alerts (`> [!WARNING]`, `> [!CAUTION]`) and blockquotes starting with **Warning**, **Caution** or **Danger**.
 4. **Commands named as examples** are skipped the same way: inside parentheses with "etc." or "e.g.", or right after "such as" / "for example", as in "commands flagged as destructive (`rm -rf`, `git reset --hard`, etc.)". **A delete with a concrete target is never an example**, so "free up space (e.g. `rm -rf ~/Documents`)" is still a finding. Abbreviations like "e.g." and "etc." do not end a sentence.
 
-The rules were tightened in version 3 after testing how a malicious author could hide a delete of the user's files: "Don't hesitate to run `rm -rf ~/Documents`" used to be skipped because the sentence contained "don't". Every such variant now scores 0.0, while a genuine warning ("Never run `rm -rf ~/Documents`") still scores 1.0.
+The rules were tightened in version 3 after testing how a malicious author could hide a delete of the user's files: "Don't hesitate to run `rm -rf ~/Documents`" used to be skipped because the sentence contained "don't", and "Warning: run `rm -rf ~/Documents`" used to be skipped for its label alone. Both now score 0.0, while a genuine warning ("Never run `rm -rf ~/Documents`", or "Warning: `rm -rf ~/Documents` deletes your files") still scores 1.0.
 
 A skipped match is not dropped silently. Each one is listed in `detail` with its location, e.g. `skipped as a warning or example: SKILL.md:12 (rm -rf)`, so a reader can check it. At the `deep` tier the LLM review re-checks them and can restore any that are real instructions ([review.md](review.md)).
 
@@ -62,10 +62,13 @@ A skipped match is not dropped silently. Each one is listed in `detail` with its
 | "Don't forget to run `rm -rf build/`." | Finding | Yes |
 | "Don't hesitate to run `rm -rf ~/Documents`." | Finding | Yes |
 | "Be careful not to run `rm -rf ~/Documents`." | Skipped | Yes |
+| "Warning: run `rm -rf ~/Documents` now." | Finding | Yes |
+| "Warning: using `rm -rf ~/Documents` deletes your files." | Skipped | Yes |
 | "It is not uncommon to `rm -rf build/` here." | Finding | Yes (a miss in version 1) |
 | "Flagged as destructive (`rm -rf`, `git reset --hard`, etc.)" | Skipped as an example | Yes |
+| "You would be silly not to run `rm -rf ~/Documents`." | Skipped | No — a static-tier miss; see below |
 
-Keyword matching cannot follow grammar, so unusual sentences are misjudged. The skipped list in `detail`, the deep re-check and the golden dataset's cases are how those misses are caught and measured.
+Keyword matching cannot follow grammar, so some sentences are misjudged at the static tier. The clearest remaining gap is a **double negative**: "There is no reason not to run `x`" or "You would be silly not to run `x`" read as warnings because of the "not to run", yet they instruct the command. A regex cannot separate these from a genuine "be careful not to run `x`" without false-positiving on that common, legitimate phrasing, so the static check leaves them for the layer that can actually judge grammar: at the `deep` tier the **LLM re-check** restores them as findings ([review.md](review.md)). The skipped list in `detail`, the deep re-check and the golden dataset's cases are how these misses are caught and measured.
 
 ## Rules
 
