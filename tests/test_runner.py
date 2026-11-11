@@ -16,10 +16,12 @@ from metaskill.evaluate.models import (
     EvaluationConfig,
     JudgeType,
     Skill,
+    Status,
     Task,
     TestResult,
     Variant,
 )
+from metaskill.evaluate import efficiency
 from metaskill.evaluate.runner import (
     AgentRun,
     report_dir,
@@ -195,6 +197,29 @@ def test_runs_are_judged_and_measured(skill, run_dir):
     # Metrics round-trips through the report JSON unchanged.
     assert TestResult.from_dict(with_skill.to_dict()).metrics == with_skill.metrics
     assert result.errors == [] and result.judge_model == ""
+
+
+def cheaper_with_skill(prompt, skill, workdir):
+    """With the skill the task passes and costs less; the baseline costs more and fails."""
+    if skill is not None:
+        (workdir / "report.txt").write_text("ok", encoding="utf-8")
+        return AgentRun(output="wrote report.txt", input_tokens=50, output_tokens=10,
+                        llm_calls=1, tool_calls=1)
+    return AgentRun(output="could not", input_tokens=120, output_tokens=30,
+                    llm_calls=3, tool_calls=2)
+
+
+def test_runner_results_feed_the_efficiency_scorer(skill, run_dir):
+    # End to end: the runner's TestResults go straight into efficiency.score_from_runs.
+    result = run_tasks(skill, [task()], FakeAgent(cheaper_with_skill),
+                       config=config(runs=1), run_dir=run_dir)
+    with_skill = [t for t in result.tests if t.variant is Variant.WITH_SKILL]
+    baseline = [t for t in result.tests if t.variant is Variant.BASELINE]
+    assert all(t.passed for t in with_skill) and not any(t.passed for t in baseline)
+
+    dimension = efficiency.score_from_runs(with_skill, baseline)
+    assert dimension.status is Status.OK
+    assert dimension.value > 0.5  # the skill made the task cheaper than no skill
 
 
 def test_each_run_gets_a_fresh_workspace_with_the_fixtures(skill, run_dir, tmp_path):
