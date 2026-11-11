@@ -348,7 +348,7 @@ def _details(entry: RankedSkill) -> list[str]:
         *_section("Tests", [
             f"{_md(t.task_id)} ({_md(t.description)}), {t.variant} r{t.run}: "
             f"{'passed' if t.passed else 'failed'}, score {t.score:.2f}, judge {t.judge}, "
-            f"{t.metrics.tokens} tokens, {t.metrics.seconds}s, "
+            f"{t.metrics.total_tokens} tokens, {t.metrics.llm_calls} LLM calls, "
             f"{t.metrics.tool_calls} tool calls. {_md(t.reason)}"
             + (f" Evidence: {_md(t.evidence)}" if t.evidence else "")
             + f" Output: {_md(t.output, len(t.output))}"  # uncut: it ends with the log's path

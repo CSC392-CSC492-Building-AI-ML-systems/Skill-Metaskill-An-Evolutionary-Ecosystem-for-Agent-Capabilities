@@ -44,10 +44,23 @@ VARIANTS = (Variant.WITH_SKILL, Variant.BASELINE)
 
 @dataclass
 class AgentRun:
-    """What one agent session returned."""
+    """What one agent session returned.
+
+    The token and call fields are the usage of the agent's own task turns, summed over
+    the session (one PluginLlmUsage per model reply; the agent aggregates across turns).
+    They EXCLUDE host auxiliary calls -- title generation, summarization and the like --
+    which happen regardless of the skill and must not count toward its efficiency. In a
+    `hermes -z --usage-file` report these are the top-level counts, not the `auxiliary`
+    block. Efficiency scores a cache-agnostic input total from these (docs/evaluate-efficiency.md).
+    """
 
     output: str  # the agent's final reply
-    tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0  # reasoning-model generation cost, billed like output
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    llm_calls: int = 0  # model round-trips the session made
     tool_calls: int = 0
     transcript: str = ""  # the full session for the log, if the agent provides one
 
@@ -176,7 +189,11 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         workspace.close()
 
     log = f"{skill.name}/logs/{task.task_id}-{variant.value}-r{n}.txt"
-    metrics = Metrics(tokens=run.tokens, seconds=round(seconds, 3), tool_calls=run.tool_calls)
+    metrics = Metrics(
+        input_tokens=run.input_tokens, output_tokens=run.output_tokens,
+        reasoning_tokens=run.reasoning_tokens,
+        cache_read_tokens=run.cache_read_tokens, cache_write_tokens=run.cache_write_tokens,
+        llm_calls=run.llm_calls, tool_calls=run.tool_calls, seconds=round(seconds, 3))
     _write_log(run_dir / log, task, variant, n, run, metrics, verdict, left_out)
     return TestResult(
         task_id=task.task_id,
@@ -323,8 +340,10 @@ def _write_log(path: Path, task: Task, variant: Variant, n: int, run: AgentRun,
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"task: {task.task_id}\nvariant: {variant.value}\nrun: {n}\n"
-        f"tokens: {metrics.tokens}\nseconds: {metrics.seconds}\n"
-        f"tool_calls: {metrics.tool_calls}\n"
+        f"tokens: {metrics.total_tokens} (input {metrics.reproducible_input}, "
+        f"output {metrics.output_tokens}, reasoning {metrics.reasoning_tokens})\n"
+        f"llm_calls: {metrics.llm_calls}\ntool_calls: {metrics.tool_calls}\n"
+        f"seconds: {metrics.seconds}\n"
         # Links in the skill are not copied; a run that needed one fails without them.
         + (f"skill files left out (links): {', '.join(left_out)}\n" if left_out else "")
         + f"passed: {verdict.passed}\nscore: {verdict.score}\nreason: {verdict.reason}\n"

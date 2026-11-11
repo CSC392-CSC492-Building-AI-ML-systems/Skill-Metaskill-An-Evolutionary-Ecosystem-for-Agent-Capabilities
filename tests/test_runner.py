@@ -17,6 +17,7 @@ from metaskill.evaluate.models import (
     JudgeType,
     Skill,
     Task,
+    TestResult,
     Variant,
 )
 from metaskill.evaluate.runner import (
@@ -158,7 +159,8 @@ def writes_report_with_skill(prompt, skill, workdir):
     if skill is not None:
         (workdir / "report.txt").write_text("ok", encoding="utf-8")
     output = "wrote the report to report.txt" if skill else "could not"
-    return AgentRun(output=output, tokens=120, tool_calls=3)
+    return AgentRun(output=output, input_tokens=70, output_tokens=40, reasoning_tokens=5,
+                    cache_read_tokens=10, llm_calls=2, tool_calls=3)
 
 
 # --- Running ----------------------------------------------------------------
@@ -184,8 +186,14 @@ def test_runs_are_judged_and_measured(skill, run_dir):
     assert (with_skill.passed, with_skill.score) == (True, 1.0)
     assert (baseline.passed, baseline.score) == (False, 0.0)
     assert with_skill.judge is JudgeType.DETERMINISTIC
-    assert (with_skill.metrics.tokens, with_skill.metrics.tool_calls) == (120, 3)
+    # total = reproducible_input 80 + output 40 + reasoning 5
+    assert (with_skill.metrics.total_tokens, with_skill.metrics.tool_calls) == (125, 3)
+    assert with_skill.metrics.reproducible_input == 80  # input 70 + cache_read 10
+    assert with_skill.metrics.reasoning_tokens == 5
+    assert with_skill.metrics.llm_calls == 2
     assert with_skill.metrics.seconds >= 0
+    # Metrics round-trips through the report JSON unchanged.
+    assert TestResult.from_dict(with_skill.to_dict()).metrics == with_skill.metrics
     assert result.errors == [] and result.judge_model == ""
 
 

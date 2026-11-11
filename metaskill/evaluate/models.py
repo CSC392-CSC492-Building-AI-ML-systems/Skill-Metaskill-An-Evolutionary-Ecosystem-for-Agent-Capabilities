@@ -399,11 +399,34 @@ class ReportMeta:
 
 @dataclass
 class Metrics:
-    """Cost of a single task run, used for efficiency."""
+    """Cost of a single task run, used for efficiency (docs/evaluate.md 3.5).
 
-    tokens: int
-    seconds: float
-    tool_calls: int
+    Tokens are split into input/output and the prompt-cache counts so efficiency can
+    score on a cache-agnostic input total: a warm-cache run and a cold one of the same
+    prompt have the same `reproducible_input`. `seconds` is recorded for the log but is
+    not scored -- it depends on the machine, network and provider load, so it is not
+    reproducible. `llm_calls` is the number of model round-trips the session made.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0  # generation-side cost on reasoning models, billed like output
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    llm_calls: int = 0
+    tool_calls: int = 0
+    seconds: float = 0.0
+
+    @property
+    def reproducible_input(self) -> int:
+        """Logical input size, independent of cache state: billed input plus the tokens a
+        warm cache served or wrote. Equal across warm and cold runs of the same prompt."""
+        return self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+    @property
+    def total_tokens(self) -> int:
+        """Every token processed, for display."""
+        return self.reproducible_input + self.output_tokens + self.reasoning_tokens
 
 
 @dataclass
@@ -440,9 +463,14 @@ class TestResult:
             "score": self.score,
             "reason": self.reason,
             "metrics": {
-                "tokens": self.metrics.tokens,
-                "seconds": self.metrics.seconds,
+                "input_tokens": self.metrics.input_tokens,
+                "output_tokens": self.metrics.output_tokens,
+                "reasoning_tokens": self.metrics.reasoning_tokens,
+                "cache_read_tokens": self.metrics.cache_read_tokens,
+                "cache_write_tokens": self.metrics.cache_write_tokens,
+                "llm_calls": self.metrics.llm_calls,
                 "tool_calls": self.metrics.tool_calls,
+                "seconds": self.metrics.seconds,
             },
             "output": self.output,
             "evidence": self.evidence,
