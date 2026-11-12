@@ -29,7 +29,7 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-NOT_BUILT = [d for d in Dimension if d is not Dimension.SAFETY]
+NOT_BUILT = [d for d in Dimension if d not in (Dimension.SAFETY, Dimension.CLARITY)]
 
 
 def make_skill(root, name, body="# Skill\n\nSummarize the file.\n"):
@@ -52,7 +52,7 @@ def out(tmp_path):
 
 @pytest.fixture
 def scorers(monkeypatch, tmp_path):
-    """Puts a module in metaskill.evaluate for one test: scorers("clarity", source)."""
+    """Puts a module in metaskill.evaluate for one test: scorers("efficiency", source)."""
     folder = tmp_path / "scorers"
     folder.mkdir()
     monkeypatch.setattr(evaluate, "__path__", [*evaluate.__path__, str(folder)])
@@ -94,13 +94,13 @@ def test_a_skill_with_unbuilt_dimensions_is_listed_as_unranked(tmp_path, out):
 
 
 def test_a_new_dimension_module_is_picked_up(tmp_path, out, scorers):
-    scorers("clarity", "from metaskill.evaluate.models import *\n"
-                       "def score(skill, config, llm=None):\n"
-                       "    return DimensionScore(Dimension.CLARITY, 0.75, reason=str(llm))\n")
+    scorers("efficiency", "from metaskill.evaluate.models import *\n"
+                          "def score(skill, config, llm=None):\n"
+                          "    return DimensionScore(Dimension.EFFICIENCY, 0.75, reason=str(llm))\n")
     ctx = SimpleNamespace(llm="the-llm")
     skill = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out, ctx=ctx)).skills[0]
-    assert skill.scores.clarity == 0.75
-    assert skill.dimensions[Dimension.CLARITY].reason == "the-llm"  # ctx.llm reached it
+    assert skill.scores.efficiency == 0.75
+    assert skill.dimensions[Dimension.EFFICIENCY].reason == "the-llm"  # ctx.llm reached it
 
 
 def test_a_module_that_fails_to_import_is_an_error_not_a_skip(tmp_path, out, scorers):
@@ -112,17 +112,23 @@ def test_a_module_that_fails_to_import_is_an_error_not_a_skip(tmp_path, out, sco
 
 
 def test_a_scorer_that_raises_is_an_error_without_its_message(tmp_path, out, scorers):
-    scorers("clarity", "def score(skill, config, llm=None):\n"
-                       "    raise RuntimeError('leaky-message-123')\n")
+    scorers("efficiency", "def score(skill, config, llm=None):\n"
+                          "    raise RuntimeError('leaky-message-123')\n")
     result = evaluate_skill(make_skill(tmp_path, "a"), output_path=out)
-    assert load(result).skills[0].dimensions[Dimension.CLARITY].status is Status.ERROR
+    assert load(result).skills[0].dimensions[Dimension.EFFICIENCY].status is Status.ERROR
     assert "leaky-message-123" not in json.dumps(result)
 
 
 def test_no_judge_is_a_skipped_dimension(tmp_path, out, scorers):
-    scorers("clarity", "from metaskill.evaluate.judge import JudgeUnavailable\n"
-                       "def score(skill, config, llm=None):\n"
-                       "    raise JudgeUnavailable('no provider')\n")
+    scorers("efficiency", "from metaskill.evaluate.judge import JudgeUnavailable\n"
+                          "def score(skill, config, llm=None):\n"
+                          "    raise JudgeUnavailable('no provider')\n")
+    status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)
+                  ).skills[0].dimensions[Dimension.EFFICIENCY]
+    assert status.status is Status.SKIPPED and status.detail == "no judge model is available"
+
+
+def test_clarity_without_model_access_is_skipped(tmp_path, out):
     status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)
                   ).skills[0].dimensions[Dimension.CLARITY]
     assert status.status is Status.SKIPPED and status.detail == "no judge model is available"

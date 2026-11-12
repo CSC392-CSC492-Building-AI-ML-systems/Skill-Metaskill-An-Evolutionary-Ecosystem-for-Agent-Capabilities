@@ -1,13 +1,18 @@
 {
   "dataset": "clarity-golden",
-  "revision": "0.1.0-draft",
+  "revision": "0.2.0-draft",
   "status": "provisional",
-  "description": "Temporary positive-control set: ten synthetic skills written to score high on the four Clarity criteria. Not reviewed; for team analysis only.",
+  "location": "temporary: tests/fixtures/golden/clarity/ until the golden dataset's home is agreed",
+  "rubric_version": "1",
+  "description": "Ten synthetic high-clarity skills and ten unclear variants, one per skill, for the merged seven-criterion Clarity rubric (docs/evaluate-clarity.md). Not reviewed; for team analysis only.",
   "criteria": {
-    "conciseness": "Says what it needs to and stops. No padding, repetition, or long preambles.",
-    "accessible_language": "A reader with basic knowledge of the subject can follow it. Jargon and technical or scientific names are avoided or explained in plain words when first used.",
-    "readability": "A person skimming the skill can tell at a high level what it accomplishes without an AI summarising or explaining it.",
-    "problem_and_structure": "The problem the skill solves is stated clearly, the sections are well organised, and the writing flows from one step to the next."
+    "purpose_and_trigger": "The problem the skill solves, when to use it, and when not to are stated. (User criterion 4, problem part; previous rubric: trigger specificity.)",
+    "conciseness": "Says what it needs to and stops. No padding, repetition, or long preambles. (User criterion 1.)",
+    "accessible_language": "A reader with basic subject knowledge can follow it; jargon, acronyms and scientific names are avoided or explained at first use. (User criterion 2.)",
+    "readability": "A person can tell what the skill accomplishes, and follow it, without an AI summarising or explaining it. (User criterion 3; previous rubric: human followability.)",
+    "structure_and_flow": "Sections are organised, steps are in the order they must be done, and the writing flows. (User criterion 4, structure part; previous rubric: step ordering.)",
+    "verifiability": "Required inputs, intermediate results and completion can be checked. (Previous rubric.)",
+    "failure_handling": "Relevant failures and the recovery or stopping behaviour are clear. (Previous rubric.)"
   },
   "cases": [
     {
@@ -19,32 +24,82 @@
       "expected_label": "high",
       "expectations": [
         {
+          "expectation_id": "csv-dedupe-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "When to use and when not to use are both listed"
+          ],
+          "evidence_quotes": [
+            "The user asks to remove duplicates from a CSV file."
+          ],
+          "rationale": "Trigger and limits (exact matches only, CSV only) are explicit."
+        },
+        {
           "expectation_id": "csv-dedupe-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Purpose stated in two sentences", "Each section has one job and no restated content"],
-          "evidence_quotes": ["Removes repeated rows from a CSV file so each record appears once."],
+          "expected_properties": [
+            "Purpose stated in two sentences",
+            "Each section has one job and no restated content"
+          ],
+          "evidence_quotes": [
+            "Removes repeated rows from a CSV file so each record appears once."
+          ],
           "rationale": "The opening states the outcome and the safety guarantee in two sentences; everything else is steps or recovery."
         },
         {
-          "expectation_id": "csv-dedupe-accessible-language",
+          "expectation_id": "csv-dedupe-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Exact vs fuzzy matching is explained with an example rather than terminology"],
-          "evidence_quotes": ["The user wants to merge rows that are only *similar* (such as \"Jon Smith\" and \"John Smith\"). This skill only removes exact matches."],
+          "expected_properties": [
+            "Exact vs fuzzy matching is explained with an example rather than terminology"
+          ],
+          "evidence_quotes": [
+            "The user wants to merge rows that are only *similar* (such as \"Jon Smith\" and \"John Smith\"). This skill only removes exact matches."
+          ],
           "rationale": "Uses a concrete example instead of terms like 'fuzzy deduplication' or 'record linkage'."
         },
         {
           "expectation_id": "csv-dedupe-readability",
           "criterion": "readability",
-          "expected_properties": ["Title, description and first line agree on what the skill does"],
-          "evidence_quotes": ["description: Remove duplicate rows from a CSV file and report how many were removed."],
+          "expected_properties": [
+            "Title, description and first line agree on what the skill does"
+          ],
+          "evidence_quotes": [
+            "description: Remove duplicate rows from a CSV file and report how many were removed."
+          ],
           "rationale": "A reader knows the outcome from the metadata alone."
         },
         {
-          "expectation_id": "csv-dedupe-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Use / not-use / steps / check / recovery in that order", "Completion check is stated"],
-          "evidence_quotes": ["The rows-out count plus the removed count must equal the rows-in count."],
-          "rationale": "Sections follow the order a person would act in, ending with a verifiable completion condition."
+          "expectation_id": "csv-dedupe-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Inputs confirmed, then options, then run, then report"
+          ],
+          "evidence_quotes": [
+            "Confirm the file path with the user and check that it exists."
+          ],
+          "rationale": "Each step depends only on the ones before it."
+        },
+        {
+          "expectation_id": "csv-dedupe-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Completion check stated"
+          ],
+          "evidence_quotes": [
+            "The rows-out count plus the removed count must equal the rows-in count."
+          ],
+          "rationale": "A reader can check the result arithmetically."
+        },
+        {
+          "expectation_id": "csv-dedupe-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Named failures with a recovery each"
+          ],
+          "evidence_quotes": [
+            "the column name is wrong. Show the user the header row and ask them to pick again."
+          ],
+          "rationale": "Common failures stop or recover without guessing."
         }
       ],
       "limitations": "Contains an inline script; judges may treat code length as verbosity. Annotators consider the script necessary content."
@@ -58,32 +113,83 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "git-undo-conciseness",
+          "expectation_id": "git-undo-last-commit-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Concrete situations that trigger the skill"
+          ],
+          "evidence_quotes": [
+            "The user committed too early, to the wrong branch, or with a bad message, and wants to redo it."
+          ],
+          "rationale": "Trigger is specific; pushed commits are excluded."
+        },
+        {
+          "expectation_id": "git-undo-last-commit-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Four steps, one command each", "No background history of Git"],
-          "evidence_quotes": ["Undo it, keeping the changes staged:"],
+          "expected_properties": [
+            "Four steps, one command each",
+            "No background history of Git"
+          ],
+          "evidence_quotes": [
+            "Undo it, keeping the changes staged:"
+          ],
           "rationale": "Each step is one action with one command."
         },
         {
-          "expectation_id": "git-undo-accessible-language",
+          "expectation_id": "git-undo-last-commit-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Why pushed commits are excluded is explained in everyday terms"],
-          "evidence_quotes": ["Undoing it would rewrite history other people may have."],
+          "expected_properties": [
+            "Why pushed commits are excluded is explained in everyday terms"
+          ],
+          "evidence_quotes": [
+            "Undoing it would rewrite history other people may have."
+          ],
           "rationale": "Explains the risk without assuming knowledge of rebasing or force-pushing."
         },
         {
-          "expectation_id": "git-undo-readability",
+          "expectation_id": "git-undo-last-commit-readability",
           "criterion": "readability",
-          "expected_properties": ["Opening paragraph says what happens and that no work is lost"],
-          "evidence_quotes": ["Takes back the last commit without losing any work."],
+          "expected_properties": [
+            "Opening paragraph says what happens and that no work is lost"
+          ],
+          "evidence_quotes": [
+            "Takes back the last commit without losing any work."
+          ],
           "rationale": "Answers the reader's main worry (losing work) up front."
         },
         {
-          "expectation_id": "git-undo-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Safety check precedes the destructive-looking step", "Result check follows it"],
-          "evidence_quotes": ["Check that the last commit has not been pushed:", "Confirm it worked."],
-          "rationale": "Check, confirm, act, verify: dependencies are ordered correctly."
+          "expectation_id": "git-undo-last-commit-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Safety check precedes the change"
+          ],
+          "evidence_quotes": [
+            "Show the user the commit that will be undone and get a yes:"
+          ],
+          "rationale": "Check, confirm, act, verify."
+        },
+        {
+          "expectation_id": "git-undo-last-commit-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Observable result after the change"
+          ],
+          "evidence_quotes": [
+            "`git log -1 --oneline` should now show the commit *before* the one undone"
+          ],
+          "rationale": "The reader can confirm success with one command."
+        },
+        {
+          "expectation_id": "git-undo-last-commit-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Edge case with stopping behaviour",
+            "Recovery path"
+          ],
+          "evidence_quotes": [
+            "the repository has only one commit. There is nothing earlier to go back to; tell the user and stop."
+          ],
+          "rationale": "Covers the two realistic failures."
         }
       ],
       "limitations": "Assumes the reader knows what a commit is; that is the stated basic subject knowledge."
@@ -97,32 +203,81 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "meeting-conciseness",
+          "expectation_id": "meeting-action-items-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Trigger phrased in the user's words"
+          ],
+          "evidence_quotes": [
+            "The user shares a transcript or notes and asks for a summary, decisions, follow-ups, or \"what do I need to do\"."
+          ],
+          "rationale": "Clear trigger; full-record requests excluded."
+        },
+        {
+          "expectation_id": "meeting-action-items-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Each category is defined in one short phrase"],
-          "evidence_quotes": ["List each **decision**: something the group agreed on."],
+          "expected_properties": [
+            "Each category is defined in one short phrase"
+          ],
+          "evidence_quotes": [
+            "List each **decision**: something the group agreed on."
+          ],
           "rationale": "Definitions are a clause long, not a paragraph."
         },
         {
-          "expectation_id": "meeting-accessible-language",
+          "expectation_id": "meeting-action-items-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["No project-management jargon (RACI, deliverables, stakeholders)"],
-          "evidence_quotes": ["List **open questions**: topics raised but not settled."],
+          "expected_properties": [
+            "No project-management jargon (RACI, deliverables, stakeholders)"
+          ],
+          "evidence_quotes": [
+            "List **open questions**: topics raised but not settled."
+          ],
           "rationale": "Every term is ordinary English."
         },
         {
-          "expectation_id": "meeting-readability",
+          "expectation_id": "meeting-action-items-readability",
           "criterion": "readability",
-          "expected_properties": ["The problem and the output are both stated in the opening"],
-          "evidence_quotes": ["Long meeting notes hide the parts people actually need: what was decided and who is doing what."],
+          "expected_properties": [
+            "The problem and the output are both stated in the opening"
+          ],
+          "evidence_quotes": [
+            "Long meeting notes hide the parts people actually need: what was decided and who is doing what."
+          ],
           "rationale": "One sentence tells the reader why the skill exists and what it produces."
         },
         {
-          "expectation_id": "meeting-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Output template given", "Rule against inventing owners or dates"],
-          "evidence_quotes": ["If no owner or date was said, write \"unassigned\" or \"no date\". Do not invent one."],
-          "rationale": "The expected shape is shown, and the main failure (hallucinated owners) is addressed in the step itself."
+          "expectation_id": "meeting-action-items-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Output template given after the steps that fill it"
+          ],
+          "evidence_quotes": [
+            "Return the result in this layout:"
+          ],
+          "rationale": "Read, extract three lists, format."
+        },
+        {
+          "expectation_id": "meeting-action-items-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Every item traceable to the source"
+          ],
+          "evidence_quotes": [
+            "Every action item must trace back to something said in the transcript."
+          ],
+          "rationale": "Checkable against the transcript."
+        },
+        {
+          "expectation_id": "meeting-action-items-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Unlabelled speakers and truncated input handled"
+          ],
+          "evidence_quotes": [
+            "keep the action items but mark owners as \"unclear\" and tell the user."
+          ],
+          "rationale": "Degrades openly instead of inventing."
         }
       ],
       "limitations": "No tool use; tests clarity of a pure-writing skill."
@@ -136,32 +291,83 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "bird-conciseness",
+          "expectation_id": "backyard-bird-log-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Two triggers: identify and log"
+          ],
+          "evidence_quotes": [
+            "The user describes a bird they saw and wants to know what it was."
+          ],
+          "rationale": "Trigger is concrete; injured birds are excluded."
+        },
+        {
+          "expectation_id": "backyard-bird-log-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Asks for only four identifying details"],
-          "evidence_quotes": ["Ask for the four things that matter most, if the user has not given them:"],
+          "expected_properties": [
+            "Asks for only four identifying details"
+          ],
+          "evidence_quotes": [
+            "Ask for the four things that matter most, if the user has not given them:"
+          ],
           "rationale": "Limits questions to what changes the answer rather than listing every field mark."
         },
         {
-          "expectation_id": "bird-accessible-language",
+          "expectation_id": "backyard-bird-log-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Common names required by default", "Size described relative to familiar birds, not measurements or anatomy terms"],
-          "evidence_quotes": ["Use everyday bird names (such as \"American robin\"), not scientific names, unless the user asks for them.", "**Size**, compared with a familiar bird (sparrow, robin, crow)."],
+          "expected_properties": [
+            "Common names required by default",
+            "Size described relative to familiar birds, not measurements or anatomy terms"
+          ],
+          "evidence_quotes": [
+            "Use everyday bird names (such as \"American robin\"), not scientific names, unless the user asks for them.",
+            "**Size**, compared with a familiar bird (sparrow, robin, crow)."
+          ],
           "rationale": "Directly targets the 'scientific species names' failure the criterion names."
         },
         {
-          "expectation_id": "bird-readability",
+          "expectation_id": "backyard-bird-log-readability",
           "criterion": "readability",
-          "expected_properties": ["Audience (casual birdwatcher) and the two jobs (identify, log) stated up front"],
-          "evidence_quotes": ["Helps a casual birdwatcher put a name to a bird they saw and keeps a simple record of their sightings."],
+          "expected_properties": [
+            "Audience (casual birdwatcher) and the two jobs (identify, log) stated up front"
+          ],
+          "evidence_quotes": [
+            "Helps a casual birdwatcher put a name to a bird they saw and keeps a simple record of their sightings."
+          ],
           "rationale": "Reader knows who it is for and what it does from the first sentence."
         },
         {
-          "expectation_id": "bird-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Identify, confirm, then log", "Vague input handled by asking, not guessing"],
-          "evidence_quotes": ["say so plainly and ask for a photo or one more detail, rather than guessing."],
-          "rationale": "Logging only happens after the user confirms the match."
+          "expectation_id": "backyard-bird-log-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Identify, confirm, then log"
+          ],
+          "evidence_quotes": [
+            "Ask the user which one matches."
+          ],
+          "rationale": "Logging only happens after the user confirms."
+        },
+        {
+          "expectation_id": "backyard-bird-log-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Logged line read back"
+          ],
+          "evidence_quotes": [
+            "Read back the line you added and confirm the date and bird name with the user."
+          ],
+          "rationale": "Completion is confirmed with the user."
+        },
+        {
+          "expectation_id": "backyard-bird-log-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Vague input handled by asking"
+          ],
+          "evidence_quotes": [
+            "say so plainly and ask for a photo or one more detail, rather than guessing."
+          ],
+          "rationale": "Stops guessing when evidence is thin."
         }
       ],
       "limitations": "Primary control for jargon-heavy domains. Pair with a variant that uses Latin names and plumage terminology."
@@ -175,32 +381,82 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "image-conciseness",
+          "expectation_id": "image-resize-web-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Print use excluded with a reason"
+          ],
+          "evidence_quotes": [
+            "The images are for printing. Print needs the full-size originals."
+          ],
+          "rationale": "Limits are explicit."
+        },
+        {
+          "expectation_id": "image-resize-web-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["A single default width instead of a table of options"],
-          "evidence_quotes": ["Default to 1600 pixels wide, which suits most websites."],
+          "expected_properties": [
+            "A single default width instead of a table of options"
+          ],
+          "evidence_quotes": [
+            "Default to 1600 pixels wide, which suits most websites."
+          ],
           "rationale": "One sensible default with a one-clause justification."
         },
         {
-          "expectation_id": "image-accessible-language",
+          "expectation_id": "image-resize-web-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Explains the cost of large files in user terms, not compression terminology"],
-          "evidence_quotes": ["Photos straight from a phone or camera are often several megabytes each, which makes web pages slow."],
+          "expected_properties": [
+            "Explains the cost of large files in user terms, not compression terminology"
+          ],
+          "evidence_quotes": [
+            "Photos straight from a phone or camera are often several megabytes each, which makes web pages slow."
+          ],
           "rationale": "No mention of codecs, chroma subsampling, or DPI."
         },
         {
-          "expectation_id": "image-readability",
+          "expectation_id": "image-resize-web-readability",
           "criterion": "readability",
-          "expected_properties": ["The goal (smaller, still sharp) is stated in one line"],
-          "evidence_quotes": ["This skill makes smaller copies that still look sharp on screen."],
+          "expected_properties": [
+            "The goal (smaller, still sharp) is stated in one line"
+          ],
+          "evidence_quotes": [
+            "This skill makes smaller copies that still look sharp on screen."
+          ],
           "rationale": "High-level outcome is obvious without reading the commands."
         },
         {
-          "expectation_id": "image-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Prerequisite check is its own section before the steps", "Originals are protected"],
-          "evidence_quotes": ["Never write into the original folder."],
-          "rationale": "Setup, then action, then verification, with the main risk addressed explicitly."
+          "expectation_id": "image-resize-web-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Prerequisite section before the steps",
+            "Originals protected"
+          ],
+          "evidence_quotes": [
+            "ImageMagick must be installed. Check with `magick -version`."
+          ],
+          "rationale": "Setup, action, verification."
+        },
+        {
+          "expectation_id": "image-resize-web-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "File counts compared"
+          ],
+          "evidence_quotes": [
+            "The output folder has the same number of images as the input folder."
+          ],
+          "rationale": "Completion is countable."
+        },
+        {
+          "expectation_id": "image-resize-web-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Specific error message explained"
+          ],
+          "evidence_quotes": [
+            "the folder has no `.jpg` or `.png` files."
+          ],
+          "rationale": "Maps the tool's error to a fix."
         }
       ],
       "limitations": "Shell commands are Unix-style; Windows readers may need adaptation. Not a clarity defect under the current criteria."
@@ -214,32 +470,82 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "pdf-conciseness",
+          "expectation_id": "pdf-merge-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Out-of-scope use named"
+          ],
+          "evidence_quotes": [
+            "The user wants to edit text inside a PDF. Merging does not change page content."
+          ],
+          "rationale": "Limits are explicit."
+        },
+        {
+          "expectation_id": "pdf-merge-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["One-sentence purpose", "Single merge command"],
-          "evidence_quotes": ["Joins two or more PDF files into a single PDF. The originals are left untouched."],
+          "expected_properties": [
+            "One-sentence purpose",
+            "Single merge command"
+          ],
+          "evidence_quotes": [
+            "Joins two or more PDF files into a single PDF. The originals are left untouched."
+          ],
           "rationale": "The shortest skill in the set; nothing can be removed without losing information."
         },
         {
-          "expectation_id": "pdf-accessible-language",
+          "expectation_id": "pdf-merge-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Error messages are translated into what they mean for the user"],
-          "evidence_quotes": ["one input is broken or locked."],
+          "expected_properties": [
+            "Error messages are translated into what they mean for the user"
+          ],
+          "evidence_quotes": [
+            "one input is broken or locked."
+          ],
           "rationale": "Explains qpdf errors in plain terms."
         },
         {
-          "expectation_id": "pdf-readability",
+          "expectation_id": "pdf-merge-readability",
           "criterion": "readability",
-          "expected_properties": ["Common reason for using the skill given as an example"],
-          "evidence_quotes": ["for example to send one attachment instead of several."],
+          "expected_properties": [
+            "Common reason for using the skill given as an example"
+          ],
+          "evidence_quotes": [
+            "for example to send one attachment instead of several."
+          ],
           "rationale": "A reader immediately recognises when they would want this."
         },
         {
-          "expectation_id": "pdf-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Order confirmed before merging", "Page-count check after"],
-          "evidence_quotes": ["The page count of the new file must equal the sum of the page counts of the inputs:"],
+          "expectation_id": "pdf-merge-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Order confirmed before merging"
+          ],
+          "evidence_quotes": [
+            "List the files the user gave you, numbered, and ask them to confirm the order."
+          ],
+          "rationale": "Inputs fixed before acting."
+        },
+        {
+          "expectation_id": "pdf-merge-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Page-count check"
+          ],
+          "evidence_quotes": [
+            "The page count of the new file must equal the sum of the page counts of the inputs:"
+          ],
           "rationale": "Clear, checkable completion condition."
+        },
+        {
+          "expectation_id": "pdf-merge-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Locked or broken input, existing output"
+          ],
+          "evidence_quotes": [
+            "ask before overwriting it."
+          ],
+          "rationale": "Stops instead of overwriting."
         }
       ],
       "limitations": "Very short; useful for checking that the judge does not penalise brevity when nothing is missing."
@@ -253,16 +559,33 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "abtest-conciseness",
+          "expectation_id": "ab-test-readout-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Trigger and scope (two versions, counts only)"
+          ],
+          "evidence_quotes": [
+            "The user has visitor and conversion counts for two versions and wants to know which one won."
+          ],
+          "rationale": "Unsupported cases are excluded."
+        },
+        {
+          "expectation_id": "ab-test-readout-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Two ready-made sentences for the two outcomes instead of a statistics lecture"],
-          "evidence_quotes": ["Below 0.05: \"B's rate is higher, and luck alone is unlikely to explain it.\""],
+          "expected_properties": [
+            "Two ready-made sentences for the two outcomes instead of a statistics lecture"
+          ],
+          "evidence_quotes": [
+            "Below 0.05: \"B's rate is higher, and luck alone is unlikely to explain it.\""
+          ],
           "rationale": "Gives the agent exactly what to say, nothing more."
         },
         {
-          "expectation_id": "abtest-accessible-language",
+          "expectation_id": "ab-test-readout-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Every technical term (A/B test, conversion, p-value) is defined in plain words at first use"],
+          "expected_properties": [
+            "Every technical term (A/B test, conversion, p-value) is defined in plain words at first use"
+          ],
           "evidence_quotes": [
             "An A/B test shows two versions of something (say, two sign-up pages) to different visitors and compares how often each one works.",
             "visitors who did the thing being measured, such as signing up",
@@ -271,18 +594,48 @@
           "rationale": "Hardest jargon domain in the set; terms are unavoidable, so each is explained on first use."
         },
         {
-          "expectation_id": "abtest-readability",
+          "expectation_id": "ab-test-readout-readability",
           "criterion": "readability",
-          "expected_properties": ["States the user's real question"],
-          "evidence_quotes": ["\"Is B really better, or could the difference be luck?\""],
+          "expected_properties": [
+            "States the user's real question"
+          ],
+          "evidence_quotes": [
+            "\"Is B really better, or could the difference be luck?\""
+          ],
           "rationale": "A non-statistician understands the skill's goal from this question alone."
         },
         {
-          "expectation_id": "abtest-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Inputs listed in their own section", "Scope limits (two versions, counts only) stated"],
-          "evidence_quotes": ["For each version: the number of **visitors** and the number of **conversions**"],
-          "rationale": "Inputs, computation, interpretation, and limits are in separate, ordered sections."
+          "expectation_id": "ab-test-readout-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Inputs listed in their own section before the steps"
+          ],
+          "evidence_quotes": [
+            "For each version: the number of **visitors** and the number of **conversions**"
+          ],
+          "rationale": "Inputs, computation, interpretation, limits."
+        },
+        {
+          "expectation_id": "ab-test-readout-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Input sanity check"
+          ],
+          "evidence_quotes": [
+            "Check that conversions are never larger than visitors."
+          ],
+          "rationale": "Bad input is caught before computing."
+        },
+        {
+          "expectation_id": "ab-test-readout-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Small samples and peeking covered"
+          ],
+          "evidence_quotes": [
+            "the numbers are too small for this method. Say so instead of reporting a p-value."
+          ],
+          "rationale": "Refuses to report a misleading number."
         }
       ],
       "limitations": "Contains a formula in code; a judge may count statistical code as jargon. Annotators treat code blocks as instructions for the agent, not reader-facing prose."
@@ -296,32 +649,81 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "recipe-conciseness",
+          "expectation_id": "recipe-scaling-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Trigger stated; substitution excluded"
+          ],
+          "evidence_quotes": [
+            "The user has a recipe and wants it for a different number of people."
+          ],
+          "rationale": "Clear trigger and limit."
+        },
+        {
+          "expectation_id": "recipe-scaling-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Rounding rules are three short bullets"],
-          "evidence_quotes": ["Grams to the nearest 5 g."],
+          "expected_properties": [
+            "Rounding rules are three short bullets"
+          ],
+          "evidence_quotes": [
+            "Grams to the nearest 5 g."
+          ],
           "rationale": "Rules are stated, not argued."
         },
         {
-          "expectation_id": "recipe-accessible-language",
+          "expectation_id": "recipe-scaling-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Scale factor explained with a worked number"],
-          "evidence_quotes": ["For 4 servings scaled to 6, the factor is 1.5."],
+          "expected_properties": [
+            "Scale factor explained with a worked number"
+          ],
+          "evidence_quotes": [
+            "For 4 servings scaled to 6, the factor is 1.5."
+          ],
           "rationale": "A home cook can follow the arithmetic without the word 'ratio' being defined."
         },
         {
-          "expectation_id": "recipe-readability",
+          "expectation_id": "recipe-scaling-readability",
           "criterion": "readability",
-          "expected_properties": ["Outcome stated in terms of what the cook gets"],
-          "evidence_quotes": ["with amounts rounded to things a home cook can actually measure."],
+          "expected_properties": [
+            "Outcome stated in terms of what the cook gets"
+          ],
+          "evidence_quotes": [
+            "with amounts rounded to things a home cook can actually measure."
+          ],
           "rationale": "High-level purpose is clear on first read."
         },
         {
-          "expectation_id": "recipe-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Exceptions grouped in their own section after the main steps"],
-          "evidence_quotes": ["Point these out to the user rather than changing them silently:"],
-          "rationale": "Main path first, edge cases second, so the flow is not interrupted."
+          "expectation_id": "recipe-scaling-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Exceptions grouped after the main steps"
+          ],
+          "evidence_quotes": [
+            "Point these out to the user rather than changing them silently:"
+          ],
+          "rationale": "Main path first, edge cases second."
+        },
+        {
+          "expectation_id": "recipe-scaling-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Ratio check"
+          ],
+          "evidence_quotes": [
+            "Their ratio to each other should be the same."
+          ],
+          "rationale": "Result can be checked by comparing two ingredients."
+        },
+        {
+          "expectation_id": "recipe-scaling-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Non-linear ingredients flagged instead of scaled blindly"
+          ],
+          "evidence_quotes": [
+            "Keep the original time and tell the user to check early and often."
+          ],
+          "rationale": "Failure cases live under 'Things That Do Not Scale Evenly'; tests that the judge does not require a fixed heading."
         }
       ],
       "limitations": "No 'If Something Goes Wrong' section; failure cases are covered under 'Things That Do Not Scale Evenly'. Tests that the judge does not require a fixed heading."
@@ -335,32 +737,82 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "links-conciseness",
+          "expectation_id": "markdown-link-check-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Login-protected sites excluded with a reason"
+          ],
+          "evidence_quotes": [
+            "The site is behind a login. The check cannot see those pages and would report them all as broken."
+          ],
+          "rationale": "Limits are explicit."
+        },
+        {
+          "expectation_id": "markdown-link-check-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Output format described in one sentence"],
-          "evidence_quotes": ["Each line gives the file, line number, link, and reason."],
+          "expected_properties": [
+            "Output format described in one sentence"
+          ],
+          "evidence_quotes": [
+            "Each line gives the file, line number, link, and reason."
+          ],
           "rationale": "No sample output dump needed."
         },
         {
-          "expectation_id": "links-accessible-language",
+          "expectation_id": "markdown-link-check-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["HTTP status codes are explained by their meaning, not left bare"],
-          "evidence_quotes": ["the site is blocking automated checks, not necessarily broken."],
+          "expected_properties": [
+            "HTTP status codes are explained by their meaning, not left bare"
+          ],
+          "evidence_quotes": [
+            "the site is blocking automated checks, not necessarily broken."
+          ],
           "rationale": "A reader does not need to know what 403/429 mean."
         },
         {
-          "expectation_id": "links-readability",
+          "expectation_id": "markdown-link-check-readability",
           "criterion": "readability",
-          "expected_properties": ["Why the problem happens and what the skill does about it in two sentences"],
-          "evidence_quotes": ["Documentation goes stale when files move or websites change."],
+          "expected_properties": [
+            "Why the problem happens and what the skill does about it in two sentences"
+          ],
+          "evidence_quotes": [
+            "Documentation goes stale when files move or websites change."
+          ],
           "rationale": "Problem and purpose are clear before any command appears."
         },
         {
-          "expectation_id": "links-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Result check warns against misreading an empty result"],
-          "evidence_quotes": ["Say clearly whether web links were included, so \"no broken links\" is not misread."],
-          "rationale": "Completion condition is explicit and guards a likely misunderstanding."
+          "expectation_id": "markdown-link-check-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Options chosen before running; results grouped after"
+          ],
+          "evidence_quotes": [
+            "Group the results by file and show them to the user."
+          ],
+          "rationale": "Ordered and complete."
+        },
+        {
+          "expectation_id": "markdown-link-check-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Empty result explained"
+          ],
+          "evidence_quotes": [
+            "Say clearly whether web links were included, so \"no broken links\" is not misread."
+          ],
+          "rationale": "Guards a likely misreading."
+        },
+        {
+          "expectation_id": "markdown-link-check-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Blocked checks separated from broken links",
+            "Slow runs handled"
+          ],
+          "evidence_quotes": [
+            "run it without `--web` first, then check web links for one file at a time."
+          ],
+          "rationale": "Recovery for both realistic failures."
         }
       ],
       "limitations": "Longest inline script in the set; second check that code length is not scored as wordiness."
@@ -374,35 +826,537 @@
       "expected_label": "high",
       "expectations": [
         {
-          "expectation_id": "spending-conciseness",
+          "expectation_id": "monthly-spending-review-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Advice requests excluded"
+          ],
+          "evidence_quotes": [
+            "The user wants investment, tax, or debt advice. Say this skill only summarizes past spending."
+          ],
+          "rationale": "Limits are explicit."
+        },
+        {
+          "expectation_id": "monthly-spending-review-conciseness",
           "criterion": "conciseness",
-          "expected_properties": ["Fixed, short category list rather than an open-ended taxonomy"],
-          "evidence_quotes": ["Housing, Groceries, Eating out, Transport, Bills and subscriptions, Shopping, Other."],
+          "expected_properties": [
+            "Fixed, short category list rather than an open-ended taxonomy"
+          ],
+          "evidence_quotes": [
+            "Housing, Groceries, Eating out, Transport, Bills and subscriptions, Shopping, Other."
+          ],
           "rationale": "Seven named categories; no explanation needed for any of them."
         },
         {
-          "expectation_id": "spending-accessible-language",
+          "expectation_id": "monthly-spending-review-accessible_language",
           "criterion": "accessible_language",
-          "expected_properties": ["Accounting terms avoided or paraphrased"],
-          "evidence_quotes": ["Keep only spending (money going out)."],
+          "expected_properties": [
+            "Accounting terms avoided or paraphrased"
+          ],
+          "evidence_quotes": [
+            "Keep only spending (money going out)."
+          ],
           "rationale": "Uses 'money going out' instead of 'debits' or 'outflows' in the main steps."
         },
         {
-          "expectation_id": "spending-readability",
+          "expectation_id": "monthly-spending-review-readability",
           "criterion": "readability",
-          "expected_properties": ["States the gap between raw statements and what the user wants"],
-          "evidence_quotes": ["Bank statements list every purchase but rarely show the big picture."],
+          "expected_properties": [
+            "States the gap between raw statements and what the user wants"
+          ],
+          "evidence_quotes": [
+            "Bank statements list every purchase but rarely show the big picture."
+          ],
           "rationale": "Reader understands the skill's purpose from the first sentence."
         },
         {
-          "expectation_id": "spending-problem-and-structure",
-          "criterion": "problem_and_structure",
-          "expected_properties": ["Example table shows the expected output", "Totals must reconcile"],
-          "evidence_quotes": ["The category totals must add up to the total spending for the month."],
-          "rationale": "Ordered steps lead to a shown output and a verifiable check."
+          "expectation_id": "monthly-spending-review-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Example output shown after the steps that produce it"
+          ],
+          "evidence_quotes": [
+            "Show a table, largest category first:"
+          ],
+          "rationale": "Ordered steps lead to a shown output."
+        },
+        {
+          "expectation_id": "monthly-spending-review-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Totals reconcile"
+          ],
+          "evidence_quotes": [
+            "The category totals must add up to the total spending for the month."
+          ],
+          "rationale": "Checkable completion."
+        },
+        {
+          "expectation_id": "monthly-spending-review-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Two-column exports and unclear categories handled"
+          ],
+          "evidence_quotes": [
+            "list the ten largest ones and ask the user where they belong."
+          ],
+          "rationale": "Asks rather than guesses."
         }
       ],
       "limitations": "Mentions 'debit column' once in failure handling; annotators consider this acceptable because bank exports use that label."
+    },
+    {
+      "case_id": "clarity-low-001",
+      "skill": "csv-dedupe-unclear",
+      "skill_path": "skills/csv-dedupe-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-001",
+      "targeted_criteria": [
+        "conciseness",
+        "purpose_and_trigger",
+        "verifiability"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "csv-dedupe-unclear-conciseness",
+          "criterion": "conciseness",
+          "expected_properties": [
+            "Long preamble and conclusion unrelated to the steps",
+            "Repeats the same point"
+          ],
+          "evidence_quotes": [
+            "In today's data-driven world, data is more important than ever before."
+          ],
+          "rationale": "About two thirds of the text is filler around one vague step."
+        },
+        {
+          "expectation_id": "csv-dedupe-unclear-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Description does not say the skill removes duplicates",
+            "No when-to-use section"
+          ],
+          "evidence_quotes": [
+            "A comprehensive and robust skill for working with CSV data in many different situations."
+          ],
+          "rationale": "A reader cannot tell from the metadata what the skill does."
+        },
+        {
+          "expectation_id": "csv-dedupe-unclear-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "No count reported",
+            "Original file overwritten, so nothing to compare"
+          ],
+          "evidence_quotes": [
+            "csv.writer(open(sys.argv[1], \"w\")).writerows(out)"
+          ],
+          "rationale": "Nothing the reader can check; the input is destroyed."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-002",
+      "skill": "git-undo-last-commit-unclear",
+      "skill_path": "skills/git-undo-last-commit-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-002",
+      "targeted_criteria": [
+        "accessible_language",
+        "readability"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "git-undo-last-commit-unclear-accessible_language",
+          "criterion": "accessible_language",
+          "expected_properties": [
+            "Git internals jargon with no plain explanation"
+          ],
+          "evidence_quotes": [
+            "Moves the branch ref to `HEAD^` via a soft reset so the tree of the orphaned commit remains staged in the index while the working tree is untouched."
+          ],
+          "rationale": "A basic Git user cannot follow it."
+        },
+        {
+          "expectation_id": "git-undo-last-commit-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "The pushed-commit check is stated as jargon, not an action"
+          ],
+          "evidence_quotes": [
+            "Verify ref divergence against the tracking ref"
+          ],
+          "rationale": "The reader cannot tell what to actually do."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-003",
+      "skill": "meeting-action-items-unclear",
+      "skill_path": "skills/meeting-action-items-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-003",
+      "targeted_criteria": [
+        "purpose_and_trigger",
+        "structure_and_flow",
+        "readability",
+        "failure_handling"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "meeting-action-items-unclear-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "One-word description",
+            "No trigger"
+          ],
+          "evidence_quotes": [
+            "description: Meetings."
+          ],
+          "rationale": "Purpose must be inferred."
+        },
+        {
+          "expectation_id": "meeting-action-items-unclear-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Sections in reverse of working order",
+            "Steps section is in the middle"
+          ],
+          "evidence_quotes": [
+            "Read it. Then the decisions, then the other things."
+          ],
+          "rationale": "Format comes before content; decisions come last."
+        },
+        {
+          "expectation_id": "meeting-action-items-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "Vague, hedged definitions"
+          ],
+          "evidence_quotes": [
+            "Things agreed, roughly."
+          ],
+          "rationale": "A reader cannot tell what counts."
+        },
+        {
+          "expectation_id": "meeting-action-items-unclear-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Missing owners and dates are invented"
+          ],
+          "evidence_quotes": [
+            "If there is no date pick something reasonable like end of week."
+          ],
+          "rationale": "Mishandles the main failure case."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-004",
+      "skill": "backyard-bird-log-unclear",
+      "skill_path": "skills/backyard-bird-log-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-004",
+      "targeted_criteria": [
+        "accessible_language",
+        "readability"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "backyard-bird-log-unclear-accessible_language",
+          "criterion": "accessible_language",
+          "expected_properties": [
+            "Ornithological jargon",
+            "Scientific names instead of common names"
+          ],
+          "evidence_quotes": [
+            "Elicit GISS (jizz), bill morphology",
+            "*Turdus migratorius* vs. *Ixoreus naevius*"
+          ],
+          "rationale": "A casual birdwatcher cannot follow it; the direct target of user criterion 2."
+        },
+        {
+          "expectation_id": "backyard-bird-log-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "Purpose stated in taxonomic terms"
+          ],
+          "evidence_quotes": [
+            "Assists with field ID of Passeriformes and allied orders and records the observation."
+          ],
+          "rationale": "A reader needs the jargon explained to know what the skill is for."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-005",
+      "skill": "image-resize-web-unclear",
+      "skill_path": "skills/image-resize-web-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-005",
+      "targeted_criteria": [
+        "structure_and_flow"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "image-resize-web-unclear-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Report step comes first; input step last",
+            "Prerequisites placed after the steps"
+          ],
+          "evidence_quotes": [
+            "Report how many files were processed and the total size before and after:",
+            "which is why it is mentioned here after the steps."
+          ],
+          "rationale": "Same content as the clear twin, shuffled: isolates structure from content."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-006",
+      "skill": "pdf-merge-unclear",
+      "skill_path": "skills/pdf-merge-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-006",
+      "targeted_criteria": [
+        "purpose_and_trigger",
+        "readability",
+        "verifiability",
+        "failure_handling"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "pdf-merge-unclear-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Two-word description",
+            "No trigger or limits"
+          ],
+          "evidence_quotes": [
+            "description: PDF helper."
+          ],
+          "rationale": "Purpose must be inferred from the command."
+        },
+        {
+          "expectation_id": "pdf-merge-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "Vague instruction"
+          ],
+          "evidence_quotes": [
+            "Handle the PDFs as needed."
+          ],
+          "rationale": "A reader cannot tell what the skill does."
+        },
+        {
+          "expectation_id": "pdf-merge-unclear-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "No check of the result"
+          ],
+          "evidence_quotes": [
+            "Adjust as appropriate."
+          ],
+          "rationale": "Nothing to verify."
+        },
+        {
+          "expectation_id": "pdf-merge-unclear-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Merge order is glob order",
+            "Existing output overwritten silently"
+          ],
+          "evidence_quotes": [
+            "qpdf --empty --pages *.pdf -- out.pdf"
+          ],
+          "rationale": "No confirmation or recovery."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-007",
+      "skill": "ab-test-readout-unclear",
+      "skill_path": "skills/ab-test-readout-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-007",
+      "targeted_criteria": [
+        "accessible_language",
+        "readability"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "ab-test-readout-unclear-accessible_language",
+          "criterion": "accessible_language",
+          "expected_properties": [
+            "Statistical notation and acronyms unexplained"
+          ],
+          "evidence_quotes": [
+            "Computes a pooled two-proportion z-statistic under H0: p_A = p_B against a two-sided H1",
+            "Assume i.i.d. Bernoulli outcomes, SUTVA"
+          ],
+          "rationale": "Same method as the clear twin, without plain explanations: isolates jargon."
+        },
+        {
+          "expectation_id": "ab-test-readout-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "Description only meaningful to a statistician"
+          ],
+          "evidence_quotes": [
+            "description: Two-proportion z-test readout with NHST interpretation for binary-outcome RCTs."
+          ],
+          "rationale": "A product manager cannot tell what it does."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-008",
+      "skill": "recipe-scaling-unclear",
+      "skill_path": "skills/recipe-scaling-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-008",
+      "targeted_criteria": [
+        "conciseness",
+        "failure_handling"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "recipe-scaling-unclear-conciseness",
+          "criterion": "conciseness",
+          "expected_properties": [
+            "Long preamble, history and sign-off",
+            "The one rule repeated several times"
+          ],
+          "evidence_quotes": [
+            "The history of recipe scaling is actually quite interesting."
+          ],
+          "rationale": "Padding buries a single instruction."
+        },
+        {
+          "expectation_id": "recipe-scaling-unclear-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Non-linear ingredients dismissed"
+          ],
+          "evidence_quotes": [
+            "Some things might not scale perfectly, like spices or baking times, but you will learn with practice."
+          ],
+          "rationale": "Names the failure and gives no handling."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-009",
+      "skill": "markdown-link-check-unclear",
+      "skill_path": "skills/markdown-link-check-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-009",
+      "targeted_criteria": [
+        "verifiability",
+        "failure_handling"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "markdown-link-check-unclear-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Script prints nothing, so results cannot be reported"
+          ],
+          "evidence_quotes": [
+            "Tell the user about the bad ones."
+          ],
+          "rationale": "The step cannot be carried out or checked."
+        },
+        {
+          "expectation_id": "markdown-link-check-unclear-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "All errors swallowed"
+          ],
+          "evidence_quotes": [
+            "except Exception:"
+          ],
+          "rationale": "Broken and blocked links are indistinguishable from working ones."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-010",
+      "skill": "monthly-spending-review-unclear",
+      "skill_path": "skills/monthly-spending-review-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-010",
+      "targeted_criteria": [
+        "purpose_and_trigger",
+        "structure_and_flow",
+        "readability"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "monthly-spending-review-unclear-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Two-word description"
+          ],
+          "evidence_quotes": [
+            "description: Spending review."
+          ],
+          "rationale": "No trigger or limits."
+        },
+        {
+          "expectation_id": "monthly-spending-review-unclear-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "All steps in one run-on sentence"
+          ],
+          "evidence_quotes": [
+            "Open the file and find the right columns, which vary,"
+          ],
+          "rationale": "No sections or step boundaries."
+        },
+        {
+          "expectation_id": "monthly-spending-review-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "Hedged, open-ended instructions"
+          ],
+          "evidence_quotes": [
+            "sorted however makes sense"
+          ],
+          "rationale": "A reader must guess at most choices."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
     }
   ]
 }

@@ -214,7 +214,7 @@ Each criterion from the Purpose is scored in `[0, 1]` with supporting evidence. 
 |---|---|---|---|
 | **Quality** | Run test tasks, with vs. without the skill | high | Task pass rate and lift over baseline |
 | **Robustness** | Repeat the same tasks `n` times | high | Agreement of outcomes across runs |
-| **Clarity** | LLM judge against a rubric | low | Specific trigger, ordered and actionable steps, failure handling |
+| **Clarity** | LLM judge against a rubric | low | Purpose and trigger, conciseness, plain language, readability, structure, verifiability, failure handling |
 | **Configuration Cleanliness** | Static + LLM | low | Number and necessity of config entries, documented placeholders, setup steps |
 | **Efficiency** | Measured during task runs | medium | Tokens, wall-clock time, tool calls per task |
 | **Safety** | External scanner + own checks; optional LLM tier | none (static), low (deep) | Malicious content, destructive actions without confirmation, credentials printed or logged, untrusted sources, excess scope |
@@ -231,7 +231,7 @@ Does the skill behave consistently? Run each task `n` times (default 3) and meas
 
 ### 3.3 Clarity (LLM judge)
 
-Fixed rubric with anchored levels per criterion: trigger specificity, step ordering, verifiability of steps, handling of failure cases, and whether a human reader could follow it as well as an agent. The judge must quote the text supporting each rating.
+Fixed rubric with five anchored levels per criterion: purpose and trigger, conciseness, accessible language, readability (a person could follow it as well as an agent), structure and flow, verifiability, and failure handling. The judge must quote the text supporting each rating. The rubric, scoring rule and golden set are in [evaluate-clarity.md](evaluate-clarity.md).
 
 ### 3.4 Configuration Cleanliness
 

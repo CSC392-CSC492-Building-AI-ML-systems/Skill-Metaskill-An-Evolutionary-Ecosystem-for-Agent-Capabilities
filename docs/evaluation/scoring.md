@@ -202,29 +202,25 @@ When all runs pass but receive different partial-credit scores, agreement stays 
 
 ### Rubric
 
-Use the five criteria in the evaluation design, weighted equally initially:
-
-1. Trigger specificity.
-2. Step ordering.
-3. Verifiability of steps.
-4. Failure handling.
-5. Human followability.
-
-**[PROPOSED]** Rate each criterion on a five-level anchored scale, normalized to `0`, `0.25`, `0.5`, `0.75`, and `1`.
+**[IMPLEMENTED, DRAFT]** The original five criteria (trigger specificity, step ordering, verifiability, failure handling, human followability) are merged with four writing criteria (concise, understandable, readable, clearly framed and structured) into seven, weighted equally. Full anchors are in [`clarity.py`](../../metaskill/evaluate/clarity.py); the merge is explained in [evaluate-clarity.md](../evaluate-clarity.md), section 1.
 
 | Criterion | 0 | 0.5 | 1 |
 | --- | --- | --- | --- |
-| Trigger specificity | Purpose or trigger is absent or misleading. | Main use is identifiable, but important activation boundaries are unclear. | Intended use and relevant boundaries are explicit. |
-| Step ordering | Instructions are contradictory or cannot be followed. | Main sequence is understandable but requires resolving dependencies. | Dependencies and execution order are clear. |
-| Verifiability | Success cannot be checked from the instructions. | Some inputs or intermediate results can be checked. | Required inputs, meaningful intermediate checks, and completion conditions are observable. |
-| Failure handling | Relevant failures are ignored or mishandled. | Common failure guidance exists but leaves meaningful gaps. | Relevant failures and recovery or stopping behaviour are clear. |
-| Human followability | A reader cannot determine what to do. | A knowledgeable reader can proceed with some guessing. | The intended reader can follow the workflow with stated prerequisites. |
+| Purpose and trigger | No purpose or trigger can be found, or they are misleading. | The main purpose is identifiable, but when to use it, or its limits, are unclear. | The problem, when to use it, and its relevant limits are explicit. |
+| Conciseness | Mostly padding: the instructions are buried. | Noticeable filler or repetition, but the core is easy to find. | Nothing could be cut without losing information. |
+| Accessible language | Dense, unexplained jargon throughout. | Some unexplained terms a basic reader would have to look up. | Plain words; unavoidable terms explained at first use. |
+| Readability | A reader cannot tell what the skill does or what to do. | A knowledgeable reader can proceed with some guessing. | The goal is clear at a glance; a person could follow it as well as an agent. |
+| Structure and flow | Contradictory, or no order can be found. | Main sequence understandable; the reader must work out dependencies. | Logical sections, prerequisites first, smooth flow. |
+| Verifiability | Success cannot be checked from the instructions. | Some inputs or intermediate results can be checked. | Required inputs, meaningful intermediate checks, and completion are observable. |
+| Failure handling | Relevant failures are ignored or mishandled. | Common failures are covered, with meaningful gaps. | Relevant failures and recovery or stopping behaviour are clear. |
 
-The `0.25` and `0.75` levels indicate evidence between adjacent anchors and require an explanation of the remaining gap.
+Each criterion has five levels, normalized to `0`, `0.25`, `0.5`, `0.75`, and `1`; the `0.25` and `0.75` anchors are in `clarity.py`.
 
 ```text
-C = mean(criterion ratings)
+C = (sum of criterion ratings) / 7, an unrated criterion counting as 0
 ```
+
+**[PROPOSED]** An unrated criterion (no verifiable quote) counts as 0 and makes the result `partial`, rather than being left out of the mean; see evaluate-clarity.md, section 2.
 
 Require real supporting quotes. For an omitted requirement, quote the relevant surrounding workflow and explain the omission; do not invent a quote of absent text. Extra verbosity is not itself evidence of clarity.
 

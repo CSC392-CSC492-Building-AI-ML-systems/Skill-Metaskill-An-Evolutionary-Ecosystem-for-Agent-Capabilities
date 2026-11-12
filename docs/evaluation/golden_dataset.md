@@ -80,13 +80,9 @@ Edge-case handling remains part of the task's expected behaviour; an edge-case f
 
 ### Clarity
 
-Clarity uses an LLM judge against anchored rubric criteria from the evaluation design:
+Clarity uses an LLM judge against the seven anchored rubric criteria in [evaluate-clarity.md](../evaluate-clarity.md): purpose and trigger, conciseness, accessible language, readability, structure and flow, verifiability, and failure handling.
 
-- Trigger specificity.
-- Step ordering.
-- Verifiability of steps.
-- Handling of failure cases.
-- Whether a human reader could follow the workflow as well as an agent.
+A temporary draft set of ten clear skills and ten unclear variants is described in evaluate-clarity.md, section 4, until the dataset's location below is agreed.
 
 Golden annotations identify the relevant text, expected properties, and rationale for an anchored judgment. Each reported rating must quote supporting skill text. Exact rubric anchors still need agreement; unexplained numeric labels are insufficient.
 
