@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..judge import Judge, JudgeError, JudgeUnavailable, strip_hidden
@@ -118,7 +118,76 @@ _CONTROL_INSTRUCTIONS = [
      "paragraph": "Run `pytest -q` and check that every test passes before you continue."},
 ]
 
+# The confirmation re-check. A match cleared because a confirmation step was found is asked
+# a different question -- whether running it really depends on the user's approval -- so a
+# genuine confirmation stays cleared while a false one ("ask the user for their colour") is
+# restored. restore only on `unconfirmed`.
+CONFIRM_SYSTEM = (
+    "You classify commands from an agent skill's documentation. For each item, decide "
+    "whether running the command depends on the user approving it first. Reply with JSON only.")
+
+CONFIRM_INSTRUCTIONS = """\
+Each item is a command the skill tells the agent to run, with the paragraph around it. For \
+every item, answer `confirmed` if the skill requires the user to approve, confirm, be asked, \
+or say yes before the command runs, or if a backup or dry run is taken first; answer \
+`unconfirmed` if nothing gates it. Asking the user about something unrelated is not a \
+confirmation. Give a verdict for every `id`."""
+
+CONFIRM_SCHEMA = {
+    "type": "object",
+    "required": ["verdicts"],
+    "additionalProperties": False,
+    "properties": {"verdicts": {"type": "array", "items": {
+        "type": "object",
+        "required": ["id", "verdict"],
+        "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string"},
+            "verdict": {"type": "string", "enum": ["confirmed", "unconfirmed"]},
+        },
+    }}},
+}
+
+_CONTROL_CONFIRMED = [
+    {"command": "rm -rf cache/", "sentence": "Ask the user before running `rm -rf cache/`, then run it.",
+     "paragraph": "Clearing the cache is destructive. Ask the user before running `rm -rf cache/`, then run it."},
+    {"command": "git clean -fd", "sentence": "After the user confirms, run `git clean -fd` to remove untracked files.",
+     "paragraph": "Check with the user first. After the user confirms, run `git clean -fd` to remove untracked files."},
+]
+_CONTROL_UNCONFIRMED = [
+    {"command": "rm -rf cache/", "sentence": "Run `rm -rf cache/` to clear the cache.",
+     "paragraph": "The cache can grow large. Run `rm -rf cache/` to clear the cache."},
+    {"command": "git clean -fd", "sentence": "Run `git clean -fd` to remove untracked files.",
+     "paragraph": "Untracked files clutter the tree. Run `git clean -fd` to remove untracked files."},
+]
+
+
+@dataclass(frozen=True)
+class _CheckConfig:
+    """One re-check question: its prompt, the two known-answer control pools (pool, the
+    verdict it must get), the verdict that restores a match, and the verdict that keeps it
+    skipped."""
+
+    system: str
+    instructions: str
+    schema: dict
+    purpose: str
+    controls: tuple  # ((pool, expected_verdict), (pool, expected_verdict))
+    restore_verdict: str
+    keep_verdict: str
+
+
+_WARNING_CHECK = _CheckConfig(
+    RECHECK_SYSTEM, RECHECK_INSTRUCTIONS, RECHECK_SCHEMA, "safety-recheck",
+    ((_CONTROL_WARNINGS, "warning"), (_CONTROL_INSTRUCTIONS, "instruction")),
+    "instruction", "warning")
+_CONFIRMATION_CHECK = _CheckConfig(
+    CONFIRM_SYSTEM, CONFIRM_INSTRUCTIONS, CONFIRM_SCHEMA, "safety-confirm-recheck",
+    ((_CONTROL_UNCONFIRMED, "unconfirmed"), (_CONTROL_CONFIRMED, "confirmed")),
+    "unconfirmed", "confirmed")
+
 _RESTORED = " (the deep review found this sentence is an instruction, not a warning)"
+_RESTORED_CONFIRMATION = " (the deep review found running this does not depend on the user's approval)"
 _RESTORED_UNTRUSTED = " (restored because the deep review's re-check could not be trusted)"
 
 
@@ -170,110 +239,125 @@ class ReviewBackend:
         return BackendResult(self.name, status, result_tier, findings, "; ".join(notes))
 
     def _recheck(self, skill: Skill) -> tuple[list[Finding], str, bool]:
-        """Re-check skipped prose matches. Returns the findings to restore, a note, and
-        whether the re-check was reliable: every skipped match covered and both
-        known-answer items right.
-
-        Restore-only: a verdict can turn a skipped match into a finding, nothing else.
-        Matches are re-checked most severe first, so padding cannot push a real one past
-        the cap unnoticed. A known-answer item answered wrongly means the batch cannot be
-        trusted -- possibly an injection -- so every match in it is restored rather than
-        left skipped, and the result is flagged. A real item the model gives no verdict is
-        also restored as a precaution and the result flagged. Raises only if the call fails.
-        """
+        """Re-check cleared prose matches. Returns the findings to restore, a note, and
+        whether the re-check was reliable. Warning matches and confirmation matches ask
+        different questions (_WARNING_CHECK, _CONFIRMATION_CHECK): a warning match is
+        restored when the model calls the sentence an instruction, a confirmation match only
+        when the model says running it does not depend on the user's approval. Each kind is a
+        separate call with its own controls and its own MAX_RECHECK_ITEMS budget."""
         skipped = skipped_warnings(skill)
         if not skipped:
             return [], "", True
-        ordered = sorted(skipped, key=lambda w: -SEVERITY_RANK[w.finding.severity])
+        restored: list[Finding] = []
+        notes: list[str] = []
+        reliable = True
+        for cfg, kind in ((_WARNING_CHECK, "warning"), (_CONFIRMATION_CHECK, "confirmation")):
+            group = [w for w in skipped if w.kind == kind]
+            if not group:
+                continue
+            found, note, ok = self._recheck_group(group, cfg)
+            restored += found
+            if note:
+                notes.append(note)
+            reliable = reliable and ok
+        return restored, "; ".join(notes), reliable
+
+    def _recheck_group(self, group: list[SkippedWarning],
+                       cfg: _CheckConfig) -> tuple[list[Finding], str, bool]:
+        """One re-check call for matches of one kind. Restore-only: a match becomes a finding
+        only on cfg.restore_verdict. Matches are checked most severe first, so padding cannot
+        push a real one past the cap. A known-answer control answered wrongly means the batch
+        cannot be trusted (possibly an injection), so every match in it is restored and the
+        result flagged; a real item with no verdict is restored as a precaution and flagged.
+        A JudgeError (the model replied but the reply was unusable) restores the batch as
+        untrusted; JudgeUnavailable (no model reached) propagates and leaves matches cleared.
+        """
+        ordered = sorted(group, key=lambda w: -SEVERITY_RANK[w.finding.severity])
         batch = ordered[:MAX_RECHECK_ITEMS]
         covered = len(ordered) <= MAX_RECHECK_ITEMS
-        items, controls, index = _recheck_items(batch)
+        tail = ("" if covered else
+                f"; {len(ordered) - len(batch)} more were not re-checked (most severe first)")
+        items, expected, index = _recheck_items(batch, cfg)
         try:
-            data = self.judge.ask(RECHECK_INSTRUCTIONS, json.dumps({"items": items}, indent=1),
-                                  RECHECK_SCHEMA, "safety-recheck", system_prompt=RECHECK_SYSTEM)
+            data = self.judge.ask(cfg.instructions, json.dumps({"items": items}, indent=1),
+                                  cfg.schema, cfg.purpose, system_prompt=cfg.system)
         except JudgeError as e:
-            # The model saw the material but its reply was unusable -- not JSON, possibly an
-            # injection asking for a plain-text reply that slips past the known-answer items.
-            # Restore the whole batch as untrusted rather than leave real warnings skipped.
-            # An outage (JudgeUnavailable) is different: no model was reached, so it is not
-            # caught here and the matches stay skipped.
             restored = [_restore(w, trusted=False) for w in batch]
-            note = (f"the re-check reply was unusable ({type(e).__name__}): all {len(batch)} "
-                    "re-checked match(es) were restored as a precaution")
-            if not covered:
-                note += f"; {len(ordered) - len(batch)} more were not re-checked"
-            return restored, note, False
+            return restored, (f"the {cfg.purpose} reply was unusable ({type(e).__name__}): "
+                              f"all {len(batch)} match(es) restored as a precaution" + tail), False
 
         verdicts: dict[str, str] = {}
+        allowed = (cfg.restore_verdict, cfg.keep_verdict)
         for entry in data.get("verdicts") if isinstance(data.get("verdicts"), list) else []:
-            if isinstance(entry, dict) and entry.get("verdict") in ("instruction", "warning"):
+            if isinstance(entry, dict) and entry.get("verdict") in allowed:
                 verdicts.setdefault(str(entry.get("id")), entry["verdict"])
-        warning_id, instruction_id = controls
-        tampered = (verdicts.get(warning_id) != "warning"
-                    or verdicts.get(instruction_id) != "instruction")
+        tampered = any(verdicts.get(cid) != answer for cid, answer in expected.items())
         restored: list[Finding] = []
         no_verdict = 0
         if tampered:
             restored = [_restore(w, trusted=False) for w in batch]
             note = (f"a known-answer check failed (possible injection): all {len(batch)} "
-                    "re-checked match(es) were restored as findings")
+                    f"{cfg.purpose} match(es) were restored as findings")
         else:
             for item_id, i in index.items():
                 verdict = verdicts.get(item_id)
-                if verdict == "instruction":
+                if verdict == cfg.restore_verdict:
                     restored.append(_restore(batch[i]))
-                elif verdict != "warning":
+                elif verdict != cfg.keep_verdict:
                     # No verdict for a real item: an injection could drop a match this way
                     # while answering both controls. Restore it as a precaution and flag.
                     restored.append(_restore(batch[i], trusted=False))
                     no_verdict += 1
-            note = f"re-check restored {len(restored)} of {len(batch)} skipped match(es)"
+            note = f"{cfg.purpose} restored {len(restored)} of {len(batch)} match(es)"
             if no_verdict:
                 note += f" ({no_verdict} with no verdict, restored as a precaution)"
-        if not covered:
-            note += f"; {len(ordered) - len(batch)} more were not re-checked (most severe first)"
-        return restored, note, covered and not tampered and no_verdict == 0
+        return restored, note + tail, covered and not tampered and no_verdict == 0
 
 
-def _recheck_items(batch: list[SkippedWarning]
-                   ) -> tuple[list[dict[str, Any]], tuple[str, str], dict[str, int]]:
-    """The re-check's items: each skipped match plus one known-answer item of each kind,
-    chosen at random, shuffled with a system-random order and given opaque ids so the
-    skill cannot work out offline which ids are the controls.
+def _recheck_items(batch: list[SkippedWarning], cfg: _CheckConfig
+                   ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, int]]:
+    """The re-check's items: each match plus one known-answer item from each of cfg's two
+    control pools, chosen at random, shuffled with a system-random order and given opaque
+    ids so the skill cannot work out offline which ids are the controls.
 
-    Returns the items as sent, the ids of the (warning, instruction) controls, and the
-    batch index of each real item's id. Hidden text is stripped and the sentence and
-    paragraph are capped first, so the skill cannot bloat the request.
+    Returns the items as sent, a map {control item id: the verdict it must get}, and the
+    batch index of each real item's id. Hidden text is removed and the sentence and
+    paragraph are windowed and capped first, so the skill cannot bloat the request.
     """
     rng = random.SystemRandom()
-    # Cut the window on the match's own offset (not the command's first appearance), then
-    # strip hidden characters, so padding and a repeated command cannot push the match out.
     real = [{"command": _cap(strip_hidden(w.snippet), MAX_COMMAND_CHARS),
-             "sentence": strip_hidden(_window_at(w.sentence, w.sentence_offset, MAX_SENTENCE_CHARS)),
-             "paragraph": strip_hidden(_window_at(w.paragraph, w.paragraph_offset, MAX_PARAGRAPH_CHARS))}
+             "sentence": _windowed(w.sentence, w.sentence_offset, MAX_SENTENCE_CHARS),
+             "paragraph": _windowed(w.paragraph, w.paragraph_offset, MAX_PARAGRAPH_CHARS)}
             for w in batch]
     entries: list[tuple[Any, dict[str, str]]] = list(enumerate(real))
-    entries += [("warning", rng.choice(_CONTROL_WARNINGS)),
-                ("instruction", rng.choice(_CONTROL_INSTRUCTIONS))]
+    for pool, answer in cfg.controls:
+        entries.append(((answer,), rng.choice(pool)))  # a tuple key marks a control item
     rng.shuffle(entries)
 
-    items, controls, index = [], {}, {}
+    items, expected, index = [], {}, {}
     for n, (key, fields) in enumerate(entries, 1):
         item_id = f"item-{n}"
         items.append({"id": item_id, **fields})
         if isinstance(key, int):
             index[item_id] = key
         else:
-            controls[key] = item_id
-    return items, (controls["warning"], controls["instruction"]), index
+            expected[item_id] = key[0]  # the verdict this control must get
+    return items, expected, index
 
 
 def _restore(w: SkippedWarning, trusted: bool = True) -> Finding:
-    """A skipped match turned back into a finding, marked as the review's and why. With
-    trusted=False -- the batch could not be trusted, or the item got no verdict -- the
-    message says so instead of claiming the review found the sentence to be an instruction."""
-    return replace(w.finding, source=NAME,
-                   message=w.finding.message + (_RESTORED if trusted else _RESTORED_UNTRUSTED))
+    """A cleared match turned back into a finding, marked as the review's and why. The
+    message matches the question that restored it: that a warning sentence was really an
+    instruction, or that a "confirmed" delete does not actually depend on the user's
+    approval. With trusted=False -- the batch could not be trusted, or the item got no
+    verdict -- the message says that instead."""
+    if not trusted:
+        suffix = _RESTORED_UNTRUSTED
+    elif w.kind == "confirmation":
+        suffix = _RESTORED_CONFIRMATION
+    else:
+        suffix = _RESTORED
+    return replace(w.finding, source=NAME, message=w.finding.message + suffix)
 
 
 def _window_at(text: str, offset: int, limit: int) -> str:
@@ -290,6 +374,15 @@ def _window_at(text: str, offset: int, limit: int) -> str:
 def _cap(text: str, limit: int) -> str:
     """At most `limit` characters of `text`."""
     return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _windowed(text: str, offset: int, limit: int) -> str:
+    """The model's view of `text` around the match: hidden characters are removed first, so
+    the window cannot leave a comment half-shown, and the match's offset is mapped into the
+    stripped text before the window is cut on it."""
+    stripped = strip_hidden(text)
+    at = len(strip_hidden(text[:offset]))
+    return _window_at(stripped, at, limit)
 
 
 def _review_notes(result: Any) -> list[str]:

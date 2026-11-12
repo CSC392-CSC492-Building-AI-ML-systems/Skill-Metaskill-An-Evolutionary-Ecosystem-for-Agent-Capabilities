@@ -543,13 +543,15 @@ def test_skipped_warnings_match_the_skipped_list_in_detail():
 
 
 def test_confirmed_skipped_matches_are_rechecked(tmp_path):
-    # A confirmed destructive is cleared from the static findings, but it is still routed to
-    # the deep re-check, so a false confirmation is caught there (review feedback).
-    text = "Back up first. Never run `rm -rf data/` without that backup."
+    # A confirmed-but-not-warned destructive is cleared from the static findings, but it is
+    # still routed to the deep re-check with the confirmation question, so a false
+    # confirmation is caught there (review feedback).
+    text = "Back up your files first, then run `rm -rf data/` to clean up."
     skill = make(tmp_path, {"SKILL.md": text + "\n"})
-    assert "skipped as a warning" in scan(skill).detail
+    assert scan(skill).findings == []  # cleared at the static tier
     [w] = checks.skipped_warnings(skill)
     assert w.snippet == "rm -rf data/"
+    assert w.kind == "confirmation"  # asked the confirmation question at the deep tier
 
 
 # --- Review feedback: confirmation and warning bypasses (PR #11) ---
@@ -561,13 +563,15 @@ def test_confirmed_skipped_matches_are_rechecked(tmp_path):
     "Ask the user for their favourite colour.\n\n```sh\nrm -rf ~/\n```",
 ])
 def test_wording_that_does_not_confirm_does_not_clear_a_delete(tmp_path, text):
-    assert prose(tmp_path, text).findings  # the delete is not cleared as confirmed
+    findings = prose(tmp_path, text).findings  # the delete is not cleared as confirmed
+    assert findings and all(f.severity is Severity.CRITICAL for f in findings)
 
 
 def test_input_without_a_yes_no_prompt_does_not_confirm(tmp_path):
     body = ("```python\nname = input('project name: ')\n"
             "import shutil, os\nshutil.rmtree(os.path.expanduser('~'))\n```")
-    assert prose(tmp_path, body).findings
+    findings = prose(tmp_path, body).findings
+    assert findings and findings[0].severity is Severity.CRITICAL
 
 
 @pytest.mark.parametrize("text", [
@@ -587,6 +591,16 @@ def test_labelled_instruction_is_not_skipped_as_a_warning(tmp_path, text):
 ])
 def test_python_path_unwraps_str_and_plus_joins(expr, path):
     assert checks._python_path(expr) == path
+
+
+def test_python_path_does_not_recurse_or_hang_on_hostile_input():
+    import time
+    # Deeply nested str(...) must not raise RecursionError (safety would go to `error`).
+    assert checks._python_path("str(" * 1500 + "os.path.expanduser('~')" + ")" * 1500) is None
+    # A long run of `+ 'a'` must not backtrack quadratically.
+    start = time.monotonic()
+    checks._python_path("os.path.expanduser('~')" + " + 'a'" * 20000 + " + x")
+    assert time.monotonic() - start < 1.0
 
 
 def test_skipped_deletes_are_not_delete_targets(tmp_path):

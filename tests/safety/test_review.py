@@ -45,6 +45,23 @@ def answer_by_sentence(items, real="instruction"):
     return {"verdicts": verdicts}
 
 
+def answer_confirmations(items, real="unconfirmed"):
+    """Verdicts for the confirmation re-check: the known-answer controls right, and `real`
+    for the rest."""
+    confirmed = {c["sentence"] for c in review._CONTROL_CONFIRMED}
+    unconfirmed = {c["sentence"] for c in review._CONTROL_UNCONFIRMED}
+    verdicts = []
+    for item in items:
+        if item["sentence"] in confirmed:
+            verdict = "confirmed"
+        elif item["sentence"] in unconfirmed:
+            verdict = "unconfirmed"
+        else:
+            verdict = real
+        verdicts.append({"id": item["id"], "verdict": verdict})
+    return {"verdicts": verdicts}
+
+
 class FakeJudge:
     """Stands in for judge.Judge: a fixed review result, and a function for ask()."""
 
@@ -268,10 +285,32 @@ def test_command_field_is_stripped_and_capped():
     snippet = "rm -rf " + hidden + "x" * 5000
     w = SkippedWarning("SKILL.md:1", "recursive-delete", snippet,
                        "sentence", "paragraph", review_finding(), 0, 0)
-    items, _, index = review._recheck_items([w])
+    items, _, index = review._recheck_items([w], review._WARNING_CHECK)
     command = next(it["command"] for it in items if it["id"] == next(iter(index)))
     assert len(command) <= review.MAX_COMMAND_CHARS + 1  # + ellipsis
     assert hidden not in command  # hidden characters stripped
+
+
+def test_genuine_confirmation_stays_cleared_at_deep_tier(tmp_path):
+    # A real confirmation is cleared at static and must stay cleared at deep: the confirmation
+    # re-check asks whether running the command depends on the user's approval, and here it
+    # does, so the match is not restored (review feedback).
+    body = "Ask the user before running `rm -rf ~/projects/old`, then run it.\n"
+    judge = FakeJudge(answer=lambda items: answer_confirmations(items, real="confirmed"))
+    result = ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    assert result.status is BackendStatus.OK
+    assert [f for f in result.findings if f.rule == "recursive-delete"] == []
+
+
+def test_false_confirmation_is_restored_at_deep_tier(tmp_path):
+    # The static confirmation heuristic cleared this delete, but the deep re-check finds that
+    # running it does not actually depend on the user's approval, so it is restored.
+    body = "Ask the user before you begin. Then run `rm -rf ~/` to reset everything.\n"
+    judge = FakeJudge(answer=lambda items: answer_confirmations(items, real="unconfirmed"))
+    result = ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    [restored] = [f for f in result.findings if f.rule == "recursive-delete"]
+    assert restored.severity is Severity.CRITICAL
+    assert "does not depend on the user" in restored.message
 
 
 def test_window_keeps_the_command_when_padded_before(tmp_path):
@@ -290,7 +329,12 @@ def test_window_keeps_the_command_when_padded_before(tmp_path):
 def test_control_item_position_is_not_predictable(tmp_path):
     from metaskill.evaluate.safety.checks import skipped_warnings
     batch = skipped_warnings(skill_with(tmp_path, WARNING_TEXT))
-    warning_ids = {review._recheck_items(batch)[1][0] for _ in range(25)}
+
+    def warning_control_id():
+        _, expected, _ = review._recheck_items(batch, review._WARNING_CHECK)
+        return next(cid for cid, answer in expected.items() if answer == "warning")
+
+    warning_ids = {warning_control_id() for _ in range(25)}
     assert len(warning_ids) > 1  # the control is not pinned to one id by the skill's text
 
 

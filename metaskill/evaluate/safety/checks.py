@@ -156,11 +156,15 @@ class SkippedWarning:
     snippet: str  # the matched command, e.g. "rm -rf ~/"
     sentence: str  # the sentence containing the match
     paragraph: str  # the paragraph or list item it is in
-    finding: Finding  # what it becomes if the re-check says it is an instruction
+    finding: Finding  # what it becomes if the re-check restores it
     # Where the match starts in `sentence` and `paragraph`, so the review's window is cut
     # on this match, not on the command's first appearance (docs/safety/review.md).
     sentence_offset: int = 0
     paragraph_offset: int = 0
+    # "warning": cleared because the sentence warns against the command; the deep re-check
+    # asks instruction-or-warning. "confirmation": cleared because a confirmation step was
+    # found; the deep re-check asks whether running it really depends on the user's approval.
+    kind: str = "warning"
 
 
 class ChecksBackend:
@@ -214,10 +218,11 @@ class _Context:
 
 
 def _skipped_warning(hit: _Hit, unit: _Unit, line_index: int, location: str,
-                     ctx: _Context) -> SkippedWarning:
+                     ctx: _Context, kind: str = "warning") -> SkippedWarning:
     """A SkippedWarning for a cleared prose match, carrying the match's offset in the
     sentence and paragraph so the review centres its window on this match, not on the
-    command's first appearance (docs/safety/review.md)."""
+    command's first appearance (docs/safety/review.md). `kind` is "warning" or
+    "confirmation" and picks the question the deep re-check asks."""
     joined, start, position, end = _sentence_span(unit, line_index, hit.start)
     sentence_raw = joined[start:end]
     sentence = sentence_raw.strip()
@@ -230,7 +235,7 @@ def _skipped_warning(hit: _Hit, unit: _Unit, line_index: int, location: str,
     return SkippedWarning(
         location, hit.rule, hit.snippet, sentence, paragraph,
         _finding(hit, unit, lineno, line_text, ctx, []),
-        max(0, sentence_offset), max(0, paragraph_offset))
+        max(0, sentence_offset), max(0, paragraph_offset), kind)
 
 
 def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
@@ -271,10 +276,12 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
                 if hit.category == DESTRUCTIVE and (
                         hit.confirmed or _confirmed(unit, l_index, previous)):
                     # A confirmed destructive is cleared from the static findings, but a
-                    # prose match is still routed to the deep re-check, so a false
-                    # confirmation ("ask the user for their favourite colour") is caught.
+                    # prose match is routed to the deep re-check with the confirmation
+                    # question, so a false confirmation is caught while a genuine one stays
+                    # cleared.
                     if unit.kind == "prose":
-                        rechecks.append(_skipped_warning(hit, unit, l_index, location, ctx))
+                        rechecks.append(
+                            _skipped_warning(hit, unit, l_index, location, ctx, "confirmation"))
                     continue
                 finding = _finding(hit, unit, lineno, text, ctx, targets)
                 key = (unit.path, lineno, finding.rule)
@@ -518,18 +525,23 @@ def _first_argument(text: str, start: int) -> str:
     return text[start:].strip()
 
 
-def _python_path(expr: str) -> str | None:
+def _python_path(expr: str, _depth: int = 0) -> str | None:
     """The path a Python expression names, written the way the rules read paths, or
     None if it cannot be worked out: "~/Documents" for os.path.expanduser("~/Documents"),
     os.path.join(os.environ["HOME"], "Documents") or Path.home() / "Documents"."""
+    if _depth > 8:  # a deeply nested str(str(...)) is not a real path; stop recursing
+        return None
     expr = expr.strip()
     m = re.fullmatch(_PY_STR, expr)
     if m:
         return m.group("s")
+    # The str(...) and + patterns below use `.+?`, which is quadratic on a long expression
+    # that does not match, so they are skipped on anything a real path would never reach.
+    short = len(expr) <= 500
     # str(<path expr>): the string form of a path, e.g. str(Path.home()).
-    wrapped = re.fullmatch(r"str\(\s*(?P<inner>.+?)\s*\)", expr)
+    wrapped = re.fullmatch(r"str\(\s*(?P<inner>.+?)\s*\)", expr) if short else None
     if wrapped:
-        return _python_path(wrapped.group("inner"))
+        return _python_path(wrapped.group("inner"), _depth + 1)
     m = re.fullmatch(rf"os\.path\.expanduser\(\s*{_PY_STR}\s*\)", expr)
     if m:
         return m.group("s")
@@ -544,9 +556,9 @@ def _python_path(expr: str) -> str | None:
         parts = re.findall(r"""['"]([^'"]*)['"]""", m.group("rest"))
         return "/".join(["~", *parts])
     # <path expr> + "/sub" [+ ...]: a path joined to string literals with +.
-    m = re.fullmatch(rf"(?P<base>.+?)\s*(?P<rest>(?:\+\s*{_PY_STR}\s*)+)", expr)
+    m = re.fullmatch(rf"(?P<base>.+?)\s*(?P<rest>(?:\+\s*{_PY_STR}\s*)+)", expr) if short else None
     if m:
-        base = _python_path(m.group("base"))
+        base = _python_path(m.group("base"), _depth + 1)
         if base is not None:
             parts = re.findall(r"""['"]([^'"]*)['"]""", m.group("rest"))
             return base + "".join(parts)
