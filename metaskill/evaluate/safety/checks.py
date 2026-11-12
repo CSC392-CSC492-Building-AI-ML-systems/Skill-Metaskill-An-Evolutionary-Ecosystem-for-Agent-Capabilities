@@ -13,13 +13,14 @@ import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from metaskill.evaluate.judge import mark_hidden
-from metaskill.evaluate.models import Dimension, Finding, SafetyTier, Severity, Skill
-from metaskill.evaluate.safety.findings import SEVERITY_RANK, BackendResult, BackendStatus
+from ..judge import mark_hidden
+from ..models import Dimension, Finding, SafetyTier, Severity, Skill
+from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "2"
+CHECKS_VERSION = "3"
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -54,7 +55,40 @@ MESSAGES = {
     "bidi-control": "Bidirectional control characters make the text display differently "
                     "from what the agent reads",
     "zero-width": "Zero-width characters that render as nothing",
+    "frontmatter-aliases": "The frontmatter expands to more than 100000 values through YAML "
+                           "aliases. That stalls scanners, so Cisco's scanner was not run on it",
 }
+
+# How many values the frontmatter may hold once its YAML aliases are expanded. Real skills
+# have a few hundred. Cisco's scanner (cisco.py) is not run past it.
+MAX_FRONTMATTER_VALUES = 100_000
+
+
+def expanded_size(value: Any, sizes: dict[int, int] | None = None) -> int:
+    """How many values `value` holds with every alias expanded, counting each object once
+    and reusing that count, so it is quick however large the expansion is. A cycle (a
+    recursive alias) adds nothing more."""
+    sizes = {} if sizes is None else sizes
+    if isinstance(value, dict):
+        children = [*value.keys(), *value.values()]
+    elif isinstance(value, (list, tuple, set)):
+        children = list(value)
+    else:
+        return 1
+    if id(value) in sizes:
+        return sizes[id(value)]
+    sizes[id(value)] = 0  # while counting this one, a cycle back to it counts as nothing
+    sizes[id(value)] = 1 + sum(expanded_size(child, sizes) for child in children)
+    return sizes[id(value)]
+
+
+def frontmatter_too_large(frontmatter: Any) -> bool:
+    """Whether the frontmatter holds more than MAX_FRONTMATTER_VALUES values once its
+    aliases are expanded. Nesting too deep to count is too large as well."""
+    try:
+        return expanded_size(frontmatter) > MAX_FRONTMATTER_VALUES
+    except RecursionError:
+        return True
 
 # --- Delete targets (checks.md, "Delete targets") ------------------------------
 
@@ -194,6 +228,13 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str]]:
     for path, text in files:
         for f in _hidden_characters(path, text):
             found.setdefault((path, int(f.location.rsplit(":", 1)[1]), f.rule), f)
+
+    if frontmatter_too_large(skill.frontmatter):
+        # Never quote the frontmatter: printing it is what takes minutes.
+        found[("SKILL.md", 1, "frontmatter-aliases")] = Finding(
+            Dimension.SAFETY, EXCESS_SCOPE, Severity.HIGH, ChecksBackend.name,
+            "frontmatter-aliases", f"more than {MAX_FRONTMATTER_VALUES} values", "SKILL.md:1",
+            MESSAGES["frontmatter-aliases"])
 
     for name, pointing_to in bundle_links:
         found[(name, 0, "bundle-symlink")] = Finding(

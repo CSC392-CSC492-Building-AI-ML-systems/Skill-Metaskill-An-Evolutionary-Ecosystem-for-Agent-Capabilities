@@ -66,7 +66,7 @@ The scanner's own diagnostic notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET
 
 ### 3.1 Cisco skill-scanner (primary)
 
-`pip install cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing). Requires Python 3.11 to 3.14 (from the package metadata); tested on 3.13.
+`cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing) under `python_dependencies` in `plugin.yaml`. Requires Python 3.11 to 3.14 (from the package metadata); tested on 3.13.
 
 Chosen because it installs as a normal pinned dependency, has a Python SDK (no subprocess or output parsing), accepts a skill directory or a directory of skills, and publishes accuracy numbers.
 
@@ -77,12 +77,12 @@ from skill_scanner import SkillScanner
 result = SkillScanner(analyzers=[...]).scan_skill("/path/to/skill")
 ```
 
-It is an optional dependency. When it is not installed:
+It is a required dependency of the plugin. Hermes installs it into its own environment when the plugin is enabled, after the user consents; declining leaves the plugin disabled. `pip install` does not reach that environment, which has no pip.
 
-1. **Ask before scanning.** The tool reports the missing scanner before any skill is evaluated, and the agent asks the user whether to install it, in the Python environment Hermes runs in, pinned to the tested version (`pip install cisco-ai-skill-scanner==2.2.1`). If the user agrees, it is installed and evaluation continues with Cisco. This follows how the agent asks which skills to rank (section 7 of evaluate.md).
-2. **If the user declines, or there is no one to ask** (a non-interactive run), evaluation continues without Cisco. It does not fail.
-   - In the report, safety has status `partial`, since our own checks still ran, and `detail` says the scanner is not installed and gives the install command.
-   - In the tool's output, a warning is shown at the top of the result, because without Cisco most malicious skills go undetected (section 4).
+If the scanner is still missing when evaluate runs, evaluation continues without Cisco. It does not fail.
+
+- In the report, safety has status `partial`, since our own checks still ran, and `detail` says the scanner is not installed and gives the install command.
+- In the tool's output, a warning is shown at the top of the result, because without Cisco most malicious skills go undetected (section 4).
 
 Hermes skills parse as-is, with no conversion and no lenient mode. Tested on 8 Oct 2026 with version 2.2.1 in static mode: all 59 skills in a local `~/.hermes/skills` were scanned without a parse error, through both the CLI (`scan-all --recursive`) and the SDK. Hermes-specific frontmatter (`platforms`, `metadata.hermes`) caused no problems. OpenClaw skills have not been tested.
 
@@ -273,5 +273,5 @@ Backend and unit tests in section 8 remain implementation tests. Reuse shared fi
 3. Score values. (5)
 4. Default token cap per scan; the per-scan cost is now measured. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
-6. Whether Cisco becomes a required dependency instead of an optional one. Depends on how the project declares dependencies, which is undecided (no dependency file yet; PyYAML is in the same position, and Cisco itself depends on PyYAML). (3.1)
+6. Decided: Cisco is a required dependency, declared in `plugin.yaml`. (3.1)
 7. Whether the `deep` review may ever make a result more lenient than the deterministic layers, by downgrading or clearing a finding. Example: Cisco's `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. If yes: which findings, by how much, keeping the original, and how to stop a skill talking the reviewer into it. Re-checking skipped warnings is not covered, because it can only add findings. See [safety/review.md](safety/review.md). (3.3)

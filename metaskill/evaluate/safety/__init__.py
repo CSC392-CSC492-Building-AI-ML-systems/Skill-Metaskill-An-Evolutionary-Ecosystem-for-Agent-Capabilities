@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from metaskill.evaluate.models import (
+from ..models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
-from metaskill.evaluate.safety import local
-from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend, delete_targets
-from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
-from metaskill.evaluate.safety.findings import (
+from . import local
+from .checks import CHECKS_VERSION, ChecksBackend, delete_targets
+from .cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
+from .findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
-from metaskill.evaluate.safety.hermes_bridge import PluginLlm
+from .hermes_bridge import PluginLlm
 
 # Statuses that still produced findings the score can rely on. A deep scan that
 # fell back to static is usable: its static findings are real.
@@ -83,13 +83,16 @@ def default_backends(config: EvaluationConfig, llm: PluginLlm | None = None) -> 
 
 
 def missing_dependencies() -> list[Dependency]:
-    """What is not installed, so the tool can ask the user before evaluating.
+    """What is not installed, so the tool can tell the user before evaluating.
 
     Safety never installs anything itself (evaluate-safety.md, section 3.1).
     """
     if CiscoBackend().available():
         return []
-    return [Dependency(CiscoBackend.name, PACKAGE, INSTALL_COMMAND)]
+    # No install_command: Hermes asks the user to consent, so the commands need the user's
+    # terminal. Run by the agent without one, they can leave the plugin disabled.
+    return [Dependency(CiscoBackend.name, PACKAGE, "",
+                       reason=f"run `{INSTALL_COMMAND}` in a terminal, then restart Hermes")]
 
 
 def versions() -> dict[str, str]:
@@ -117,6 +120,6 @@ def _reason(findings: list[Finding], usable: list[BackendResult], tier: SafetyTi
     worst = next((f for f in findings if f.dimension is Dimension.SAFETY), None)
     if worst is None:
         ran = tier if all(r.tier is tier for r in usable) else SafetyTier.STATIC
-        return f"No findings at {ran} tier"
+        return f"No safety findings at {ran} tier"
     where = f"at {worst.location}" if worst.location else "in the skill as a whole"
     return f"Worst finding: {worst.severity} {worst.category} {where}"
