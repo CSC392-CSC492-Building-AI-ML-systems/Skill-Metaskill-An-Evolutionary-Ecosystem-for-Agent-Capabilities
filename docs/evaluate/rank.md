@@ -67,7 +67,7 @@ For the ranking as a whole (`Ranking.notes`): when every skill with a safety sco
 
 ## 4. Recommendation
 
-- At least one ranked skill: the top one, `Use [name]: highest overall (0.88) of 3 ranked skill(s).` If it has a CRITICAL safety finding, or a partial-safety flag (3), this adds `Check its safety notes before using it.`; otherwise, if its safety score is below 0.5 (`LOW_SAFETY`), it says so.
+- At least one ranked skill: the top one, `Use [name]: highest overall (0.88) of 3 ranked skill(s).` If it has a CRITICAL safety finding, or a partial-safety flag (3), this adds `Check its safety notes before using it.`; otherwise, if its safety score is below a MEDIUM finding's score (`LOW_SAFETY`, i.e. HIGH or worse), it says so.
 - Several skills tied for first: all of them are named and none is picked, `Tied for highest overall (0.88) of 3 ranked skill(s): a, b. Nothing scored separates them.` The safety check is added if any of them is flagged, and the low-safety and lift warnings still apply.
 - No ranked skill: no skill is named, since no complete overall comparison was available: `No complete overall comparison was available, so no skill is recommended.` The notes say what is missing.
 - No skills: `No skills to rank.`

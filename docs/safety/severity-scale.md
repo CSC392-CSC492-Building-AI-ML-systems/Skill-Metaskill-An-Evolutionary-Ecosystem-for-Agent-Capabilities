@@ -161,7 +161,7 @@ looks those constants up.
 ### Cardinal: producing the number
 
 The derivation is executable, not hand-typed, so the numbers can't drift from their
-source. In [findings.py](findings.py):
+source. In [findings.py](../../metaskill/evaluate/safety/findings.py):
 
 ```python
 _CVSS_BAND_CEILING = {            # top of each CVSS v3.1 band (FIRST.org)
@@ -188,13 +188,14 @@ def score_from_findings(findings):          # findings.py
 
 `worst_severity` ignores findings routed to other dimensions, so a secret sent to
 Configuration Cleanliness never lowers the safety score. `1.0` means "backends ran and
-found nothing" — [`__init__.py`](score.md) checks that a backend actually ran before
-calling this, so an all-skipped scan scores `null`, never `1.0`.
+found nothing that lowers the score" — no findings, or only INFO notes (INFO scores 1.0).
+[`__init__.py`](score.md) checks that a backend actually ran before calling this, so an
+all-skipped scan scores `null`, never `1.0`.
 
 ### Ordinal: setting the level
 
 The ordering used to pick "worst" and to merge duplicates is one table in
-[findings.py](findings.py):
+[findings.py](../../metaskill/evaluate/safety/findings.py):
 
 ```python
 SEVERITY_RANK = {CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0}

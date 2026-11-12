@@ -70,7 +70,7 @@ Overlapping categories, from section 2.1 of the safety design:
 
 Values are computed from CVSS qualitative bands, not hand-picked: `SEVERITY_SCORE` inverts each level's band ceiling as `1 - cvss/10`. See [severity-scale.md](severity-scale.md).
 
-Important: 1.0 means "the backends ran and found nothing". It must never be returned when no backend ran. That check belongs in `__init__.py`, which looks at backend statuses before calling this.
+Important: 1.0 means "the backends ran and found nothing that lowers the score" -- either no findings, or only INFO notes (INFO scores 1.0). It must never be returned when no backend ran. That check belongs in `__init__.py`, which looks at backend statuses before calling this.
 
 ## Decisions made while building
 
