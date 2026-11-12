@@ -58,6 +58,11 @@ Two deliberate choices, both policy:
 - **CRITICAL = 0 is a hard gate.** A CRITICAL finding gives the lowest possible safety
   score regardless of anything else. It does not remove the skill from the ranking
   ([evaluate.md §5](../evaluate.md)).
+- **INFO = 1.0, the same as a clean skill.** This is deliberate: CVSS puts an
+  informational note (None) in its own band, separate from Low. An INFO finding flags
+  something worth recording, not a cost to the user, so it does not lower the score. The
+  `reason` line still names the finding ("Worst finding: info …"), so the report shows
+  the difference between an INFO-only skill and a clean one.
 
 **What CVSS does and does not give us.** It gives a *recognized, citable scale* — the
 numbers are no longer free parameters; each is a documented function of a published
@@ -218,7 +223,8 @@ Each finding's *level* is set by the backend that raises it:
   the recoverability principle, in code. Other rule tables (destructive commands,
   credential exposure, untrusted sources) pin their levels the same way.
 - **LLM review** ([review.py](review.md)): the judge returns a level per finding; the
-  quote-verified finding keeps it.
+  quote-verified finding keeps it. *(Pending: `review.py` lands with MET-21; until then the
+  deep tier has no own-checks review, only Cisco's LLM analyzer.)*
 
 `merge` keeps the most severe level when two backends report the same problem at the
 same location, and `worst_severity` then selects the single worst across everything.

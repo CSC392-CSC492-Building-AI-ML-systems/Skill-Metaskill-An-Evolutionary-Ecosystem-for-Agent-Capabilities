@@ -64,7 +64,8 @@ HEADINGS = {
 _DECIMALS = 9
 MAX_NAME_CHARS = 100  # of a skill name as printed
 MAX_TEXT_CHARS = 200  # of a location or detail as printed
-LOW_SAFETY = 0.5  # a recommended skill below this gets a warning
+LOW_SAFETY = 0.3  # a recommended skill below this gets a warning: HIGH (0.11) or worse,
+# not MEDIUM (0.31). See docs/safety/severity-scale.md.
 UNNAMED = "(unnamed)"  # a name with nothing left once cleaned
 # Markdown that can fetch or run something when rendered: links and images ([]), HTML and
 # autolinks (<>), code (`), and \ itself, so an escape cannot be undone. `_` and `*` only

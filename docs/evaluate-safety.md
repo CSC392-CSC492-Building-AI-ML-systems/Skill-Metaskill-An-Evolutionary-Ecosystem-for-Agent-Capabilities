@@ -256,7 +256,7 @@ Backend and unit tests in section 8 remain implementation tests. Reuse shared fi
 
 - No findings does not mean safe. The scanner we use says the same about itself.
 - Static false positives on ordinary skills. With the worst-finding score in section 5, one such finding sets a skill's score. Known cases on the 59 local Hermes skills:
-  - Cisco: a CRITICAL "Function constructor" finding on a Playwright `page.waitForFunction('...')` call in `p5js` (score 0.0), and MEDIUM `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv, which is its purpose (score 0.6; open question 7). In the 8 Oct run, 11 skills had a HIGH or CRITICAL Cisco finding; the rest have not been triaged.
+  - Cisco: a CRITICAL "Function constructor" finding on a Playwright `page.waitForFunction('...')` call in `p5js` (score 0.0), and MEDIUM `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv, which is its purpose (score 0.31; open question 7). In the 8 Oct run, 11 skills had a HIGH or CRITICAL Cisco finding; the rest have not been triaged.
   - Own checks: 6 skills at HIGH after three noisy rules were narrowed, results in [safety/checks.md](safety/checks.md). Two in `github` are likely legitimate, such as a git credential helper that must print its token.
 - The `deep` tier only partly reads large skills. Cisco's LLM analyzer has a context budget: on `p5js` it read about 20,000 characters of `SKILL.md` and skipped five reference files. `detail` lists what was skipped.
 - Low static recall. Without `deep`, most malicious skills pass undetected.

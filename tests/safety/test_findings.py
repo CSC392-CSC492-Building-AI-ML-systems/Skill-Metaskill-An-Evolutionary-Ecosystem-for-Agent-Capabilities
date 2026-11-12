@@ -19,6 +19,17 @@ def make(
 # --- score ------------------------------------------------------------------
 
 
+def test_severity_scores_follow_the_cvss_band_ceilings():
+    # Pins the exact values, so a typo in _CVSS_BAND_CEILING or a wrong formula fails here.
+    assert SEVERITY_SCORE == {
+        Severity.CRITICAL: 0.0,
+        Severity.HIGH: 0.11,
+        Severity.MEDIUM: 0.31,
+        Severity.LOW: 0.61,
+        Severity.INFO: 1.0,
+    }
+
+
 def test_no_findings_scores_one():
     assert score_from_findings([]) == 1.0
 

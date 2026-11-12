@@ -68,9 +68,12 @@ Severities are decided. A severity answers: if the agent does this in an otherwi
 | Severity | Score if worst |
 |---|---|
 | CRITICAL | 0.0 |
-| HIGH | 0.3 |
-| MEDIUM | 0.6 |
-| LOW, INFO | 0.9 |
+| HIGH | 0.11 |
+| MEDIUM | 0.31 |
+| LOW | 0.61 |
+| INFO | 1.0 |
+
+The numbers come from the CVSS band ceilings, not hand-picked; see [severity-scale.md](severity-scale.md).
 
 ### `destructive-unconfirmed`
 
@@ -179,7 +182,7 @@ Not covered here: secrets written into the skill itself (that is Configuration C
 | `unpinned-git-install` | `pip install git+...` or `npm install` from a git URL with no commit or tag | MEDIUM |
 | `unpinned-install` | `pip install name` with no version, `npm install -g name` with no version | LOW |
 
-`unpinned-install` is common in legitimate skills and caps each of them at 0.9. It stays: it is a real, minor supply-chain risk, and skills doing the same job are affected equally, so their ranking barely changes.
+`unpinned-install` is common in legitimate skills and caps each of them at 0.61 (LOW). It stays: it is a real, minor supply-chain risk, and skills doing the same job are affected equally, so their ranking relative to each other is unchanged. The absolute penalty is larger than under the old placeholder scores (a LOW now costs more); the band-ceiling choice behind that is owned in [severity-scale.md](severity-scale.md).
 
 "Unknown source" in the safety design (an allowlist of trusted hosts) is not in version 1.
 
