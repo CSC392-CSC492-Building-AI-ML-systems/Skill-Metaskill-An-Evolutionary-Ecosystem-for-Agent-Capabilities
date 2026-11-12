@@ -1,0 +1,56 @@
+{
+  "schema_version": "pilot-0.1",
+  "review_status": "draft",
+  "cases": [
+    {
+      "variant": "reference",
+      "stage": "configured",
+      "expected_properties": [
+        "organization is externally supplied",
+        "required organization has a description and a nonempty synthetic example",
+        "skill reads organization",
+        "no annotated unused fields"
+      ],
+      "expected_issues": []
+    },
+    {
+      "variant": "hardcoded",
+      "stage": "configured",
+      "expected_properties": [
+        "output remains comparable for Example Alpha"
+      ],
+      "expected_issues": [
+        {
+          "property": "separation",
+          "file": "skills/hardcoded/SKILL.md",
+          "quote": "Always use organization \"Example Alpha\". No external configuration is read.",
+          "rationale": "Task family explicitly requires alternate organization profiles; a fixed organization blocks reuse."
+        }
+      ]
+    },
+    {
+      "variant": "undocumented",
+      "stage": "configured",
+      "expected_issues": [
+        {
+          "property": "documentation",
+          "file": "skills/undocumented/config.schema.json",
+          "json_pointer": "/properties/organization",
+          "rationale": "Required setting lacks a description; this does not establish poor detection recall."
+        }
+      ]
+    },
+    {
+      "variant": "unused",
+      "stage": "configured",
+      "expected_issues": [
+        {
+          "property": "integrity",
+          "file": "skills/unused/config.schema.json",
+          "json_pointer": "/properties/legacy_region",
+          "rationale": "Declared legacy_region is not consumed by this task or its skill instructions."
+        }
+      ]
+    }
+  ]
+}

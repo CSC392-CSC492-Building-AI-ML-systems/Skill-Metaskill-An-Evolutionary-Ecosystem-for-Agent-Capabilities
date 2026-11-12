@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "organization": {
+      "type": "string",
+      "pattern": "\\S"
+    }
+  },
+  "required": [
+    "organization"
+  ]
+}
