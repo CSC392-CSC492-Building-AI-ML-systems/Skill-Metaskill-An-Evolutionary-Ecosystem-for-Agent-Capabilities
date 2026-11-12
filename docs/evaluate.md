@@ -245,7 +245,9 @@ How hard is it to get the skill working, and is that effort necessary? Signals:
 
 ### 3.5 Efficiency
 
-Measured from the task runs in section 4, not estimated from the text: tokens consumed, wall-clock time, and tool calls. Scores are relative to the baseline run (without the skill) on the same task, so a skill that makes the agent slower or costlier than having no skill is penalized. Static size (length of `SKILL.md`, bundled file size) is a minor secondary signal because it is paid on every load.
+Measured from the task runs in section 4, not estimated from the text. Scores are relative to the baseline run (without the skill) on the same task, so a skill that makes the agent costlier than having no skill is penalized. Static size (length of `SKILL.md`, bundled file size) is a minor secondary signal because it is paid on every load.
+
+Full design — the four scored signals (cache-agnostic input tokens, output plus reasoning, LLM calls, tool calls), the unweighted geometric-mean method, success-gating, and why wall-clock time, the cache split and cost are measured but **not** scored — in [evaluate-efficiency.md](evaluate-efficiency.md).
 
 ### 3.6 Safety
 

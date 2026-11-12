@@ -29,7 +29,8 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-NOT_BUILT = [d for d in Dimension if d is not Dimension.SAFETY]
+# Safety is scored; efficiency's module is built but needs task runs (handled below).
+NOT_BUILT = [d for d in Dimension if d not in (Dimension.SAFETY, Dimension.EFFICIENCY)]
 
 
 def make_skill(root, name, body="# Skill\n\nSummarize the file.\n"):
@@ -79,6 +80,10 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
         assert getattr(skill.scores, dimension.value) is None
         assert skill.dimensions[dimension].status is Status.SKIPPED
         assert skill.dimensions[dimension].detail == "not built yet"
+    # Efficiency's module is built, but it needs task runs the runner does not feed yet.
+    efficiency = skill.dimensions[Dimension.EFFICIENCY]
+    assert skill.scores.efficiency is None and efficiency.status is Status.SKIPPED
+    assert "task runs" in efficiency.detail
 
 
 def test_no_tasks_means_no_lift(tmp_path, out):
