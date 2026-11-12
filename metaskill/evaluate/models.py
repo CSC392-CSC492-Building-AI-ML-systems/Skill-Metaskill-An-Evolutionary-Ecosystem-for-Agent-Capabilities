@@ -406,15 +406,20 @@ class Metrics:
     prompt have the same `reproducible_input`. `seconds` is recorded for the log but is
     not scored -- it depends on the machine, network and provider load, so it is not
     reproducible. `llm_calls` is the number of model round-trips the session made.
+    `tool_calls` is None when the source could not measure it (a `hermes -z --usage-file`
+    report does not report tool calls), so efficiency leaves that signal out rather than
+    treating it as zero.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
-    reasoning_tokens: int = 0  # generation-side cost on reasoning models, billed like output
+    # Hidden reasoning is already inside output_tokens (the completion/output count); this
+    # is the sub-count, for the breakdown, and is NOT added to generation or the total.
+    reasoning_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     llm_calls: int = 0
-    tool_calls: int = 0
+    tool_calls: int | None = 0  # None = not measured
     seconds: float = 0.0
 
     @property
@@ -425,15 +430,22 @@ class Metrics:
 
     @property
     def total_tokens(self) -> int:
-        """Every token processed, for display."""
-        return self.reproducible_input + self.output_tokens + self.reasoning_tokens
+        """Every token processed, for display. Reasoning is already in output_tokens."""
+        return self.reproducible_input + self.output_tokens
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Metrics:
         """Tolerant of unknown or missing keys, so a report written by another version of
-        the metrics still loads (reports are retained as the run's source of truth)."""
+        the metrics still loads (reports are retained as the run's source of truth). Counts
+        are clamped to non-negative ints so a malformed report cannot divide by zero or skew
+        a ratio; `tool_calls` keeps None (not measured)."""
         names = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in names})
+        values = {k: v for k, v in data.items() if k in names}
+        for key in ("input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
+                    "cache_write_tokens", "llm_calls", "tool_calls"):
+            if values.get(key) is not None:
+                values[key] = max(0, int(values[key]))
+        return cls(**values)
 
 
 @dataclass

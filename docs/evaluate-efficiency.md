@@ -20,7 +20,7 @@ The runner records these per run as [`Metrics`](../metaskill/evaluate/models.py)
 | Signal | From `Metrics` | Why |
 |---|---|---|
 | Input | `reproducible_input` (`input + cache_read + cache_write`) | context cost, cache-agnostic so warm and cold runs score alike |
-| Generation | `output_tokens + reasoning_tokens` | the tokens the model produced; reasoning is billed like output |
+| Generation | `output_tokens` | the tokens the model produced; hidden reasoning is already inside this count (Hermes `normalize_usage`), so `reasoning_tokens` is a sub-breakdown and is **not** added again |
 | LLM calls | `llm_calls` | model round-trips / loop efficiency; independent of token volume |
 | Tool calls | `tool_calls` | behavioural cost; independent of tokens |
 
@@ -51,8 +51,10 @@ r = (baseline_signal + 1) / (with_skill_signal + 1)   # smoothed speedup; > 1 ch
 The `+ 1` is additive (Laplace) smoothing: it keeps `r` defined when either side is zero
 and stays within a hair of `baseline/with_skill` for large counts. Without it, a signal
 that is zero on either side would drop out, letting a skill add tool calls against a zero
-baseline for free, or get no credit for removing them. Collect every `r` across all
-counted tasks and signals, take their geometric mean `G`, and map to the score:
+baseline for free, or get no credit for removing them. The trade-off is that small counts
+are pulled toward 1: doubling a signal from 1 to 2 is `(1+1)/(2+1) = 2/3`, not the raw
+`1/2`. Collect every `r`
+across all counted tasks and signals, take their geometric mean `G`, and map to the score:
 
 ```
 value = G / (1 + G)        # parity (G = 1) -> 0.5; cheaper -> higher; costlier -> lower
@@ -88,8 +90,11 @@ early and fails is cheap but worthless, so it earns no efficiency credit.
 
 ## 4. Smoothing and missing baselines
 
-- Every signal contributes a smoothed ratio (§2), so a count that is zero on either side is
-  a real comparison, not a dropped signal.
+- A **measured** count contributes a smoothed ratio (§2), so a zero on either side is a real
+  comparison, not a dropped signal.
+- A signal that was **not measured** (value `None` — `tool_calls` from a usage file, which
+  does not report them) is left out, so it cannot add a fixed "even" ratio that dilutes the
+  measured signals toward `0.5`.
 - A task counts only if it has a **baseline** to compare against; a passed task with no
   baseline is dropped, and `detail` reports "N of M passed tasks counted".
 
@@ -107,8 +112,9 @@ open questions.
     wired into `evaluate`** (no task-based dimension runs tasks — evaluate.md §3.5), so in
     the live pipeline it returns `skipped`. The scoring logic is built and tested ahead of
     that integration, as safety's scoring was.
-- Signals read from `Metrics` properties (`reproducible_input`, generation = `output +
-  reasoning`), so a change to what counts as input touches one place.
+- Signals read from `Metrics` (`reproducible_input`, generation = `output_tokens`), so a
+  change to what counts touches one place. A signal that returns `None` (not measured —
+  `tool_calls` from a usage file) is left out of the mean, not smoothed as a zero.
 
 ## 6. Open questions
 

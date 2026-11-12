@@ -61,7 +61,7 @@ class AgentRun:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     llm_calls: int = 0  # model round-trips the session made
-    tool_calls: int = 0
+    tool_calls: int | None = 0  # None when the agent could not measure its tool calls
     transcript: str = ""  # the full session for the log, if the agent provides one
 
 
@@ -71,8 +71,9 @@ def agent_run_from_hermes_usage(output: str, usage: dict[str, Any],
 
     Those counts are the agent's own task turns; the report's `auxiliary` block (title
     generation and other host side-tasks) is deliberately not read, so it never counts
-    toward the skill (see AgentRun above). `api_calls` maps to llm_calls. tool_calls is
-    not in the usage file, so it is 0 here; a real agent counts its own tool calls.
+    toward the skill (see AgentRun above). `api_calls` maps to llm_calls. tool_calls is not
+    in the usage file, so it is None (not measured) and efficiency leaves that signal out
+    rather than scoring it as zero; a real agent counts its own tool calls.
     """
     def n(key: str) -> int:
         return int(usage.get(key, 0) or 0)
@@ -85,7 +86,7 @@ def agent_run_from_hermes_usage(output: str, usage: dict[str, Any],
         cache_read_tokens=n("cache_read_tokens"),
         cache_write_tokens=n("cache_write_tokens"),
         llm_calls=n("api_calls"),
-        tool_calls=0,
+        tool_calls=None,
         transcript=transcript,
     )
 

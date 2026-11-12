@@ -62,12 +62,29 @@ def test_reproducible_input_counts_cache_tokens():
     assert score_from_runs(withs, base).value == 0.5
 
 
-def test_reasoning_tokens_count_as_generation():
-    # with-skill generates more once reasoning is included -> costlier -> below half.
-    withs = [result("a", m(input=100, output=20, reasoning=100, llm_calls=2, tool_calls=1))]
+def test_reasoning_tokens_do_not_change_the_score():
+    # Reasoning is already inside output_tokens, so counting it again would double-count.
+    # Adding reasoning with the same output must leave the score at parity.
     base = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=1),
                    variant=Variant.BASELINE)]
-    assert score_from_runs(withs, base).value < 0.5
+    plain = score_from_runs([result("a", m(input=100, output=20, llm_calls=2, tool_calls=1))], base)
+    reasoning = score_from_runs(
+        [result("a", m(input=100, output=20, reasoning=100, llm_calls=2, tool_calls=1))], base)
+    assert plain.value == reasoning.value == 0.5
+
+
+def test_unmeasured_tool_calls_are_left_out_not_scored_as_even():
+    # tool_calls=None (e.g. from a usage file) must be dropped, not smoothed as a neutral
+    # 0-vs-0 ratio that dilutes the measured signals toward 0.5 (review feedback).
+    withs_none = [result("a", m(input=50, output=10, llm_calls=1, tool_calls=None))]
+    base_none = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=None),
+                        variant=Variant.BASELINE)]
+    withs_even = [result("a", m(input=50, output=10, llm_calls=1, tool_calls=1))]
+    base_even = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=1),
+                        variant=Variant.BASELINE)]
+    # Dropping the unmeasured signal keeps the cheaper skill's score stronger than diluting
+    # it with an even tool-call ratio.
+    assert score_from_runs(withs_none, base_none).value > score_from_runs(withs_even, base_even).value
 
 
 def test_skill_adding_calls_from_a_zero_baseline_is_penalized():

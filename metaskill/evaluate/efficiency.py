@@ -19,11 +19,14 @@ from .models import (
     Dimension, DimensionScore, EvaluationConfig, Metrics, Skill, Status, TestResult)
 
 # The four portable, skill-attributable cost signals (docs/evaluate-efficiency.md 1).
-# Each reads from Metrics; reproducible_input is cache-agnostic, generation is output plus
-# reasoning (both billed like output). seconds, the cache split and cost are not here.
-_SIGNALS: dict[str, Callable[[Metrics], int]] = {
+# Each reads from Metrics. reproducible_input is cache-agnostic. generation is output_tokens:
+# reasoning is already inside the completion/output count Hermes reports (normalize_usage),
+# so it must not be added again. A signal that returns None was not measured (e.g. tool_calls
+# from a usage file, which does not report them) and is left out of the mean, not smoothed as
+# a zero. seconds, the cache split and cost are not here.
+_SIGNALS: dict[str, Callable[[Metrics], int | None]] = {
     "input": lambda m: m.reproducible_input,
-    "generation": lambda m: m.output_tokens + m.reasoning_tokens,
+    "generation": lambda m: m.output_tokens,
     "llm_calls": lambda m: m.llm_calls,
     "tool_calls": lambda m: m.tool_calls,
 }
@@ -62,13 +65,18 @@ def score_from_runs(with_skill: list[TestResult],
         base_sig = base_means.get(task_id)
         if base_sig is None:  # no baseline for this task: nothing to compare against
             continue
-        counted += 1
+        added = False
         for name in _SIGNALS:
             w, b = with_sig[name], base_sig[name]
+            if w is None or b is None:  # a signal not measured on either side is left out
+                continue
             # Additive (Laplace) smoothing: defined when either side is zero, and within a
             # hair of b/w for large counts. So a skill that adds calls against a zero
             # baseline is penalised, and one that removes them is credited.
             ratios.append((b + 1) / (w + 1))
+            added = True
+        if added:
+            counted += 1
 
     total = len(passed_tasks)
     if not ratios:
@@ -84,16 +92,21 @@ def score_from_runs(with_skill: list[TestResult],
         detail=f"{counted} of {total} passed task(s) counted")
 
 
-def _signal_means(results: list[TestResult]) -> dict[str, dict[str, float]]:
+def _signal_means(results: list[TestResult]) -> dict[str, dict[str, float | None]]:
     """{task_id: {signal: mean over the task's runs}}. Averaging over the n runs keeps one
-    noisy run from setting the ratio."""
+    noisy run from setting the ratio. A signal that was not measured on any run (all None)
+    stays None, so it is left out of the comparison rather than counted as zero."""
     by_task: dict[str, list[Metrics]] = {}
     for r in results:
         by_task.setdefault(r.task_id, []).append(r.metrics)
-    return {
-        task_id: {name: mean(signal(m) for m in metrics) for name, signal in _SIGNALS.items()}
-        for task_id, metrics in by_task.items()
-    }
+    out: dict[str, dict[str, float | None]] = {}
+    for task_id, metrics in by_task.items():
+        sig: dict[str, float | None] = {}
+        for name, signal in _SIGNALS.items():
+            values = [v for v in (signal(m) for m in metrics) if v is not None]
+            sig[name] = mean(values) if values else None
+        out[task_id] = sig
+    return out
 
 
 def _skipped(detail: str) -> DimensionScore:

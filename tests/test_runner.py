@@ -190,7 +190,8 @@ def test_runs_are_judged_and_measured(skill, run_dir):
     assert (baseline.passed, baseline.score) == (False, 0.0)
     assert with_skill.judge is JudgeType.DETERMINISTIC
     # total = reproducible_input 80 + output 40 + reasoning 5
-    assert (with_skill.metrics.total_tokens, with_skill.metrics.tool_calls) == (125, 3)
+    # total = reproducible_input 80 + output 40 (reasoning is already inside output)
+    assert (with_skill.metrics.total_tokens, with_skill.metrics.tool_calls) == (120, 3)
     assert with_skill.metrics.reproducible_input == 80  # input 70 + cache_read 10
     assert with_skill.metrics.reasoning_tokens == 5
     assert with_skill.metrics.llm_calls == 2
@@ -210,7 +211,7 @@ def test_hermes_usage_file_maps_to_agent_run_excluding_auxiliary():
     assert run.reasoning_tokens == 0
     assert (run.cache_read_tokens, run.cache_write_tokens) == (0, 0)
     assert run.llm_calls == 1  # api_calls, not total_including_auxiliary.api_calls (2)
-    assert run.tool_calls == 0  # not reported in the usage file
+    assert run.tool_calls is None  # not reported in the usage file -> unmeasured
 
 
 def cheaper_with_skill(prompt, skill, workdir):
