@@ -11,6 +11,8 @@ Status: planning. One document per file in `metaskill/evaluate/safety/`. The ove
 | `review.py` | [review.md](review.md) | Built, tested; in the default backends at `deep` |
 | `local.py` | [local.md](local.md) | Built, tested; called by the runner once it exists |
 
+Cross-cutting: [severity-scale.md](severity-scale.md) explains where the severity scale comes from — the ordinal ranking (NIST FIPS-199) and the cardinal `[0, 1]` numbers (CVSS bands), and which parts are backed vs. owned policy.
+
 ## How the files fit together
 
 ```

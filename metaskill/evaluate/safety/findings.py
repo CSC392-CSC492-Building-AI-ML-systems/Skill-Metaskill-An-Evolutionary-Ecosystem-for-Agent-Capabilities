@@ -21,13 +21,23 @@ SEVERITY_RANK = {
     Severity.INFO: 0,
 }
 
-# [OPEN] placeholder values (evaluate-safety.md, open question 3).
+# Top of each level's CVSS v3.1 qualitative severity band (FIRST.org): the worst
+# case the level can represent. The scale is CVSS's; using the ceiling is our
+# policy (a safety gate scores a finding as the worst case in its band).
+_CVSS_BAND_CEILING = {
+    Severity.CRITICAL: 10.0,  # band 9.0-10.0
+    Severity.HIGH: 8.9,       # band 7.0-8.9
+    Severity.MEDIUM: 6.9,     # band 4.0-6.9
+    Severity.LOW: 3.9,        # band 0.1-3.9
+    Severity.INFO: 0.0,       # band None
+}
+
+# Safety score per severity level, in [0, 1] (higher = safer). Derived, not
+# chosen: invert CVSS ("higher = worse") into "higher = safer" as 1 - ceiling/10.
+# CRITICAL is a hard 0 gate, which its band ceiling (10.0) also yields. The mapping
+# is our policy, not a measurement. See docs/safety/severity-scale.md.
 SEVERITY_SCORE = {
-    Severity.CRITICAL: 0.0,
-    Severity.HIGH: 0.3,
-    Severity.MEDIUM: 0.6,
-    Severity.LOW: 0.9,
-    Severity.INFO: 0.9,
+    level: round(1.0 - ceiling / 10, 2) for level, ceiling in _CVSS_BAND_CEILING.items()
 }
 
 # Categories from different backends that describe the same problem (section 2.1).
