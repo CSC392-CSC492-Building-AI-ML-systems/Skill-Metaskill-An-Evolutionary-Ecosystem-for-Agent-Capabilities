@@ -54,6 +54,14 @@ The example configuration must not contain the detected source values. Findings 
 
 **Output:** A separate directory containing the personalized skill and a concise result report, `personalize-report.json`, listing the placeholders resolved, unused configuration entries, and warnings, without any configuration values. The same summary is returned in the tool response. The input skill and configuration remain unchanged.
 
+```text
+output/
+  personalized-skill/
+    SKILL.md
+    ...supporting files...
+  personalize-report.json
+```
+
 ## 3. Generalization design
 
 ### 3.1 File inspection
@@ -133,6 +141,14 @@ The schema marks sensitive fields so their values are excluded from logs and ord
 
 Output paths that escape the chosen destination are rejected. Secrets are never written to logs or reports. Where a skill supports it, credentials can be supplied as environment-variable references instead of literal values. Personalization does not execute the generated skill.
 
+Decisions in v1:
+
+- **Validation:** every problem is reported at once and nothing is written. A blank value counts as missing, values must be strings without line breaks or control characters, and `email` and `uri` are the supported formats. `uri` accepts the repository forms detection finds: URLs, `git@host:owner/repo` and `host/owner/repo`.
+- **Placeholders the schema does not declare:** text such as `{{config.x}}` already present in the original skill is indistinguishable from a placeholder, so undeclared ones are left unchanged and listed as unresolved with a warning rather than failing the run.
+- **Existing output:** the output must be a new or empty directory outside the generalized skill. A rerun never overwrites an earlier result. The result is built beside the output and renamed into place, so a failed run leaves nothing behind.
+- **Environment-variable references:** a value such as `${GITHUB_TOKEN}` is inserted as written and resolved by the skill at run time; personalization never reads the environment itself.
+- **Files:** UTF-8 files are substituted with their line endings and byte-order mark preserved. Binary, non-UTF-8 and over-limit files are copied unchanged, with a warning if they contain placeholders. Permissions are preserved and symlinks are skipped.
+
 ## 5. Round-trip and correctness expectations
 
 For a skill with known configuration values, generalization should replace those values with declared placeholders; personalization with the matching configuration should restore them in the corresponding locations. Unrelated content, file names, and directory structure should remain intact.
@@ -210,6 +226,9 @@ Questions raised during drafting and how they were resolved. Each is reflected i
 | Review flow for ambiguous or high-impact findings | Non-interactive; ambiguous findings reported and resolved by an optional decisions file | 3.2 |
 | LLM provider, classifier interface, privacy controls | `Classifier` protocol, off by default, masked bounded context, no bundled provider | 3.2, 9 |
 | Personalization report file or tool response only | Both: `personalize-report.json` and the tool response | 2 |
+| Placeholder-like text the schema does not declare | Left unchanged and reported as unresolved, not an error | 4 |
+| Personalizing into an existing output directory | Refused unless empty; the input is never a valid destination | 4 |
+| Credentials as environment-variable references | Inserted literally like any value and resolved by the skill at run time | 4 |
 | One tool or separate tools | One `metaskill` tool with an `operation` enum | 7 |
 | Real-skill validation set and annotation | Selected under MET-8; `expected.json` with file, line, and category | 8 |
 | What the parser extracts in v1 | Frontmatter, prompts, tool declarations, referenced scripts, env vars, dependencies | 3.1 |
