@@ -8,7 +8,7 @@ Status: planning. One document per file in `metaskill/evaluate/safety/`. The ove
 | `cisco.py` | [cisco.md](cisco.md) | Built, tested |
 | `__init__.py` | [score.md](score.md) | Built, tested; runs Cisco and own checks, the review once `review.py` exists |
 | `checks.py` | [checks.md](checks.md) | Built, tested; in the default backends |
-| `review.py` | [review.md](review.md) | Planned; `judge.py` is built, so it is no longer blocked |
+| `review.py` | [review.md](review.md) | Built, tested; in the default backends at `deep` |
 | `local.py` | [local.md](local.md) | Built, tested; called by the runner once it exists |
 
 Cross-cutting: [severity-scale.md](severity-scale.md) explains where the severity scale comes from — the ordinal ranking (NIST FIPS-199) and the cardinal `[0, 1]` numbers (CVSS bands), and which parts are backed vs. owned policy.
