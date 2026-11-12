@@ -117,6 +117,17 @@ def _check_unit(name: str, value: float) -> None:
 # --- Inputs ---------------------------------------------------------------
 
 
+def load_yaml(text: str) -> Any:
+    """text parsed by Hermes' own YAML loader. The plugin runs inside Hermes, whose runtime
+    has this and not PyYAML, so the plugin needs no YAML package of its own."""
+    try:
+        from hermes_yaml import safe_load
+    except ImportError as e:
+        raise ImportError("Hermes' YAML loader (hermes_yaml) was not found: reading YAML "
+                          "needs Hermes") from e
+    return safe_load(text)
+
+
 @dataclass
 class Skill:
     """A skill loaded from disk. Every scoring module takes one of these."""
@@ -137,18 +148,18 @@ class Skill:
         match = re.match(
             r"---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", body, re.DOTALL)
         if match:
-            try:
-                import yaml
-            except ImportError as e:
-                raise ImportError(
-                    "PyYAML is required to parse SKILL.md frontmatter. "
-                    "Install it with `pip install pyyaml`."
-                ) from e
-            parsed = yaml.safe_load(match.group(1)) or {}
+            parsed = load_yaml(match.group(1)) or {}
             if not isinstance(parsed, dict):
                 raise ValueError(
                     f"{path / 'SKILL.md'}: frontmatter is not a mapping")
             frontmatter = parsed
+        # Only text, or a number as text. The name is printed and sorted as text, and
+        # str() of a crafted YAML value (aliases nested in lists) takes minutes.
+        name = frontmatter.get("name")
+        if isinstance(name, (int, float)) and not isinstance(name, bool):
+            name = str(name)
+        if not isinstance(name, str) or not name.strip():
+            name = path.name
         skip = {"__pycache__", "node_modules"}
         files = sorted(
             f.relative_to(path)
@@ -159,7 +170,7 @@ class Skill:
         )
         return Skill(
             path=path,
-            name=frontmatter.get("name", path.name),
+            name=name,
             body=body,  # full file, so line numbers match SKILL.md
             frontmatter=frontmatter,
             files=files,
@@ -684,7 +695,8 @@ class SkillResult:
 
     name: str
     scores: Scores
-    lift: float  # pass_rate(with_skill) - pass_rate(baseline), in [-1, 1]
+    # pass_rate(with_skill) - pass_rate(baseline), in [-1, 1]; None if no tasks ran.
+    lift: float | None
     dimensions: dict[Dimension, DimensionStatus] = field(default_factory=dict)
     tests: list[TestResult] = field(default_factory=list)
     rubric: list[RubricRating] = field(default_factory=list)
@@ -693,7 +705,7 @@ class SkillResult:
 
     def __post_init__(self) -> None:
         # Also refuses NaN, which would make the ranking's order depend on input order.
-        if not -1.0 <= self.lift <= 1.0:
+        if self.lift is not None and not -1.0 <= self.lift <= 1.0:
             raise ValueError(f"lift must be in [-1, 1], got {self.lift}")
 
     def to_dict(self) -> dict[str, Any]:

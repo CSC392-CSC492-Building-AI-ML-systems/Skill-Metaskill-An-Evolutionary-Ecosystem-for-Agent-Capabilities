@@ -6,7 +6,15 @@ from pathlib import Path
 import pytest
 
 from metaskill.evaluate.models import Dimension, SafetyTier, Severity, Skill
-from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, CiscoBackend, LLMSetupError, convert
+from metaskill.evaluate.safety.checks import MAX_FRONTMATTER_VALUES, expanded_size
+from metaskill.evaluate.safety.cisco import (
+    INSTALL_COMMAND,
+    PACKAGE,
+    TESTED_VERSION,
+    CiscoBackend,
+    LLMSetupError,
+    convert,
+)
 from metaskill.evaluate.safety.findings import BackendStatus, score_from_findings
 
 FIXTURES = Path(__file__).parent / "fixtures" / "cisco"
@@ -139,6 +147,59 @@ def test_deep_scan_without_llm_analyzer_is_not_reported_as_deep():
 
 
 # --- scan() -------------------------------------------------------------------
+
+
+def test_plugin_declares_the_tested_version():
+    manifest = Path(__file__).parents[2] / "plugin.yaml"
+    assert f'"{PACKAGE}=={TESTED_VERSION}"' in manifest.read_text(encoding="utf-8")
+
+
+def nested_aliases(levels):
+    """What a YAML loader builds from `a1: &a1 [*a0, *a0]` and so on: each list holds the
+    previous one twice, as the same object."""
+    value = ["x", "x"]
+    for _ in range(levels):
+        value = [value, value]
+    return value
+
+
+def test_expanded_size_counts_aliases_as_expanded_but_quickly():
+    assert expanded_size({"name": "a", "tags": ["b", "c"]}) == 7  # the dict, 2 keys, "a", the list and its 2 items
+    assert expanded_size(nested_aliases(1)) == 7
+    assert expanded_size(nested_aliases(200)) > 2 ** 200  # instant, though never built
+
+
+def test_expanded_size_ends_on_a_recursive_alias():
+    loop = ["x"]
+    loop.append(loop)
+    assert expanded_size(loop) == 2
+
+
+def test_frontmatter_nested_too_deep_to_count_is_not_scanned():
+    deep = "x"
+    for _ in range(100_000):
+        deep = [deep]
+    skill = Skill(path=Path("deep"), name="deep", body="", frontmatter={"a": deep})
+    backend = FakeCisco(scan_output=fixture("obsidian-static"))
+    assert backend.scan(skill, SafetyTier.STATIC).status is BackendStatus.ERROR
+    assert backend.analyzers_used == "not called"
+
+
+def test_frontmatter_that_would_stall_the_scanner_is_not_scanned():
+    skill = Skill(path=Path("bomb"), name="bomb", body="",
+                  frontmatter={"name": nested_aliases(30)})
+    backend = FakeCisco(scan_output=fixture("obsidian-static"))
+    result = backend.scan(skill, SafetyTier.STATIC)
+    assert result.status is BackendStatus.ERROR and result.findings == []
+    assert "YAML aliases" in result.detail
+    assert backend.analyzers_used == "not called"
+
+
+def test_ordinary_frontmatter_is_scanned():
+    skill = Skill(path=Path("s"), name="s", body="",
+                  frontmatter={"name": "s", "tags": ["a"] * (MAX_FRONTMATTER_VALUES // 2)})
+    assert FakeCisco(scan_output=fixture("obsidian-static")).scan(skill, SafetyTier.STATIC).status is (
+        BackendStatus.OK)
 
 
 def test_not_installed():

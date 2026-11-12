@@ -63,13 +63,13 @@ Examples:
 **`reason`**: one line explaining the score.
 
 - `Worst finding: HIGH destructive-unconfirmed at SKILL.md:42`
-- `No findings at static tier`
+- `No safety findings at static tier`. Findings routed to another dimension can still be listed in the report ([cisco.md](cisco.md))
 - `Not scored: no safety backend could run`
 
 **`detail`**: empty when the status is `ok`. Otherwise one line per backend that was not `ok`, taken from its `BackendResult.detail`:
 
 ```
-cisco: not installed; install with `pip install cisco-ai-skill-scanner==2.2.1`
+cisco: Cisco skill-scanner not installed; run `hermes plugins disable metaskill; hermes plugins enable metaskill` in a terminal, then restart Hermes
 llm-review: no judge configured
 ```
 

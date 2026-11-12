@@ -17,12 +17,15 @@ from pathlib import Path
 from typing import Any
 
 from ..models import Dimension, Finding, SafetyTier, Severity, Skill
+from .checks import MAX_FRONTMATTER_VALUES, frontmatter_too_large
 from .findings import BackendResult, BackendStatus
 from .hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
 TESTED_VERSION = "2.2.1"
-INSTALL_COMMAND = f"pip install {PACKAGE}=={TESTED_VERSION}"
+# Hermes installs what plugin.yaml declares when the plugin is enabled. pip would reach
+# another Python: Hermes' own environment has no pip.
+INSTALL_COMMAND = "hermes plugins disable metaskill; hermes plugins enable metaskill"
 
 # Name the scanner gives its LLM analyzer in analyzers_used and analyzers_failed.
 LLM_ANALYZER = "llm_analyzer"
@@ -33,8 +36,8 @@ LLM_ANALYZER = "llm_analyzer"
 SCANNER_NOTICES = {"LLM_ANALYSIS_FAILED", "LLM_CONTEXT_BUDGET_EXCEEDED"}
 _BUDGET_NOTICE = "LLM_CONTEXT_BUDGET_EXCEEDED"
 
-# [OPEN] evaluate-safety.md, open question 6. These are not about harm to the user,
-# so they are kept as evidence under Configuration Cleanliness and not scored here.
+# These are not about harm to the user, so they are kept as evidence under
+# Configuration Cleanliness and not scored here (docs/safety/cisco.md).
 ROUTED_CATEGORIES = {
     "hardcoded_secrets": Dimension.CONFIG_CLEANLINESS,
     "policy_violation": Dimension.CONFIG_CLEANLINESS,
@@ -73,8 +76,18 @@ class CiscoBackend:
         if not self.available():
             return BackendResult(
                 self.name, BackendStatus.NOT_INSTALLED, tier,
-                detail=f"Cisco skill-scanner not installed; install with `{INSTALL_COMMAND}`")
+                detail=(f"Cisco skill-scanner not installed; run `{INSTALL_COMMAND}` in a "
+                        "terminal, then restart Hermes"))
         try:
+            # The scanner parses the frontmatter itself, and its time doubles with each
+            # level of nested aliases (2.2.1: 6s at 2^24 values, minutes past 2^28). Our
+            # own checks report the frontmatter as a HIGH finding instead.
+            if frontmatter_too_large(skill.frontmatter):
+                return BackendResult(
+                    self.name, BackendStatus.ERROR, tier,
+                    detail=(f"not run: the frontmatter expands to more than "
+                            f"{MAX_FRONTMATTER_VALUES} values through YAML aliases, which "
+                            "would stall the scanner"))
             if tier is SafetyTier.DEEP:
                 if self.llm is None:
                     result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)

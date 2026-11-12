@@ -6,7 +6,7 @@ Code: [`metaskill/evaluate/runner.py`](../../metaskill/evaluate/runner.py), [`me
 
 ## 1. Task files (`tasks.py`)
 
-`load_tasks(path)` reads a JSON or YAML file (YAML needs PyYAML). The file holds either a list of tasks or an object with a `tasks` list. Each task has the shape of `Task.to_dict()` ([models.md](models.md)):
+`load_tasks(path)` reads a JSON or YAML file (YAML needs Hermes' loader, `load_yaml` in [models.md](models.md)). The file holds either a list of tasks or an object with a `tasks` list. Each task has the shape of `Task.to_dict()` ([models.md](models.md)):
 
 ```json
 {

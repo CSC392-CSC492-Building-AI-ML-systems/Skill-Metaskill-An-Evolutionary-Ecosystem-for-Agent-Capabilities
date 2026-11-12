@@ -219,6 +219,18 @@ Not matched, because real skills use them:
 
 None of the 58 Hermes skills triggers any of the three rules.
 
+### Frontmatter aliases
+
+Added in `CHECKS_VERSION` 3.
+
+| Rule | Matches | Severity |
+|---|---|---|
+| `frontmatter-aliases` | Frontmatter that holds more than `MAX_FRONTMATTER_VALUES` (100,000) values once its YAML aliases are expanded, or that is nested too deep to count | HIGH |
+
+YAML aliases let a few hundred bytes describe billions of values (`a1: &a1 [*a0, *a0]`, and so on). Loading them is instant, because each alias is the same object. Expanding them is not: Cisco's scanner parses the frontmatter itself, and with 2.2.1 its time doubles with each level, 6 s at 2^24 values and minutes past 2^28. So Cisco is not run on such a skill ([cisco.md](cisco.md)), and without this rule the skill would keep a `partial` score from our own checks alone. A skill has no reason to do this, and dodging a scanner is itself suspicious, so it is `excess-scope` at HIGH, like hidden tag text.
+
+`expanded_size` counts each object once and reuses that count, so it is quick however large the expansion is; a recursive alias adds nothing more. The quote is `more than 100000 values` and the location `SKILL.md:1`: the frontmatter is never printed, since that is what takes minutes. Real skills have a few hundred values, and none of the 58 Hermes skills comes near the limit.
+
 ## Results on real skills
 
 Run on 19 Oct 2026 against the 59 skills in a local `~/.hermes/skills`, static only, then again on 21 Oct with version 3. The hidden-characters rule (version 2) found nothing in any of them:

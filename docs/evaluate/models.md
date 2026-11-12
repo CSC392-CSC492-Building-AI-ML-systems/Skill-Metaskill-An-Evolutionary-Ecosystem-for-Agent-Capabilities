@@ -42,12 +42,12 @@ A skill loaded from disk. Every scoring module takes one.
 | Field | Description |
 |---|---|
 | `path` | The skill directory |
-| `name` | `name` from the frontmatter, otherwise the directory name |
+| `name` | `name` from the frontmatter if it is text or a number (as text), otherwise the directory name. Any other value is ignored: printing a crafted YAML value, such as aliases nested in lists, can take minutes |
 | `body` | The full contents of `SKILL.md`, frontmatter included, so line numbers match the file |
 | `frontmatter` | Parsed YAML frontmatter; `{}` if there is none |
 | `files` | Bundled files relative to `path`, sorted. Excludes `SKILL.md`, anything under a dot-prefixed path, `__pycache__` and `node_modules` |
 
-`Skill.load(path)` builds one from a directory. PyYAML is only needed if `SKILL.md` has frontmatter. Frontmatter that is not a mapping raises `ValueError`.
+`Skill.load(path)` builds one from a directory. Frontmatter is parsed by Hermes' own YAML loader (`load_yaml`, over `hermes_yaml`), since Hermes' runtime has no PyYAML, so it only loads inside Hermes. That loader rejects duplicate keys. Frontmatter that is not a mapping raises `ValueError`.
 
 ### `EvaluationConfig`
 
@@ -172,7 +172,7 @@ Everything evaluated for one skill.
 |---|---|
 | `name` | Skill name |
 | `scores` | `Scores` |
-| `lift` | `pass_rate(with_skill) - pass_rate(baseline)`, in `[-1, 1]` (evaluate.md 4.1). Checked on construction; NaN is refused |
+| `lift` | `pass_rate(with_skill) - pass_rate(baseline)`, in `[-1, 1]` (evaluate.md 4.1), or `None` if no tasks ran, as `0` would say the skill adds nothing. Checked on construction; NaN is refused |
 | `dimensions` | `{Dimension: DimensionStatus}` |
 | `tests`, `rubric`, `findings` | All `TestResult`s, `RubricRating`s and `Finding`s for the skill |
 

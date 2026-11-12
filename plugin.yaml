@@ -3,3 +3,5 @@ version: 0.1.0
 description: Generalize, personalize, evaluate, and merge Hermes skills
 provides_tools:
   - metaskill
+python_dependencies:
+  - "cisco-ai-skill-scanner==2.2.1"
