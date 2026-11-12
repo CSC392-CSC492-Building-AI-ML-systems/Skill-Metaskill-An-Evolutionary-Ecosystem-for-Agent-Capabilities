@@ -42,14 +42,17 @@ The runner records these per run as [`Metrics`](../metaskill/evaluate/models.py)
 
 **Unweighted geometric mean of per-signal speedup ratios, squashed to [0, 1].**
 
-For each counted task and each signal with positive counts on both runs:
+For each counted task and each signal:
 
 ```
-r = baseline_signal / with_skill_signal      # speedup: > 1 cheaper than baseline
+r = (baseline_signal + 1) / (with_skill_signal + 1)   # smoothed speedup; > 1 cheaper
 ```
 
-Collect every such `r` across all counted tasks and signals, take their geometric mean
-`G`, and map to the score:
+The `+ 1` is additive (Laplace) smoothing: it keeps `r` defined when either side is zero
+and stays within a hair of `baseline/with_skill` for large counts. Without it, a signal
+that is zero on either side would drop out, letting a skill add tool calls against a zero
+baseline for free, or get no credit for removing them. Collect every `r` across all
+counted tasks and signals, take their geometric mean `G`, and map to the score:
 
 ```
 value = G / (1 + G)        # parity (G = 1) -> 0.5; cheaper -> higher; costlier -> lower
@@ -75,18 +78,20 @@ value = G / (1 + G)        # parity (G = 1) -> 0.5; cheaper -> higher; costlier 
 Cost is only credited when the task **succeeded with the skill**. A skill that bails out
 early and fails is cheap but worthless, so it earns no efficiency credit.
 
-- A task is **counted** only if its with-skill run passed.
-- If **no** with-skill run passed, efficiency is `None` / `skipped` — there is nothing to
-  measure, and quality/robustness already record the failures.
-- The failing of a with-skill task is penalized by Quality and Robustness, not re-counted
-  here, so cost and success are not conflated.
+- A task is **counted** if **any** of its with-skill runs passed; its cost is then averaged
+  over **all** of that task's with-skill runs. Failed runs are often the expensive ones
+  (the agent loops until it hits a limit), so including them stops a cheap pass from hiding
+  an expensive failure. Success decides whether a task counts; cost reflects what the skill
+  actually spent.
+- If **no** with-skill run passed on any task, efficiency is `None` / `skipped` — there is
+  nothing to measure, and quality/robustness already record the failures.
 
-## 4. Zero and missing baselines
+## 4. Smoothing and missing baselines
 
-- A signal is included only when **both** runs have a positive count; a signal that is
-  zero on either side forms no ratio and is dropped for that task.
-- A task with no usable signal (all dropped) does not contribute.
-- A missing baseline run for a counted task drops that task.
+- Every signal contributes a smoothed ratio (§2), so a count that is zero on either side is
+  a real comparison, not a dropped signal.
+- A task counts only if it has a **baseline** to compare against; a passed task with no
+  baseline is dropped, and `detail` reports "N of M passed tasks counted".
 
 Known limitation: a baseline that failed *cheaply* (did little, then failed) can make the
 skill look costlier than it is. Gating the candidate does not fix the reference side; see

@@ -70,12 +70,36 @@ def test_reasoning_tokens_count_as_generation():
     assert score_from_runs(withs, base).value < 0.5
 
 
-def test_zero_signal_on_either_side_is_dropped():
-    # tool_calls 0 on both forms no ratio; input still scores parity.
-    withs = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=0))]
+def test_skill_adding_calls_from_a_zero_baseline_is_penalized():
+    # Smoothing: baseline 0 tool calls, skill 50 -> below 0.5 (not a free pass).
+    withs = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=50))]
     base = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=0),
                    variant=Variant.BASELINE)]
-    assert score_from_runs(withs, base).value == 0.5
+    assert score_from_runs(withs, base).value < 0.5
+
+
+def test_skill_removing_calls_is_credited():
+    # Baseline 5 tool calls, skill 0 -> above 0.5 (credited, not dropped).
+    withs = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=0))]
+    base = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=5),
+                   variant=Variant.BASELINE)]
+    assert score_from_runs(withs, base).value > 0.5
+
+
+def test_failed_runs_count_toward_a_counted_tasks_cost():
+    # The task passes once (cheap) but also failed expensively; cost averages all runs.
+    withs = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=1), passed=True, run=1),
+             result("a", m(input=900, output=180, llm_calls=18, tool_calls=9),
+                    passed=False, run=2)]
+    base = [result("a", m(input=100, output=20, llm_calls=2, tool_calls=1),
+                   variant=Variant.BASELINE)]
+    assert score_from_runs(withs, base).value < 0.5  # the expensive failure is not hidden
+
+
+def test_detail_reports_counted_of_passed_tasks():
+    withs = [result("a", m(**EVEN)), result("b", m(**EVEN))]  # both pass
+    base = [result("a", m(**EVEN), variant=Variant.BASELINE)]  # only "a" has a baseline
+    assert score_from_runs(withs, base).detail == "1 of 2 passed task(s) counted"
 
 
 def test_task_without_baseline_is_dropped():

@@ -43,38 +43,45 @@ def score_from_runs(with_skill: list[TestResult],
                     baseline: list[TestResult]) -> DimensionScore:
     """Efficiency in [0, 1] from paired task runs (docs/evaluate-efficiency.md 2-4).
 
-    Counts only tasks the skill passed (success-gating): a cheap failure is not efficient.
-    For each counted task and each signal positive on both sides, forms the speedup ratio
-    baseline/with_skill; the unweighted geometric mean of all such ratios, mapped by
-    G/(1+G), is the score (parity -> 0.5, cheaper -> higher).
+    A task counts if any of its with-skill runs passed (a cheap failure is not efficient),
+    and its cost is averaged over all of that task's with-skill runs. For each counted task
+    and signal, forms the smoothed speedup ratio (baseline + 1)/(with_skill + 1); the
+    unweighted geometric mean of all such ratios, mapped by G/(1+G), is the score
+    (parity -> 0.5, cheaper -> higher).
     """
-    passed = [r for r in with_skill if r.passed]
-    with_means = _signal_means(passed)
+    # Success-gating by task: a task counts if ANY of its with-skill runs passed; its cost
+    # is then averaged over ALL of that task's with-skill runs, so an expensive failure is
+    # not hidden by a cheap pass.
+    passed_tasks = {r.task_id for r in with_skill if r.passed}
+    with_means = _signal_means([r for r in with_skill if r.task_id in passed_tasks])
     base_means = _signal_means(baseline)
 
     ratios: list[float] = []
     counted = 0
     for task_id, with_sig in with_means.items():
         base_sig = base_means.get(task_id)
-        if base_sig is None:  # no baseline for this task: cannot form a ratio
+        if base_sig is None:  # no baseline for this task: nothing to compare against
             continue
         counted += 1
         for name in _SIGNALS:
             w, b = with_sig[name], base_sig[name]
-            if w > 0 and b > 0:  # a signal zero on either side forms no ratio
-                ratios.append(b / w)
+            # Additive (Laplace) smoothing: defined when either side is zero, and within a
+            # hair of b/w for large counts. So a skill that adds calls against a zero
+            # baseline is penalised, and one that removes them is credited.
+            ratios.append((b + 1) / (w + 1))
 
-    if counted == 0:
-        return _skipped("no task passed with the skill, or no baseline to compare")
+    total = len(passed_tasks)
     if not ratios:
-        return _skipped("no usable cost signal on the passed tasks")
+        return _skipped(f"{total} task(s) passed with the skill but none had a baseline"
+                        if total else "no task passed with the skill")
 
     g = geometric_mean(ratios)
     value = g / (1 + g)
+    verdict = "cheaper" if value > 0.5 else "costlier" if value < 0.5 else "even"
     return DimensionScore(
         Dimension.EFFICIENCY, value, Status.OK,
-        reason=f"Cost vs. baseline over {counted} task(s): "
-               f"{'cheaper' if value > 0.5 else 'costlier' if value < 0.5 else 'even'}")
+        reason=f"Cost vs. baseline over {counted} task(s): {verdict}",
+        detail=f"{counted} of {total} passed task(s) counted")
 
 
 def _signal_means(results: list[TestResult]) -> dict[str, dict[str, float]]:

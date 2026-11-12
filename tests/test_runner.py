@@ -24,6 +24,7 @@ from metaskill.evaluate.models import (
 from metaskill.evaluate import efficiency
 from metaskill.evaluate.runner import (
     AgentRun,
+    agent_run_from_hermes_usage,
     report_dir,
     run_skill,
     run_tasks,
@@ -197,6 +198,19 @@ def test_runs_are_judged_and_measured(skill, run_dir):
     # Metrics round-trips through the report JSON unchanged.
     assert TestResult.from_dict(with_skill.to_dict()).metrics == with_skill.metrics
     assert result.errors == [] and result.judge_model == ""
+
+
+def test_hermes_usage_file_maps_to_agent_run_excluding_auxiliary():
+    # The real usage file captured from `hermes -z --usage-file`. The mapper must read the
+    # top-level counts (the agent's own turns), not the `auxiliary` title-generation call.
+    usage = json.loads((Path(__file__).parent / "fixtures" / "hermes_usage.json").read_text())
+    run = agent_run_from_hermes_usage("ok", usage)
+    assert run.input_tokens == 12699
+    assert run.output_tokens == 5
+    assert run.reasoning_tokens == 0
+    assert (run.cache_read_tokens, run.cache_write_tokens) == (0, 0)
+    assert run.llm_calls == 1  # api_calls, not total_including_auxiliary.api_calls (2)
+    assert run.tool_calls == 0  # not reported in the usage file
 
 
 def cheaper_with_skill(prompt, skill, workdir):

@@ -65,6 +65,31 @@ class AgentRun:
     transcript: str = ""  # the full session for the log, if the agent provides one
 
 
+def agent_run_from_hermes_usage(output: str, usage: dict[str, Any],
+                                transcript: str = "") -> AgentRun:
+    """Build an AgentRun from a `hermes -z --usage-file` report's TOP-LEVEL usage.
+
+    Those counts are the agent's own task turns; the report's `auxiliary` block (title
+    generation and other host side-tasks) is deliberately not read, so it never counts
+    toward the skill (see AgentRun above). `api_calls` maps to llm_calls. tool_calls is
+    not in the usage file, so it is 0 here; a real agent counts its own tool calls.
+    """
+    def n(key: str) -> int:
+        return int(usage.get(key, 0) or 0)
+
+    return AgentRun(
+        output=output,
+        input_tokens=n("input_tokens"),
+        output_tokens=n("output_tokens"),
+        reasoning_tokens=n("reasoning_tokens"),
+        cache_read_tokens=n("cache_read_tokens"),
+        cache_write_tokens=n("cache_write_tokens"),
+        llm_calls=n("api_calls"),
+        tool_calls=0,
+        transcript=transcript,
+    )
+
+
 class Agent(Protocol):
     """Starts one agent session. `skill` is None for the baseline run.
 

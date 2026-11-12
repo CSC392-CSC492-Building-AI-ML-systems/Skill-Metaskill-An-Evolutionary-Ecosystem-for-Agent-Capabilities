@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
 import re
@@ -428,6 +428,13 @@ class Metrics:
         """Every token processed, for display."""
         return self.reproducible_input + self.output_tokens + self.reasoning_tokens
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Metrics:
+        """Tolerant of unknown or missing keys, so a report written by another version of
+        the metrics still loads (reports are retained as the run's source of truth)."""
+        names = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in names})
+
 
 @dataclass
 class TestResult:
@@ -487,7 +494,7 @@ class TestResult:
             passed=data["passed"],
             score=data["score"],
             reason=data["reason"],
-            metrics=Metrics(**data["metrics"]),
+            metrics=Metrics.from_dict(data["metrics"]),
             output=data["output"],
             evidence=data.get("evidence", None),
         )
