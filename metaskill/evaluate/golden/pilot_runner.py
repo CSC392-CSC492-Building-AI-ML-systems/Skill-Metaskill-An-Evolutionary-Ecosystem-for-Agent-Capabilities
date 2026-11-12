@@ -134,4 +134,3 @@ def run_prepared(prepared: PreparedPilot, agent: Agent, *,
         config=config, run_dir=run_dir,
         judges={JudgeType.DETERMINISTIC: prepared.judge}, sandbox=sandbox,
     )
-
