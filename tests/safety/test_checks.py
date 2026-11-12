@@ -554,6 +554,24 @@ def test_confirmed_skipped_matches_are_rechecked(tmp_path):
     assert w.kind == "confirmation"  # asked the confirmation question at the deep tier
 
 
+def test_confirmation_with_a_warning_label_uses_the_confirmation_question(tmp_path):
+    # A warning label and a harm word make this a "warning", but it is also a real
+    # confirmation, so it must be re-checked with the confirmation question rather than
+    # restored as an instruction (review feedback).
+    text = ("Warning: this permanently deletes the folder, so ask the user before running "
+            "`rm -rf ~/projects/old`.")
+    [w] = checks.skipped_warnings(make(tmp_path, {"SKILL.md": text + "\n"}))
+    assert w.kind == "confirmation"
+
+
+@pytest.mark.parametrize("expr", [
+    "os.path.expanduser('~')" + " " * 520 + " + '/Documents'",
+    "str(" + " " * 520 + "Path.home())",
+])
+def test_python_path_resolves_despite_whitespace_padding(expr):
+    assert checks._python_path(expr) is not None  # padding cannot defeat the length guard
+
+
 # --- Review feedback: confirmation and warning bypasses (PR #11) ---
 
 

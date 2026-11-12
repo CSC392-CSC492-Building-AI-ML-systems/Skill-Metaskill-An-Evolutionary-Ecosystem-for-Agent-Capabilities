@@ -313,6 +313,34 @@ def test_false_confirmation_is_restored_at_deep_tier(tmp_path):
     assert "does not depend on the user" in restored.message
 
 
+def test_confirmation_with_a_warning_label_stays_cleared_at_deep_tier(tmp_path):
+    # A real confirmation that also carries a warning label must take the confirmation
+    # question, so a correct model keeps it cleared instead of restoring it (review feedback).
+    body = ("Warning: this permanently deletes the folder, so ask the user before running "
+            "`rm -rf ~/projects/old`.\n")
+    judge = FakeJudge(answer=lambda items: answer_confirmations(items, real="confirmed"))
+    result = ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    assert [f for f in result.findings if f.rule == "recursive-delete"] == []
+
+
+def test_a_failed_group_keeps_the_other_groups_findings(tmp_path):
+    # The warning call restores a CRITICAL; the confirmation call then fails (no model). The
+    # warning finding must survive and the result be flagged, not discarded (review feedback).
+    body = ("Never run `rm -rf ~/`.\n\n"
+            "Back up your files first, then run `rm -rf data/` to clean up.\n")
+    confirm_sentences = ({c["sentence"] for c in review._CONTROL_CONFIRMED}
+                         | {c["sentence"] for c in review._CONTROL_UNCONFIRMED})
+
+    def answer(items):
+        if any(item["sentence"] in confirm_sentences for item in items):
+            raise JudgeUnavailable("no model for the confirmation call")
+        return answer_by_sentence(items, real="instruction")
+
+    result = ReviewBackend(FakeJudge(answer=answer)).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    assert any(f.rule == "recursive-delete" for f in result.findings)  # warning group's CRITICAL kept
+    assert result.status is BackendStatus.LLM_UNAVAILABLE  # flagged as not fully reliable
+
+
 def test_window_keeps_the_command_when_padded_before(tmp_path):
     # Padding before the match must not push the command and its context out of the window
     # the model sees (the window is centred on the match, not the start of the text).

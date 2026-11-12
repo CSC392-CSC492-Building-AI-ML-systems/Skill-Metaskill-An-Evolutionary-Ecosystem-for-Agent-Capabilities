@@ -266,15 +266,19 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
         for l_index, (lineno, text) in enumerate(unit.lines):
             for hit in _hits(text, unit):
                 location = f"{unit.path}:{lineno}"
+                confirmed = hit.category == DESTRUCTIVE and (
+                    hit.confirmed or _confirmed(unit, l_index, previous))
                 if unit.kind == "prose" and (_is_warning(unit, l_index, hit.start)
                                              or _is_example(unit, l_index, hit)):
                     skipped.append(f"{location} ({hit.snippet})")
-                    # Every cleared prose match is re-checked by the deep tier, so a false
-                    # warning is caught there.
-                    rechecks.append(_skipped_warning(hit, unit, l_index, location, ctx))
+                    # Every cleared prose match is re-checked by the deep tier. A match that
+                    # is also a confirmed destructive uses the confirmation question, so a
+                    # genuine confirmation that also carries a warning label is not restored
+                    # as an instruction.
+                    kind = "confirmation" if confirmed else "warning"
+                    rechecks.append(_skipped_warning(hit, unit, l_index, location, ctx, kind))
                     continue
-                if hit.category == DESTRUCTIVE and (
-                        hit.confirmed or _confirmed(unit, l_index, previous)):
+                if confirmed:
                     # A confirmed destructive is cleared from the static findings, but a
                     # prose match is routed to the deep re-check with the confirmation
                     # question, so a false confirmation is caught while a genuine one stays
@@ -531,7 +535,9 @@ def _python_path(expr: str, _depth: int = 0) -> str | None:
     os.path.join(os.environ["HOME"], "Documents") or Path.home() / "Documents"."""
     if _depth > 8:  # a deeply nested str(str(...)) is not a real path; stop recursing
         return None
-    expr = expr.strip()
+    # Collapse whitespace runs so padding between tokens cannot push a real path over the
+    # length guard below (or make the `.+?` patterns backtrack).
+    expr = re.sub(r"\s{2,}", " ", expr.strip())
     m = re.fullmatch(_PY_STR, expr)
     if m:
         return m.group("s")

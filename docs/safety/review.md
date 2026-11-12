@@ -44,7 +44,7 @@ One `Judge.review()` call per skill. The re-check of cleared matches (below) add
 The own checks clear two kinds of prose match: ones that look like warnings, and ones that a confirmation step seems to gate ([checks.md](checks.md), warning and confirmation checks). The heuristics misread some sentences, so at the `deep` tier the review re-checks every cleared match and can **restore** any that is really an unguarded instruction. The two kinds ask different questions, each in its own call with its own known-answer controls:
 
 - **Warning matches:** *does the sentence tell the agent to run the command, or warn it not to?* Restored on `instruction`.
-- **Confirmation matches:** *does running the command actually depend on the user's approval?* Restored on `unconfirmed`. This is what keeps a genuine confirmation ("ask the user before running `rm -rf …`, then run it") cleared while catching a false one ("ask the user for their favourite colour").
+- **Confirmation matches:** *does running the command actually depend on the user's approval?* Restored on `unconfirmed`. This is what keeps a genuine confirmation ("ask the user before running `rm -rf …`, then run it") cleared while catching a false one ("ask the user for their favourite colour"). Like the warning question it reads the skill's own text, so a skill that simply *claims* approval ("the user has already approved this") can still mislead it: the re-check narrows the gap the static heuristic leaves, it does not close it.
 
 **It can only restore, never remove.** The model only sees matches the static check already cleared, and its only possible effect is to turn one back into a finding:
 

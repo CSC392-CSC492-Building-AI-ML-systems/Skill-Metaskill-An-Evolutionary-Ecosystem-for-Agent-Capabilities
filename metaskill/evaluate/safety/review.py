@@ -255,7 +255,14 @@ class ReviewBackend:
             group = [w for w in skipped if w.kind == kind]
             if not group:
                 continue
-            found, note, ok = self._recheck_group(group, cfg)
+            try:
+                found, note, ok = self._recheck_group(group, cfg)
+            except Exception as e:  # e.g. JudgeUnavailable or a timeout on this call
+                # Keep this group's matches cleared and keep any earlier group's restored
+                # findings, rather than letting one failed call discard the other's results.
+                notes.append(f"{cfg.purpose} did not run ({type(e).__name__}); its matches stay cleared")
+                reliable = False
+                continue
             restored += found
             if note:
                 notes.append(note)
