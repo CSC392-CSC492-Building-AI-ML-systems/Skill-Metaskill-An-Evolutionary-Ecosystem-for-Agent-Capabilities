@@ -850,8 +850,11 @@ _GOVERNING_NEGATION = re.compile(
     r"|do|doing|try|trying)\s+)?"
     # Earlier commands in the list extend the negation only when the last separator before
     # the governed command is a conjunction, not a bare comma: "do not use `a` or `b`" is a
-    # warning about both, but "do not use `--interactive`, `rm -rf ~/` is faster" is not.
-    r"(?:(?:`[^`]*`\s*,\s*)*`[^`]*`\s*,?\s*(?:\bor\b|\band\b|\bnor\b)\s+)?$", re.I)
+    # warning about both, but "do not use `--interactive`, `rm -rf ~/` is faster" is not. The
+    # list is bounded ({0,40}) so the nested groups cannot backtrack quadratically on hostile
+    # input (a long run of "`x`, ").
+    r"(?:(?:`[^`]*`\s*(?:,|\bor\b|\band\b|\bnor\b)\s*){0,40}"
+    r"`[^`]*`\s*,?\s*(?:\bor\b|\band\b|\bnor\b)\s+)?$", re.I)
 # A warning label at the start of the sentence.
 _WARNING_LABEL = re.compile(r"^\W*(?:warning|caution|danger)\b|^\W*⚠", re.I)
 # Words that describe the danger of a command: a negation, or the harm itself. A warning

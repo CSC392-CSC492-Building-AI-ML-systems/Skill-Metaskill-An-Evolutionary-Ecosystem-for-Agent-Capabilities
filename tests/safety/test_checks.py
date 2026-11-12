@@ -572,6 +572,14 @@ def test_python_path_resolves_despite_whitespace_padding(expr):
     assert checks._python_path(expr) is not None  # padding cannot defeat the length guard
 
 
+def test_governing_negation_is_not_redos_prone():
+    import time
+    # A long run of "`x`, " must not make the warning-governing regex backtrack (PR #11).
+    start = time.monotonic()
+    checks._GOVERNING_NEGATION.search("never run " + "`x`, " * 10000 + "y")
+    assert time.monotonic() - start < 1.0
+
+
 # --- Review feedback: confirmation and warning bypasses (PR #11) ---
 
 
