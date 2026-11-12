@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,8 @@ from .models import (
 from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
 from .runner import report_dir, timestamp
+
+_log = logging.getLogger(__name__)
 
 # The module that scores each dimension (evaluate.md section 6), once it exists. Each has
 # score(skill, config, llm=...) -> DimensionScore, so adding one needs no change here.
@@ -179,6 +182,8 @@ def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
         return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",
                               detail="no judge model is available")
     except Exception as e:
+        # The report keeps only the type; the full error goes to the host's log.
+        _log.warning("metaskill: %s failed for %s", dimension.value, skill.name, exc_info=True)
         return DimensionScore(dimension, None, Status.ERROR, reason="Not scored",
                               detail=f"failed: {type(e).__name__}")
 

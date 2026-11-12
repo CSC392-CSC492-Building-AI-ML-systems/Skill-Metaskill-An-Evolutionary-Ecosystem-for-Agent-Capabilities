@@ -502,8 +502,9 @@ class Judge:
                 reply_usage = getattr(result, "usage", None)
                 usage.input_tokens += int(getattr(reply_usage, "input_tokens", 0) or 0)
                 usage.output_tokens += int(getattr(reply_usage, "output_tokens", 0) or 0)
-                parsed = result.parsed if result.content_type == "json" else None
-                problems = (schema_problems(parsed, schema) if isinstance(parsed, dict)
+                parsed = (result.parsed if getattr(result, "content_type", "") == "json"
+                          else parse_json_reply(getattr(result, "text", "") or ""))
+                problems =(schema_problems(parsed, schema) if isinstance(parsed, dict)
                             else ["the reply was not a JSON object"])
                 if not problems:
                     break
@@ -518,13 +519,18 @@ class Judge:
     def _complete(self, instructions: str, material: str, system_prompt: str, purpose: str,
                   temperature: float | None, max_tokens: int | None,
                   timeout: float | None) -> Any:
-        """One ctx.llm call. A reply that is not JSON comes back as text, not an error."""
+        """One ctx.llm call. The reply comes back as text and _ask parses it.
+
+        Neither json_mode nor json_schema is sent. json_schema is validated strictly by
+        Hermes (judge.md 2.4), and json_mode breaks on Anthropic: Hermes turns it into the
+        schema {"type": "object"}, which the Anthropic API rejects with a 400 because it
+        has no "additionalProperties": false.
+        """
         kwargs: dict[str, Any] = {"task": self.task} if self.task else {}
         try:
             return self.llm.complete_structured(
                 instructions=instructions,
                 input=[{"type": "text", "text": material}],
-                json_mode=True,
                 system_prompt=system_prompt,
                 provider=self.provider or None,
                 model=self.model or None,
@@ -915,6 +921,30 @@ def make_judge(judge_type: JudgeType | str, *, ctx: Any = None,
     if ctx is None:
         raise JudgeUnavailable("the LLM judge needs the plugin context (ctx.llm)")
     return Judge.from_context(ctx, config or EvaluationConfig())
+
+
+_FENCED = re.compile(r"```(?:json)?\s*(.+?)```", re.DOTALL | re.IGNORECASE)
+
+
+def parse_json_reply(text: str) -> Any:
+    """The JSON value in a reply sent as text, or None if there is none.
+
+    Tried in order: the whole reply, the first fenced block, then the span from the
+    first "{" to the last "}" (a reply with a sentence before or after the object).
+    """
+    candidates = [text.strip()]
+    fenced = _FENCED.search(text)
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        candidates.append(text[start:end + 1])
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except ValueError:
+            continue
+    return None
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:

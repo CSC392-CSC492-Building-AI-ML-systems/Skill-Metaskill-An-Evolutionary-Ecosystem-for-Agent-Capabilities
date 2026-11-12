@@ -181,9 +181,14 @@ Every rating, finding and checklist item must quote its supporting text exactly,
 
 ### 2.4 Reply format and retries
 
-The JSON schema is sent in the instructions as guidance, with `json_mode` on. It is not passed to `ctx.llm` as `json_schema`: Hermes validates that strictly and fails the whole call on any mismatch, which made 10 of 25 Cisco scans fail on `gpt-5.4-nano` (evaluate-safety.md, safety/cisco.md).
+The JSON schema is sent in the instructions as guidance only, and the reply is read as text. Neither option `ctx.llm` offers is used:
 
-The judge checks each reply itself (`schema_problems`: type, required fields, enums, items; extra fields are ignored). A reply that does not fit, or is not JSON (with `json_mode` and no `json_schema`, Hermes returns it as text), is asked for again with the problems listed, up to `EvaluationConfig.judge_retries` times (default 1, so at most two calls). After the last try:
+- `json_schema`: Hermes validates it strictly and fails the whole call on any mismatch, which made 10 of 25 Cisco scans fail on `gpt-5.4-nano` (evaluate-safety.md, safety/cisco.md).
+- `json_mode`: on Anthropic, Hermes turns it into the schema `{"type": "object"}`, which the Anthropic API rejects with a 400 (`additionalProperties` must be set to false). Every judge call failed with `JudgeError` on Anthropic models until it was removed.
+
+`parse_json_reply` reads the reply: the whole text, then the first fenced block, then the span from the first `{` to the last `}`.
+
+The judge checks each reply itself (`schema_problems`: type, required fields, enums, items; extra fields are ignored). A reply that does not fit, or has no JSON object in it, is asked for again with the problems listed, up to `EvaluationConfig.judge_retries` times (default 1, so at most two calls). After the last try:
 
 - A JSON object is returned even if it still does not fit. The methods above drop what they cannot use (`review` lists it in `dropped`).
 - Anything else raises `JudgeError`.

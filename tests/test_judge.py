@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import subprocess
@@ -25,6 +26,7 @@ from metaskill.evaluate.judge import (
     locate,
     make_judge,
     mark_hidden,
+    parse_json_reply,
     schema_problems,
     skill_sources,
     strip_hidden,
@@ -65,9 +67,13 @@ class FakeLlm:
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
+        # Like Hermes: the reply is only parsed when json_mode or json_schema is asked for;
+        # otherwise it comes back as text and the judge parses it.
+        structured = isinstance(reply, dict) and (kwargs.get("json_mode") or kwargs.get("json_schema"))
         return SimpleNamespace(
-            text=str(reply), provider="fake", model="fake-model",
-            parsed=reply, content_type="json" if isinstance(reply, dict) else "text",
+            text=json.dumps(reply) if isinstance(reply, dict) else str(reply),
+            provider="fake", model="fake-model",
+            parsed=reply if structured else None, content_type="json" if structured else "text",
             usage=SimpleNamespace(input_tokens=100, output_tokens=10))
 
 
@@ -342,11 +348,27 @@ def test_ask_leaves_out_the_task_where_hermes_has_no_auxiliary_tasks():
 
 
 def test_ask_sends_the_schema_as_guidance_not_for_hermes_to_enforce():
+    # No json_schema (Hermes validates it strictly) and no json_mode (Hermes turns it into
+    # {"type": "object"}, which the Anthropic API rejects with a 400).
     j = judge({"ok": 1})
-    j.ask("do it", "material", {"type": "object", "required": ["ok"]}, "rate")
+    assert j.ask("do it", "material", {"type": "object", "required": ["ok"]}, "rate") == {"ok": 1}
     call = j.llm.calls[0]
-    assert call["json_mode"] is True and "json_schema" not in call
+    assert "json_mode" not in call and "json_schema" not in call
     assert '"required": ["ok"]' in call["instructions"]
+
+
+@pytest.mark.parametrize("text", [
+    '{"ok": 1}',
+    '```json\n{"ok": 1}\n```',
+    'Here is my answer:\n{"ok": 1}\nThanks.',
+])
+def test_ask_parses_a_json_reply_sent_as_text(text):
+    assert judge(text).ask("do it", "material", {"type": "object"}, "rate") == {"ok": 1}
+
+
+def test_parse_json_reply_gives_none_without_json():
+    assert parse_json_reply("no json here") is None
+    assert parse_json_reply("{not json}") is None
 
 
 def test_ask_takes_prompt_and_call_settings():

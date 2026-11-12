@@ -27,9 +27,12 @@ class FakeLlm:
     def complete_structured(self, **kwargs):
         self.calls.append(kwargs)
         reply = self.replies.pop(0)
+        # Like Hermes: parsed only when JSON output is asked for; the judge asks for text.
+        structured = bool(kwargs.get("json_mode") or kwargs.get("json_schema"))
         return SimpleNamespace(
-            text=json.dumps(reply), provider="fake", model="judge-1", parsed=reply,
-            content_type="json", usage=SimpleNamespace(input_tokens=10, output_tokens=5))
+            text=json.dumps(reply), provider="fake", model="judge-1",
+            parsed=reply if structured else None, content_type="json" if structured else "text",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5))
 
 
 def reply(levels):
