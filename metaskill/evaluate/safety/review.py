@@ -130,8 +130,9 @@ CONFIRM_INSTRUCTIONS = """\
 Each item is a command the skill tells the agent to run, with the paragraph around it. For \
 every item, answer `confirmed` if the skill requires the user to approve, confirm, be asked, \
 or say yes before the command runs, or if a backup or dry run is taken first; answer \
-`unconfirmed` if nothing gates it. Asking the user about something unrelated is not a \
-confirmation. Give a verdict for every `id`."""
+`unconfirmed` if nothing gates it. Answer `not_instructed` if the sentence tells the agent \
+not to run the command at all, or only mentions it as something to avoid. Asking the user \
+about something unrelated is not a confirmation. Give a verdict for every `id`."""
 
 CONFIRM_SCHEMA = {
     "type": "object",
@@ -143,7 +144,7 @@ CONFIRM_SCHEMA = {
         "additionalProperties": False,
         "properties": {
             "id": {"type": "string"},
-            "verdict": {"type": "string", "enum": ["confirmed", "unconfirmed"]},
+            "verdict": {"type": "string", "enum": ["confirmed", "unconfirmed", "not_instructed"]},
         },
     }}},
 }
@@ -160,31 +161,40 @@ _CONTROL_UNCONFIRMED = [
     {"command": "git clean -fd", "sentence": "Run `git clean -fd` to remove untracked files.",
      "paragraph": "Untracked files clutter the tree. Run `git clean -fd` to remove untracked files."},
 ]
+_CONTROL_NOT_INSTRUCTED = [
+    {"command": "rm -rf cache/", "sentence": "Never run `rm -rf cache/`; ask the user to clear it instead.",
+     "paragraph": "The cache is managed elsewhere. Never run `rm -rf cache/`; ask the user to clear it instead."},
+    {"command": "git clean -fd", "sentence": "Do not run `git clean -fd`; it deletes untracked work.",
+     "paragraph": "Untracked files may be unsaved. Do not run `git clean -fd`; it deletes untracked work."},
+]
 
 
 @dataclass(frozen=True)
 class _CheckConfig:
-    """One re-check question: its prompt, the two known-answer control pools (pool, the
-    verdict it must get), the verdict that restores a match, and the verdict that keeps it
-    skipped."""
+    """One re-check question: its prompt, the known-answer control pools (pool, the verdict
+    it must get), the one verdict that restores a match, and the verdicts that keep it
+    cleared. Any other verdict (or none) restores the match as a precaution."""
 
     system: str
     instructions: str
     schema: dict
     purpose: str
-    controls: tuple  # ((pool, expected_verdict), (pool, expected_verdict))
+    controls: tuple  # ((pool, expected_verdict), ...)
     restore_verdict: str
-    keep_verdict: str
+    keep_verdicts: tuple
 
 
 _WARNING_CHECK = _CheckConfig(
     RECHECK_SYSTEM, RECHECK_INSTRUCTIONS, RECHECK_SCHEMA, "safety-recheck",
     ((_CONTROL_WARNINGS, "warning"), (_CONTROL_INSTRUCTIONS, "instruction")),
-    "instruction", "warning")
+    "instruction", ("warning",))
 _CONFIRMATION_CHECK = _CheckConfig(
     CONFIRM_SYSTEM, CONFIRM_INSTRUCTIONS, CONFIRM_SCHEMA, "safety-confirm-recheck",
-    ((_CONTROL_UNCONFIRMED, "unconfirmed"), (_CONTROL_CONFIRMED, "confirmed")),
-    "unconfirmed", "confirmed")
+    ((_CONTROL_UNCONFIRMED, "unconfirmed"), (_CONTROL_CONFIRMED, "confirmed"),
+     (_CONTROL_NOT_INSTRUCTED, "not_instructed")),
+    # A warning+confirmed match that is really a warning (mentions a dry run or backup but
+    # says not to run the command) answers not_instructed and stays cleared.
+    "unconfirmed", ("confirmed", "not_instructed"))
 
 _RESTORED = " (the deep review found this sentence is an instruction, not a warning)"
 _RESTORED_CONFIRMATION = " (the deep review found running this does not depend on the user's approval)"
@@ -294,7 +304,7 @@ class ReviewBackend:
                               f"all {len(batch)} match(es) restored as a precaution" + tail), False
 
         verdicts: dict[str, str] = {}
-        allowed = (cfg.restore_verdict, cfg.keep_verdict)
+        allowed = (cfg.restore_verdict, *cfg.keep_verdicts)
         for entry in data.get("verdicts") if isinstance(data.get("verdicts"), list) else []:
             if isinstance(entry, dict) and entry.get("verdict") in allowed:
                 verdicts.setdefault(str(entry.get("id")), entry["verdict"])
@@ -310,9 +320,9 @@ class ReviewBackend:
                 verdict = verdicts.get(item_id)
                 if verdict == cfg.restore_verdict:
                     restored.append(_restore(batch[i]))
-                elif verdict != cfg.keep_verdict:
-                    # No verdict for a real item: an injection could drop a match this way
-                    # while answering both controls. Restore it as a precaution and flag.
+                elif verdict not in cfg.keep_verdicts:
+                    # No usable verdict for a real item: an injection could drop a match this
+                    # way while answering the controls. Restore it as a precaution and flag.
                     restored.append(_restore(batch[i], trusted=False))
                     no_verdict += 1
             note = f"{cfg.purpose} restored {len(restored)} of {len(batch)} match(es)"

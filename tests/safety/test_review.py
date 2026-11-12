@@ -50,12 +50,15 @@ def answer_confirmations(items, real="unconfirmed"):
     for the rest."""
     confirmed = {c["sentence"] for c in review._CONTROL_CONFIRMED}
     unconfirmed = {c["sentence"] for c in review._CONTROL_UNCONFIRMED}
+    not_instructed = {c["sentence"] for c in review._CONTROL_NOT_INSTRUCTED}
     verdicts = []
     for item in items:
         if item["sentence"] in confirmed:
             verdict = "confirmed"
         elif item["sentence"] in unconfirmed:
             verdict = "unconfirmed"
+        elif item["sentence"] in not_instructed:
+            verdict = "not_instructed"
         else:
             verdict = real
         verdicts.append({"id": item["id"], "verdict": verdict})
@@ -311,6 +314,17 @@ def test_false_confirmation_is_restored_at_deep_tier(tmp_path):
     [restored] = [f for f in result.findings if f.rule == "recursive-delete"]
     assert restored.severity is Severity.CRITICAL
     assert "does not depend on the user" in restored.message
+
+
+def test_warning_that_mentions_a_dry_run_stays_cleared(tmp_path):
+    # A plain warning that also mentions a dry run matches the confirmation heuristic, so it
+    # takes the confirmation question. The model answers `not_instructed` (the sentence says
+    # not to run it), so it stays cleared instead of being restored as CRITICAL (review feedback).
+    body = "Never run `rm -rf ~/`; to preview a sync, use `rsync --dry-run` instead.\n"
+    judge = FakeJudge(answer=lambda items: answer_confirmations(items, real="not_instructed"))
+    result = ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    assert result.status is BackendStatus.OK
+    assert [f for f in result.findings if f.rule == "recursive-delete"] == []
 
 
 def test_confirmation_with_a_warning_label_stays_cleared_at_deep_tier(tmp_path):
