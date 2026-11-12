@@ -542,11 +542,51 @@ def test_skipped_warnings_match_the_skipped_list_in_detail():
         assert location in scan(skill).detail
 
 
-def test_confirmed_skipped_matches_are_not_rechecked(tmp_path):
+def test_confirmed_skipped_matches_are_rechecked(tmp_path):
+    # A confirmed destructive is cleared from the static findings, but it is still routed to
+    # the deep re-check, so a false confirmation is caught there (review feedback).
     text = "Back up first. Never run `rm -rf data/` without that backup."
     skill = make(tmp_path, {"SKILL.md": text + "\n"})
     assert "skipped as a warning" in scan(skill).detail
-    assert checks.skipped_warnings(skill) == []
+    [w] = checks.skipped_warnings(skill)
+    assert w.snippet == "rm -rf data/"
+
+
+# --- Review feedback: confirmation and warning bypasses (PR #11) ---
+
+
+@pytest.mark.parametrize("text", [
+    "Pick the best choice for your setup.\n\n```sh\nrm -rf ~/\n```",
+    "Go back up one level, then clean up.\n\n```sh\nrm -rf ~/\n```",
+    "Ask the user for their favourite colour.\n\n```sh\nrm -rf ~/\n```",
+])
+def test_wording_that_does_not_confirm_does_not_clear_a_delete(tmp_path, text):
+    assert prose(tmp_path, text).findings  # the delete is not cleared as confirmed
+
+
+def test_input_without_a_yes_no_prompt_does_not_confirm(tmp_path):
+    body = ("```python\nname = input('project name: ')\n"
+            "import shutil, os\nshutil.rmtree(os.path.expanduser('~'))\n```")
+    assert prose(tmp_path, body).findings
+
+
+@pytest.mark.parametrize("text", [
+    "Warning: run `rm -rf ~/lost+found` to clean up.",          # harm word inside the code span
+    "Caution: run `rm -rf ~/Documents` without asking first.",  # "without"
+    "Caution: you can't continue until you run `rm -rf ~/`.",   # "can't"
+    "Do not use `--interactive`, `rm -rf ~/` is faster.",       # bare comma after a negation
+])
+def test_labelled_instruction_is_not_skipped_as_a_warning(tmp_path, text):
+    assert prose(tmp_path, text).findings
+
+
+@pytest.mark.parametrize("expr, path", [
+    ("str(Path.home())", "~"),
+    ("os.path.expanduser('~') + '/Documents'", "~/Documents"),
+    ("str(Path.home()) + '/Pictures'", "~/Pictures"),
+])
+def test_python_path_unwraps_str_and_plus_joins(expr, path):
+    assert checks._python_path(expr) == path
 
 
 def test_skipped_deletes_are_not_delete_targets(tmp_path):
@@ -617,7 +657,7 @@ def test_real_confirmation_steps_still_count(tmp_path, body):
 
 
 def test_checks_version_was_bumped():
-    assert checks.CHECKS_VERSION == "3"
+    assert checks.CHECKS_VERSION == "4"
 
 
 

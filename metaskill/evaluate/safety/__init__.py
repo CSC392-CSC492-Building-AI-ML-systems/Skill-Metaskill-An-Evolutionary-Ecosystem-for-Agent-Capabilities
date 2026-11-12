@@ -42,14 +42,15 @@ class Dependency:
 
 def score(skill: Skill, config: EvaluationConfig,
           backends: list[SafetyBackend] | None = None,
-          llm: PluginLlm | None = None, task: str | None = JUDGE_TASK) -> DimensionScore:
+          llm: PluginLlm | None = None, task: str | None = None) -> DimensionScore:
     """Safety score for one skill.
 
-    llm is Hermes's ctx.llm, needed for the deep tier's model calls. task is the
-    auxiliary task that was registered: the caller passes None on a Hermes without
-    auxiliary tasks (hasattr(ctx, "register_auxiliary_task")), matching Judge.from_context,
-    so no unregistered task reaches ctx.llm. backends defaults to the ones for
-    config.safety_tier; tests pass fakes.
+    llm is Hermes's ctx.llm, needed for the deep tier's model calls. task is the registered
+    auxiliary task to route those calls through; it defaults to None so a direct
+    `score(skill, config, llm=ctx.llm)` never sends an unregistered task on an old Hermes.
+    The plugin should build backends with `backends_from_context(ctx, config)`, which sets
+    the task only where Hermes supports it (register_auxiliary_task), matching
+    Judge.from_context. backends defaults to the ones for config.safety_tier; tests pass fakes.
     """
     tier = config.safety_tier
     if backends is None:

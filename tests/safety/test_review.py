@@ -225,14 +225,18 @@ def test_recheck_batch_is_capped(tmp_path, monkeypatch):
     assert "3 more were not re-checked" in result.detail
 
 
-def test_recheck_failure_keeps_the_review_findings(tmp_path):
+def test_recheck_unusable_reply_restores_the_skipped_matches(tmp_path):
+    # The model saw the material but its reply was unusable (JudgeError, possibly an
+    # injection asking for a plain-text reply). The re-check restores the skipped matches
+    # as untrusted rather than leaving real warnings skipped (review feedback).
     def broken(items):
         raise JudgeError("bad reply after retries")
     judge = FakeJudge(ReviewResult(findings=[review_finding()]), answer=broken)
     result = ReviewBackend(judge).scan(skill_with(tmp_path, WARNING_TEXT), SafetyTier.DEEP)
     assert result.status is BackendStatus.LLM_UNAVAILABLE
-    assert result.findings == [review_finding()]
-    assert "skipped matches stay skipped" in result.detail
+    assert review_finding() in result.findings
+    assert len(result.findings) == 2  # the skipped `rm -rf ~/` warning was restored
+    assert "restored as a precaution" in result.detail
 
 
 def test_long_paragraph_is_capped(tmp_path):
@@ -241,6 +245,33 @@ def test_long_paragraph_is_capped(tmp_path):
     ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
     item = next(i for i in judge.ask_calls[0]["items"] if i["command"] == "rm -rf ~/Documents")
     assert len(item["paragraph"]) <= review.MAX_PARAGRAPH_CHARS + 2  # + up to two ellipses
+
+
+def test_repeated_command_window_centres_on_each_match(tmp_path):
+    # The same command appears twice in one long sentence. Each item's window must centre on
+    # its own match, so the second occurrence (an instruction) is not hidden behind the first
+    # (a warning), which the old "centre on the first appearance" window did. (PR #11)
+    cmd = "rm -rf ~/Documents"  # not one of the known-answer control commands
+    body = f"Warning: never run `{cmd}` by hand " + "word " * 300 + f"so instead run `{cmd}` now\n"
+    judge = FakeJudge()
+    ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
+    paragraphs = [i["paragraph"] for i in judge.ask_calls[0]["items"] if i["command"] == cmd]
+    assert len(paragraphs) == 2
+    assert any("instead run" in p for p in paragraphs)  # the second match's context is shown
+    assert any("by hand" in p for p in paragraphs)       # the first match's context too
+
+
+def test_command_field_is_stripped_and_capped():
+    # A huge command with hidden tag characters must not reach the model (PR #11).
+    from metaskill.evaluate.safety.checks import SkippedWarning
+    hidden = "\U000e0041" * 20  # invisible tag characters
+    snippet = "rm -rf " + hidden + "x" * 5000
+    w = SkippedWarning("SKILL.md:1", "recursive-delete", snippet,
+                       "sentence", "paragraph", review_finding(), 0, 0)
+    items, _, index = review._recheck_items([w])
+    command = next(it["command"] for it in items if it["id"] == next(iter(index)))
+    assert len(command) <= review.MAX_COMMAND_CHARS + 1  # + ellipsis
+    assert hidden not in command  # hidden characters stripped
 
 
 def test_window_keeps_the_command_when_padded_before(tmp_path):

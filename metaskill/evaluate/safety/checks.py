@@ -157,6 +157,10 @@ class SkippedWarning:
     sentence: str  # the sentence containing the match
     paragraph: str  # the paragraph or list item it is in
     finding: Finding  # what it becomes if the re-check says it is an instruction
+    # Where the match starts in `sentence` and `paragraph`, so the review's window is cut
+    # on this match, not on the command's first appearance (docs/safety/review.md).
+    sentence_offset: int = 0
+    paragraph_offset: int = 0
 
 
 class ChecksBackend:
@@ -180,9 +184,8 @@ def delete_targets(skill: Skill) -> list[DeleteTarget]:
 
 
 def skipped_warnings(skill: Skill) -> list[SkippedWarning]:
-    """Prose matches skipped as warnings that would otherwise be findings. Same
-    parsing as scan(); a match that was also confirmed is left out, since it would
-    not be a finding either way."""
+    """Prose matches cleared as a warning, example or confirmation that would otherwise be
+    findings, for the deep tier to re-check. Same parsing as scan()."""
     return _run(skill)[3]
 
 
@@ -208,6 +211,26 @@ class _Context:
     shell_vars: dict[str, dict[str, list[str | None]]] = field(default_factory=dict)
     py_vars: dict[str, dict[str, list[str | None]]] = field(default_factory=dict)
     links: set[str] = field(default_factory=set)  # names that are or become symlinks
+
+
+def _skipped_warning(hit: _Hit, unit: _Unit, line_index: int, location: str,
+                     ctx: _Context) -> SkippedWarning:
+    """A SkippedWarning for a cleared prose match, carrying the match's offset in the
+    sentence and paragraph so the review centres its window on this match, not on the
+    command's first appearance (docs/safety/review.md)."""
+    joined, start, position, end = _sentence_span(unit, line_index, hit.start)
+    sentence_raw = joined[start:end]
+    sentence = sentence_raw.strip()
+    sentence_offset = (position - start) - (len(sentence_raw) - len(sentence_raw.lstrip()))
+    stripped = [t.strip() for _, t in unit.lines]
+    paragraph = " ".join(stripped)
+    lineno, line_text = unit.lines[line_index]
+    lead = len(line_text) - len(line_text.lstrip())
+    paragraph_offset = sum(len(stripped[i]) + 1 for i in range(line_index)) + max(0, hit.start - lead)
+    return SkippedWarning(
+        location, hit.rule, hit.snippet, sentence, paragraph,
+        _finding(hit, unit, lineno, line_text, ctx, []),
+        max(0, sentence_offset), max(0, paragraph_offset))
 
 
 def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
@@ -241,17 +264,17 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
                 if unit.kind == "prose" and (_is_warning(unit, l_index, hit.start)
                                              or _is_example(unit, l_index, hit)):
                     skipped.append(f"{location} ({hit.snippet})")
-                    if not (hit.category == DESTRUCTIVE and (
-                            hit.confirmed or _confirmed(unit, l_index, previous))):
-                        rechecks.append(SkippedWarning(
-                            location, hit.rule, hit.snippet,
-                            _sentence(unit, l_index, hit.start),
-                            " ".join(t.strip() for _, t in unit.lines),
-                            # A throwaway target list: skipped deletes are not delete targets.
-                            _finding(hit, unit, lineno, text, ctx, [])))
+                    # Every cleared prose match is re-checked by the deep tier, so a false
+                    # warning is caught there.
+                    rechecks.append(_skipped_warning(hit, unit, l_index, location, ctx))
                     continue
                 if hit.category == DESTRUCTIVE and (
                         hit.confirmed or _confirmed(unit, l_index, previous)):
+                    # A confirmed destructive is cleared from the static findings, but a
+                    # prose match is still routed to the deep re-check, so a false
+                    # confirmation ("ask the user for their favourite colour") is caught.
+                    if unit.kind == "prose":
+                        rechecks.append(_skipped_warning(hit, unit, l_index, location, ctx))
                     continue
                 finding = _finding(hit, unit, lineno, text, ctx, targets)
                 key = (unit.path, lineno, finding.rule)
@@ -503,6 +526,10 @@ def _python_path(expr: str) -> str | None:
     m = re.fullmatch(_PY_STR, expr)
     if m:
         return m.group("s")
+    # str(<path expr>): the string form of a path, e.g. str(Path.home()).
+    wrapped = re.fullmatch(r"str\(\s*(?P<inner>.+?)\s*\)", expr)
+    if wrapped:
+        return _python_path(wrapped.group("inner"))
     m = re.fullmatch(rf"os\.path\.expanduser\(\s*{_PY_STR}\s*\)", expr)
     if m:
         return m.group("s")
@@ -516,6 +543,13 @@ def _python_path(expr: str) -> str | None:
     if m:
         parts = re.findall(r"""['"]([^'"]*)['"]""", m.group("rest"))
         return "/".join(["~", *parts])
+    # <path expr> + "/sub" [+ ...]: a path joined to string literals with +.
+    m = re.fullmatch(rf"(?P<base>.+?)\s*(?P<rest>(?:\+\s*{_PY_STR}\s*)+)", expr)
+    if m:
+        base = _python_path(m.group("base"))
+        if base is not None:
+            parts = re.findall(r"""['"]([^'"]*)['"]""", m.group("rest"))
+            return base + "".join(parts)
     return None
 
 
@@ -796,7 +830,10 @@ _GOVERNING_NEGATION = re.compile(
     r"|\bavoid|(?<!why\s)\bnot(?:\s+to)?|\bunder\s+no\s+circumstances(?:\s+should\s+you)?)\s+"
     r"(?:(?:run|running|use|using|execute|executing|type|typing|call|calling|invoke|invoking"
     r"|do|doing|try|trying)\s+)?"
-    r"(?:`[^`]*`\s*(?:,|\bor\b|\band\b|\bnor\b)?\s*)*$", re.I)
+    # Earlier commands in the list extend the negation only when the last separator before
+    # the governed command is a conjunction, not a bare comma: "do not use `a` or `b`" is a
+    # warning about both, but "do not use `--interactive`, `rm -rf ~/` is faster" is not.
+    r"(?:(?:`[^`]*`\s*,\s*)*`[^`]*`\s*,?\s*(?:\bor\b|\band\b|\bnor\b)\s+)?$", re.I)
 # A warning label at the start of the sentence.
 _WARNING_LABEL = re.compile(r"^\W*(?:warning|caution|danger)\b|^\W*⚠", re.I)
 # Words that describe the danger of a command: a negation, or the harm itself. A warning
@@ -804,9 +841,12 @@ _WARNING_LABEL = re.compile(r"^\W*(?:warning|caution|danger)\b|^\W*⚠", re.I)
 # otherwise "Warning: run `rm -rf ~`" or "Caution: enter `x`" is a plain instruction that
 # happens to carry a label. A listed verb on its own ("using `x`", "run `x`") does not
 # count, so a label that merely describes or instructs the command is read correctly.
+# `without`, `cannot`/`can't` and `won't` were dropped: they appear in instructions as
+# often as warnings ("run `x` without asking", "you can't continue until you run `x`"), so
+# they turned labelled instructions into skipped warnings.
 _WARNING_WORDS = re.compile(
-    r"\b(?:never|don['’]?t|do\s+not|cannot|can['’]?t|won['’]?t|must\s+not|should\s+not"
-    r"|avoid|without|irreversibl\w*|permanent\w*|unrecoverabl\w*|irrecoverabl\w*|undone"
+    r"\b(?:never|don['’]?t|do\s+not|must\s+not|should\s+not"
+    r"|avoid|irreversibl\w*|permanent\w*|unrecoverabl\w*|irrecoverabl\w*|undone"
     r"|no\s+undo|delete[sd]|deleting|erase[sd]?|erasing|destroy(?:s|ed|ing)?|overwrit\w*"
     r"|wipe[sd]|lose[s]?|losing|lost|gone|forever|data\s+loss)\b", re.I)
 _SQUISH = re.compile(r"\s+")
@@ -889,21 +929,35 @@ def _is_warning(unit: _Unit, line_index: int, col: int) -> bool:
     # A warning label alone is not enough: "Warning: run `x`" / "Caution: enter `x`"
     # instruct the command. A label is a warning only when the sentence also describes the
     # danger -- a negation or harm words ("deletes", "permanently", "cannot be undone").
-    return bool(_WARNING_LABEL.search(prefix.lstrip()) and _WARNING_WORDS.search(joined[start:end]))
+    # Code spans are masked first, so a harm word inside the command itself
+    # (`rm -rf ~/lost+found`) does not turn the sentence into a warning.
+    sentence = re.sub(r"`[^`]*`", lambda m: " " * len(m.group(0)), joined[start:end])
+    return bool(_WARNING_LABEL.search(prefix.lstrip()) and _WARNING_WORDS.search(sentence))
 
 
 # An actual confirmation step, not just the word: asking the user, getting their
 # approval, an interactive prompt, a dry run, or a backup. "Confirm the export
 # finished" or "no need to confirm" do not count.
+# "ask the user" only counts when it asks about the action: "ask the user before", "ask
+# the user for confirmation". "ask the user for their favourite colour" is not a
+# confirmation. "back up" needs an object, so "go back up one level" does not count.
+# input() counts only when its prompt looks like a yes/no question, not input("project
+# name:"). `choice` was dropped: the English word gave false confirmations.
 _CONFIRM = re.compile(
-    r"\bask(?:s|ing)?\s+(?:the\s+user|the\s+human|them|you|for\s+(?:confirmation|approval|permission))\b"
+    r"\bask(?:s|ing)?\s+(?:(?:the\s+user|the\s+human|them|you)\s+"
+    r"(?:before\b|first\b|whether\b|if\s+they\b|to\s+confirm\b|to\s+proceed\b"
+    r"|for\s+(?:confirmation|approval|permission)\b)"
+    r"|for\s+(?:confirmation|approval|permission)\b)"
     r"|\b(?:confirm|check)\s+with\s+(?:the\s+)?(?:user|human)\b"
     r"|\b(?:get|obtain|request|wait\s+for)\s+(?:the\s+user['’]s\s+|explicit\s+|their\s+)?"
     r"(?:confirmation|approval|permission)\b"
     r"|\bare\s+you\s+sure\b|\bdry[- ]?run\b|--dry-run\b|-WhatIf\b"
-    r"|\b(?:make|take|create|keep)\s+(?:a\s+)?back[\s-]?up\b|\bback\s+(?:it\s+|them\s+|everything\s+)?up\b"
-    r"|\bread\s+-[a-zA-Z]*p\b|\binput\s*\(|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b"
-    r"|\bset\s+/p\b|\bchoice\b",
+    r"|\b(?:make|take|create|keep)\s+(?:a\s+)?back[\s-]?up\b"
+    r"|\bback\s+(?:it|them|everything)\s+up\b"
+    r"|\bback\s+up\s+(?:your|the|all|everything|it|them|files|data|my|our|first|before)\b"
+    r"|\bread\s+-[a-zA-Z]*p\b"
+    r"|\binput\s*\([^)]*(?:y/n|\byes\b|\bsure\b|\bconfirm\b|\bproceed\b|\bcontinue\b|\[y)"
+    r"|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b|\bset\s+/p\b|\bchoice\s+/[a-z]",
     re.I)
 # A confirmation phrase is ignored when the words just before it negate it.
 _NEGATED_BEFORE = re.compile(

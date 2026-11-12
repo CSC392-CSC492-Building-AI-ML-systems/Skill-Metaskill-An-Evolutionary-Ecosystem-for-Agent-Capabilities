@@ -13,7 +13,7 @@ import random
 from dataclasses import replace
 from typing import Any
 
-from ..judge import Judge, JudgeUnavailable, strip_hidden
+from ..judge import Judge, JudgeError, JudgeUnavailable, strip_hidden
 from ..models import Dimension, Finding, SafetyTier, Skill
 from .checks import SkippedWarning, skipped_warnings
 from .findings import BackendResult, BackendStatus, SEVERITY_RANK
@@ -26,6 +26,9 @@ MAX_RECHECK_ITEMS = 40
 # huge unit must not be able to blow up the request and force the re-check to fail.
 MAX_SENTENCE_CHARS = 500
 MAX_PARAGRAPH_CHARS = 1000
+# The command snippet is also capped and stripped of hidden characters, so a huge or
+# hidden-text command cannot carry instructions to the model or blow up the request.
+MAX_COMMAND_CHARS = 200
 MAX_DROPPED_LISTED = 3
 
 # Our four categories (evaluate-safety.md 2.1), each with a definition and an example.
@@ -185,8 +188,21 @@ class ReviewBackend:
         batch = ordered[:MAX_RECHECK_ITEMS]
         covered = len(ordered) <= MAX_RECHECK_ITEMS
         items, controls, index = _recheck_items(batch)
-        data = self.judge.ask(RECHECK_INSTRUCTIONS, json.dumps({"items": items}, indent=1),
-                              RECHECK_SCHEMA, "safety-recheck", system_prompt=RECHECK_SYSTEM)
+        try:
+            data = self.judge.ask(RECHECK_INSTRUCTIONS, json.dumps({"items": items}, indent=1),
+                                  RECHECK_SCHEMA, "safety-recheck", system_prompt=RECHECK_SYSTEM)
+        except JudgeError as e:
+            # The model saw the material but its reply was unusable -- not JSON, possibly an
+            # injection asking for a plain-text reply that slips past the known-answer items.
+            # Restore the whole batch as untrusted rather than leave real warnings skipped.
+            # An outage (JudgeUnavailable) is different: no model was reached, so it is not
+            # caught here and the matches stay skipped.
+            restored = [_restore(w, trusted=False) for w in batch]
+            note = (f"the re-check reply was unusable ({type(e).__name__}): all {len(batch)} "
+                    "re-checked match(es) were restored as a precaution")
+            if not covered:
+                note += f"; {len(ordered) - len(batch)} more were not re-checked"
+            return restored, note, False
 
         verdicts: dict[str, str] = {}
         for entry in data.get("verdicts") if isinstance(data.get("verdicts"), list) else []:
@@ -230,9 +246,11 @@ def _recheck_items(batch: list[SkippedWarning]
     paragraph are capped first, so the skill cannot bloat the request.
     """
     rng = random.SystemRandom()
-    real = [{"command": w.snippet,
-             "sentence": _window(strip_hidden(w.sentence), w.snippet, MAX_SENTENCE_CHARS),
-             "paragraph": _window(strip_hidden(w.paragraph), w.snippet, MAX_PARAGRAPH_CHARS)}
+    # Cut the window on the match's own offset (not the command's first appearance), then
+    # strip hidden characters, so padding and a repeated command cannot push the match out.
+    real = [{"command": _cap(strip_hidden(w.snippet), MAX_COMMAND_CHARS),
+             "sentence": strip_hidden(_window_at(w.sentence, w.sentence_offset, MAX_SENTENCE_CHARS)),
+             "paragraph": strip_hidden(_window_at(w.paragraph, w.paragraph_offset, MAX_PARAGRAPH_CHARS))}
             for w in batch]
     entries: list[tuple[Any, dict[str, str]]] = list(enumerate(real))
     entries += [("warning", rng.choice(_CONTROL_WARNINGS)),
@@ -258,15 +276,20 @@ def _restore(w: SkippedWarning, trusted: bool = True) -> Finding:
                    message=w.finding.message + (_RESTORED if trusted else _RESTORED_UNTRUSTED))
 
 
-def _window(text: str, needle: str, limit: int) -> str:
-    """At most `limit` characters of `text`, centred on `needle`, so padding before the
-    match cannot push the match and its surrounding words out of what the model sees."""
+def _window_at(text: str, offset: int, limit: int) -> str:
+    """At most `limit` characters of `text`, centred on `offset` (the match's position), so
+    padding before the match -- or the same command appearing earlier -- cannot push the
+    match and its surrounding words out of what the model sees."""
     if len(text) <= limit:
         return text
-    at = max(text.find(needle), 0)
-    start = max(0, min(at - limit // 2, len(text) - limit))
+    start = max(0, min(offset - limit // 2, len(text) - limit))
     end = start + limit
     return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+
+
+def _cap(text: str, limit: int) -> str:
+    """At most `limit` characters of `text`."""
+    return text if len(text) <= limit else text[:limit] + "…"
 
 
 def _review_notes(result: Any) -> list[str]:

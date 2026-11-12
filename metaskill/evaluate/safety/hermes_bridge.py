@@ -154,16 +154,16 @@ def _install() -> None:
                            optional_params: dict | None = None, **kwargs: Any) -> Any:
                 params = optional_params or {}
                 llm, task, provider, pinned = _llm_for(model)
-                kwargs = translate(messages, params)
+                call = translate(messages, params)  # not `kwargs`: that is the method's own param
                 if task:
-                    kwargs["task"] = task
+                    call["task"] = task
                 # Pin the same provider/model the judge uses, so Cisco and the review
                 # run on one model even when the user set these rather than the task.
                 if provider:
-                    kwargs["provider"] = provider
+                    call["provider"] = provider
                 if pinned:
-                    kwargs["model"] = pinned
-                result, usage = complete_with_retry(llm, kwargs, _schema(params))
+                    call["model"] = pinned
+                result, usage = complete_with_retry(llm, call, _schema(params))
                 return _response(ModelResponse, result, usage)
 
             async def acompletion(self, model: str, messages: list, *args: Any,
