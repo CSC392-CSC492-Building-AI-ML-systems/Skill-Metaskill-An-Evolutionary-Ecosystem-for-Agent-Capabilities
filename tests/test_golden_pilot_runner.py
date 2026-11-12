@@ -126,4 +126,3 @@ def test_preparation_does_not_overwrite_existing_directory(tmp_path):
     with pytest.raises(FileExistsError):
         prepare_pilot(destination)
     assert marker.read_text() == "keep"
-

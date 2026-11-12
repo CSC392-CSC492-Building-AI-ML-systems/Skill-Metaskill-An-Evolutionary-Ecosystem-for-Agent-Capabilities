@@ -53,4 +53,3 @@ If the detector is unavailable, report the limit explicitly; do not conclude tha
 Agree the adapter, finding categories, unavailable-backend handling, rating anchors, and weighting with the team. Safety scanner category routing stays owned by the existing safety/configuration integration discussion; this pilot does not introduce a second safety score.
 
 Offline tests check annotation references and synthetic profile semantics. They do not implement or validate a general-purpose configuration-cleanliness scorer.
-
