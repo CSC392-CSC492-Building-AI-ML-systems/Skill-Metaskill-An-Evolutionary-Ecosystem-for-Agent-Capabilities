@@ -7,6 +7,11 @@
   [
    "recursive-delete",
    "HIGH",
+   "SKILL.md:359"
+  ],
+  [
+   "recursive-delete",
+   "HIGH",
    "SKILL.md:608"
   ],
   [
@@ -22,7 +27,13 @@
    "SKILL.md:29"
   ]
  ],
- "autonomous-ai-agents/computer-use": [],
+ "autonomous-ai-agents/computer-use": [
+  [
+   "curl-pipe-shell",
+   "HIGH",
+   "SKILL.md:309"
+  ]
+ ],
  "autonomous-ai-agents/hermes-agent": [
   [
    "curl-pipe-shell",
@@ -221,7 +232,13 @@
    "SKILL.md:109"
   ]
  ],
- "software-development/python-debugpy": [],
+ "software-development/python-debugpy": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:274"
+  ]
+ ],
  "software-development/requesting-code-review": [],
  "software-development/simplify-code": [],
  "software-development/spike": [],

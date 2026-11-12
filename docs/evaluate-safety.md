@@ -206,14 +206,15 @@ evaluate.md needs a number in `[0, 1]` per dimension for the leaderboard. The sa
 | Worst finding | Score |
 |---|---|
 | None | 1.0 |
-| LOW or INFO | 0.9 |
-| MEDIUM | 0.6 |
-| HIGH | 0.3 |
+| INFO | 1.0 |
+| LOW | 0.61 |
+| MEDIUM | 0.31 |
+| HIGH | 0.11 |
 | CRITICAL | 0.0 |
 
 A CRITICAL finding gives the lowest safety score. It does not remove the skill from the ranking (section 5 of evaluate.md).
 
-**[OPEN]** These values are placeholders.
+Each level maps to the top of its CVSS v3.1 qualitative band (FIRST.org), normalized as `1 - cvss/10`, with CRITICAL gated to 0. The scale is CVSS's; the mapping is policy. [safety/severity-scale.md](safety/severity-scale.md) gives the full derivation — the cardinal scale (CVSS) and the ordinal ranking (NIST FIPS-199 magnitude + recoverability), and what is backed vs. owned.
 
 The findings, with quotes, are always written to the evidence file alongside the score.
 
@@ -255,7 +256,7 @@ Backend and unit tests in section 8 remain implementation tests. Reuse shared fi
 
 - No findings does not mean safe. The scanner we use says the same about itself.
 - Static false positives on ordinary skills. With the worst-finding score in section 5, one such finding sets a skill's score. Known cases on the 59 local Hermes skills:
-  - Cisco: a CRITICAL "Function constructor" finding on a Playwright `page.waitForFunction('...')` call in `p5js` (score 0.0), and MEDIUM `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv, which is its purpose (score 0.6; open question 7). In the 8 Oct run, 11 skills had a HIGH or CRITICAL Cisco finding; the rest have not been triaged.
+  - Cisco: a CRITICAL "Function constructor" finding on a Playwright `page.waitForFunction('...')` call in `p5js` (score 0.0), and MEDIUM `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv, which is its purpose (score 0.31; open question 7). In the 8 Oct run, 11 skills had a HIGH or CRITICAL Cisco finding; the rest have not been triaged.
   - Own checks: 6 skills at HIGH after three noisy rules were narrowed, results in [safety/checks.md](safety/checks.md). Two in `github` are likely legitimate, such as a git credential helper that must print its token.
 - The `deep` tier only partly reads large skills. Cisco's LLM analyzer has a context budget: on `p5js` it read about 20,000 characters of `SKILL.md` and skipped five reference files. `detail` lists what was skipped.
 - Low static recall. Without `deep`, most malicious skills pass undetected.
@@ -270,8 +271,9 @@ Backend and unit tests in section 8 remain implementation tests. Reuse shared fi
 
 1. Does the malicious layer need our own implementation? (1)
 2. Do OpenClaw skills parse in Cisco's scanner without conversion? Hermes skills do. (3.1)
-3. Score values. (5)
+3. Decided: scores derive from CVSS v3.1 qualitative bands (cardinal) and the ordinal ranking from NIST FIPS-199 magnitude + recoverability. A full per-category rationale with CWE/OWASP tags, and a κ reproducibility check, are still owed. See [safety/severity-scale.md](safety/severity-scale.md). (5)
 4. Default token cap per scan; the per-scan cost is now measured. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
 6. Decided: Cisco is a required dependency, declared in `plugin.yaml`. (3.1)
 7. Whether the `deep` review may ever make a result more lenient than the deterministic layers, by downgrading or clearing a finding. Example: Cisco's `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. If yes: which findings, by how much, keeping the original, and how to stop a skill talking the reviewer into it. Re-checking skipped warnings is not covered, because it can only add findings. See [safety/review.md](safety/review.md). (3.3)
+8. Whether a local warning (a delete that would hit important files on this machine only) should do more than warn: a per-machine verdict that `rank` uses for this user, or a confirmation before the skill is run or recommended here. The safety score stays the same on every machine either way. See [safety/local.md](safety/local.md), "Score and local warning".

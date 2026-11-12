@@ -64,7 +64,14 @@ HEADINGS = {
 _DECIMALS = 9
 MAX_NAME_CHARS = 100  # of a skill name as printed
 MAX_TEXT_CHARS = 200  # of a location or detail as printed
-LOW_SAFETY = 0.5  # a recommended skill below this gets a warning
+def _low_safety() -> float:
+    """A recommended skill scoring strictly below this -- a MEDIUM finding's score, so HIGH
+    or worse -- gets a warning. Read from the score table (not hand-typed) so it tracks the
+    CVSS band mapping and cannot silently stop warning on HIGH if the curve shape changes
+    (docs/safety/severity-scale.md). Imported lazily: ranking must not pull the safety
+    backends into a bare plugin load (see tests/test_evaluate.py)."""
+    from .safety.findings import SEVERITY_SCORE
+    return SEVERITY_SCORE[Severity.MEDIUM]
 UNNAMED = "(unnamed)"  # a name with nothing left once cleaned
 # Markdown that can fetch or run something when rendered: links and images ([]), HTML and
 # autolinks (<>), code (`), and \ itself, so an escape cannot be undone. `_` and `*` only
@@ -272,7 +279,7 @@ def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
         if any(_critical(e.result) or (mixed and _safety_status(e.result) is Status.PARTIAL)
                for e in top):
             text += f" Check {its} safety notes before using {'it' if alone else 'them'}."
-        elif safety is not None and safety < LOW_SAFETY:
+        elif safety is not None and safety < _low_safety():
             text += (f" {its.capitalize()} safety score is low ({safety:.2f}); "
                      f"check {its} findings first.")
         return text + _lift_warning(first, alone)

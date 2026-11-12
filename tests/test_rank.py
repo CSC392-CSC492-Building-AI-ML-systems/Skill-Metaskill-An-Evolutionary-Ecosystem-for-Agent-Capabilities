@@ -324,6 +324,16 @@ def test_recommendation():
     assert "safety score is low (0.20)" in low
 
 
+def test_low_safety_warns_on_high_not_medium():
+    # The warning means "HIGH or worse": a MEDIUM score is exactly LOW_SAFETY and must not
+    # warn, a HIGH score must. Guards the 0.31/0.11 boundary against a curve-shape change.
+    from metaskill.evaluate.safety.findings import SEVERITY_SCORE
+    medium = rank([result("a", safety=SEVERITY_SCORE[Severity.MEDIUM])]).recommendation
+    high = rank([result("a", safety=SEVERITY_SCORE[Severity.HIGH])]).recommendation
+    assert "safety score is low" not in medium
+    assert "safety score is low" in high
+
+
 def test_recommendation_warns_about_lift_of_zero_or_less():
     assert "Its lift is -0.60" in rank([result("a", lift=-0.6)]).recommendation
     assert "Its lift is +0.00" in rank([result("a", lift=0.0)]).recommendation
