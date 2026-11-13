@@ -1,0 +1,11 @@
+name: metaskill-laya
+version: 0.2.0
+manifest_version: 2
+description: Optional add-on for metaskill that also finds names, addresses and ID numbers with the local Laya Experts model
+requires_plugins:
+  - id: metaskill
+    version_range: ">=0.2.0"
+# Tested with laya 0.4.17 and 0.4.21. pii_demo.py uses laya internals, so the range
+# stops before the next minor version; widen it only after rerunning the slow tests.
+python_dependencies:
+  - "laya>=0.4.17,<0.5"
