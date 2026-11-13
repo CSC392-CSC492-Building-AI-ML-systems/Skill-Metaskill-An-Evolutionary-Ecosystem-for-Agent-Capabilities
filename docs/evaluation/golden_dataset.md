@@ -546,7 +546,7 @@ Initial acceptance should require reviewed expectations, resolvable inputs, repr
 - Exact Quality formula, dimension formulas, and overall weighting.
 - Whether candidates on identical tasks share a baseline within one run.
 - Whether and how the runner executes skills with critical safety findings.
-- Final safety severity-to-score values and scanner-category routing.
+- Scanner-category routing.
 - Resolution of static/deep ranking wording and partial-result comparisons.
 
 ### Dataset-specific decisions proposed for review

@@ -237,6 +237,34 @@ def test_the_scores_of_an_unranked_skill_are_kept_but_not_averaged():
     assert "averages" not in text and "would place" not in text
 
 
+def test_missing_dimensions_with_the_same_reason_are_named_together():
+    built = DimensionStatus(Status.SKIPPED, detail="not built yet")
+    failed = DimensionStatus(Status.ERROR, detail="failed: ImportError")
+    entry = rank([result("ranked"), result(
+        "a", quality=None, clarity=None, safety=None,
+        dimensions={Dimension.QUALITY: built, Dimension.CLARITY: built,
+                    Dimension.SAFETY: failed})]).unranked[0]
+    assert entry.notes == ["Not ranked: no score for quality, clarity (skipped: not built "
+                           "yet); safety (error: failed: ImportError)."]
+
+
+def test_a_reason_every_skill_shares_is_noted_once():
+    built = DimensionStatus(Status.SKIPPED, detail="not built yet")
+    ranking = rank([result(name, clarity=None, dimensions={Dimension.CLARITY: built})
+                    for name in ("a", "b")])
+    assert all(not e.notes for e in ranking.unranked)
+    assert ranking.notes == ["No skill is ranked: no score for clarity (skipped: not built yet)."]
+    assert ranking.recommendation == ("No complete overall comparison was available, so no "
+                                      "skill is recommended.")
+
+
+def test_different_reasons_stay_with_each_skill():
+    ranking = rank([result("a", clarity=None), result("b", quality=None)])
+    assert not ranking.notes
+    assert [e.notes for e in ranking.unranked] == [["Not ranked: no score for clarity."],
+                                                   ["Not ranked: no score for quality."]]
+
+
 def test_unranked_skills_are_ordered_by_name_not_by_their_scores():
     ranking = rank([result("y", clarity=None, quality=0.1),
                     result("x", clarity=None, quality=0.9),
@@ -294,6 +322,16 @@ def test_recommendation():
         "Use a: highest overall (0.50) of 2 ranked skill(s).")
     low = rank([result("a", safety=0.2)]).recommendation
     assert "safety score is low (0.20)" in low
+
+
+def test_low_safety_warns_on_high_not_medium():
+    # The warning means "HIGH or worse": a MEDIUM score is exactly LOW_SAFETY and must not
+    # warn, a HIGH score must. Guards the 0.31/0.11 boundary against a curve-shape change.
+    from metaskill.evaluate.safety.findings import SEVERITY_SCORE
+    medium = rank([result("a", safety=SEVERITY_SCORE[Severity.MEDIUM])]).recommendation
+    high = rank([result("a", safety=SEVERITY_SCORE[Severity.HIGH])]).recommendation
+    assert "safety score is low" not in medium
+    assert "safety score is low" in high
 
 
 def test_recommendation_warns_about_lift_of_zero_or_less():

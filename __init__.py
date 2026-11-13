@@ -19,10 +19,6 @@ GUIDE_DESCRIPTION = (
 GUIDE_FRONTMATTER = {"metadata": {"hermes": {"requires_tools": ["metaskill"]}}}
 
 
-def _handle_metaskill(raw_args):
-    return "metaskill is not implemented yet"
-
-
 def register(ctx):
     ctx.register_tool(
         name="metaskill",
@@ -56,6 +52,6 @@ def register(ctx):
     ctx.register_command(
         "metaskill",
         handler=tools.make_command_handler(ctx),
-        description="Generalize or personalize a skill",
-        args_hint="generalize|personalize <skill> [--config FILE]",
+        description="Evaluate, rank, generalize or personalize skills",
+        args_hint="evaluate|rank|generalize|personalize <skill> [--config FILE] | skills [text]",
     )

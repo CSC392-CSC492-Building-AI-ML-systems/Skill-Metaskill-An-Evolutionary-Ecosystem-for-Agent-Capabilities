@@ -19,7 +19,7 @@ def versions() -> dict[str, str]: ...
 
 - **`score`**: runs the safety check on one skill. `llm` is Hermes's `ctx.llm`, which the runner passes in; the deep tier's model calls go through it. Without it, `deep` runs Cisco static only.
 - **`missing_dependencies`**: what is not installed, with the install command for each. The tool calls this once before evaluation starts so the agent can ask the user whether to install (section 3.1 of the safety design). Safety itself never prompts or installs anything. Evaluate's own list ([evaluate/dependencies.md](../evaluate/dependencies.md)) adds Docker to this one. `Dependency` also has `required`, `install_url` and `reason`; safety's entries are not required, since safety still scores without Cisco.
-- **`versions`**: `{"scanner_version": "2.2.1", "checks_version": "1"}`, for the report header (`ReportMeta`).
+- **`versions`**: `{"scanner_version": "2.2.1", "checks_version": "3"}`, for the report header (`ReportMeta`).
 
 ## What `score()` does
 
@@ -63,13 +63,13 @@ Examples:
 **`reason`**: one line explaining the score.
 
 - `Worst finding: HIGH destructive-unconfirmed at SKILL.md:42`
-- `No findings at static tier`
+- `No safety findings at static tier`. Findings routed to another dimension can still be listed in the report ([cisco.md](cisco.md))
 - `Not scored: no safety backend could run`
 
 **`detail`**: empty when the status is `ok`. Otherwise one line per backend that was not `ok`, taken from its `BackendResult.detail`:
 
 ```
-cisco: not installed; install with `pip install cisco-ai-skill-scanner==2.2.1`
+cisco: Cisco skill-scanner not installed; run `hermes plugins disable metaskill; hermes plugins enable metaskill` in a terminal, then restart Hermes
 llm-review: no judge configured
 ```
 

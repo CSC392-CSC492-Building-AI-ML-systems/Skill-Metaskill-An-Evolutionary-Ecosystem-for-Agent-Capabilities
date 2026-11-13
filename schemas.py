@@ -4,13 +4,13 @@ Keep descriptions short: this schema is sent to the model on every turn.
 Step-by-step guidance lives in the bundled skill (skills/guide/SKILL.md).
 """
 
-OPERATIONS = ("generalize", "personalize")
+OPERATIONS = ("generalize", "personalize", "evaluate", "rank")
 
 METASKILL = {
     "name": "metaskill",
     "description": (
-        "Generalize a Hermes skill into a template, or personalize a template "
-        "from a config. Read skill metaskill:guide first. Returns counts and paths, "
+        "Generalize, personalize, evaluate or rank Hermes skills. "
+        "Read skill metaskill:guide first. Returns counts and paths, "
         "never detected values; do not quote them to the user."
     ),
     "parameters": {
@@ -22,7 +22,7 @@ METASKILL = {
             },
             "skill_path": {
                 "type": "string",
-                "description": "Skill directory or SKILL.md path, not a name.",
+                "description": "Skill directory or SKILL.md path, not a name. Comma list for rank.",
             },
             "config_path": {
                 "type": "string",

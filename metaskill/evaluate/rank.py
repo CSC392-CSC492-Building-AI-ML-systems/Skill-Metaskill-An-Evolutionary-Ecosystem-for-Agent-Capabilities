@@ -17,12 +17,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from .judge import clean
+from .judge import MAX_REASON_CHARS, clean
 from .models import (
     Dimension,
     DimensionScore,
     EvaluationConfig,
     Finding,
+    ReportMeta,
     Scores,
     Severity,
     SkillResult,
@@ -63,7 +64,14 @@ HEADINGS = {
 _DECIMALS = 9
 MAX_NAME_CHARS = 100  # of a skill name as printed
 MAX_TEXT_CHARS = 200  # of a location or detail as printed
-LOW_SAFETY = 0.5  # a recommended skill below this gets a warning
+def _low_safety() -> float:
+    """A recommended skill scoring strictly below this -- a MEDIUM finding's score, so HIGH
+    or worse -- gets a warning. Read from the score table (not hand-typed) so it tracks the
+    CVSS band mapping and cannot silently stop warning on HIGH if the curve shape changes
+    (docs/safety/severity-scale.md). Imported lazily: ranking must not pull the safety
+    backends into a bare plugin load (see tests/test_evaluate.py)."""
+    from .safety.findings import SEVERITY_SCORE
+    return SEVERITY_SCORE[Severity.MEDIUM]
 UNNAMED = "(unnamed)"  # a name with nothing left once cleaned
 # Markdown that can fetch or run something when rendered: links and images ([]), HTML and
 # autolinks (<>), code (`), and \ itself, so an escape cannot be undone. `_` and `*` only
@@ -174,13 +182,17 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
     # scanned in full (evaluate.md 5.2). When every skill is partial, say so once.
     statuses = {_safety_status(r) for r in results} & {Status.OK, Status.PARTIAL}
     mixed = len(statuses) == 2
+    # When no skill is ranked and all for the same reason, it is said once, not per skill.
+    reasons = {_unranked_note(e) for e in unranked}
+    shared = not ranked and len(unranked) > 1 and len(reasons) == 1
     for entry in ranked + unranked:
-        entry.notes = _notes(entry, mixed)
+        entry.notes = _notes(entry, mixed, say_unranked=not shared)
     notes = []
     if statuses == {Status.PARTIAL}:
-        notes.append("Safety is partial for every skill with a safety score (e.g. a "
-                     "scanner is not installed or a deep scan fell back to static): their "
-                     "safety scores compare with each other, not with full scans.")
+        notes.append("Safety is partial for every skill with a safety score: their safety "
+                     "scores compare with each other, not with full scans.")
+    if shared:
+        notes.append("No skill is ranked: " + reasons.pop().removeprefix("Not ranked: "))
     return Ranking(ranked=ranked, unranked=unranked, notes=notes,
                    recommendation=_recommend(ranked, unranked, mixed))
 
@@ -203,10 +215,10 @@ def _desc(value: float | None) -> tuple[int, float]:
     return (0, -round(value, _DECIMALS))
 
 
-def _notes(entry: RankedSkill, mixed: bool) -> list[str]:
+def _notes(entry: RankedSkill, mixed: bool, say_unranked: bool = True) -> list[str]:
     result = entry.result
     notes: list[str] = []
-    if not entry.ranked:
+    if not entry.ranked and say_unranked:
         notes.append(_unranked_note(entry))
     if mixed and _safety_status(result) is Status.PARTIAL:
         detail = clean(result.dimensions[Dimension.SAFETY].detail, MAX_TEXT_CHARS)
@@ -231,18 +243,23 @@ def _critical(result: SkillResult) -> list[Finding]:
 
 
 def _unranked_note(entry: RankedSkill) -> str:
-    """Why a skill is not ranked: its missing dimensions, with status and detail."""
-    why = ", ".join(_why(entry.result, d) for d in entry.missing)
+    """Why a skill is not ranked: its missing dimensions, those with the same status and
+    detail named together, e.g. `quality, clarity (skipped: not built yet)`."""
+    groups: dict[str, list[str]] = {}
+    for dimension in entry.missing:
+        groups.setdefault(_why(entry.result, dimension), []).append(dimension.value)
+    why = "; ".join(", ".join(names) + (f" ({reason})" if reason else "")
+                    for reason, names in groups.items())
     return f"Not ranked: no score for {why}."
 
 
 def _why(result: SkillResult, dimension: Dimension) -> str:
-    """A missing dimension, with whatever status and detail the result has for it."""
+    """The status and detail the result has for a missing dimension, or "" if none."""
     found = result.dimensions.get(dimension)
     if found is None:
-        return dimension.value
+        return ""
     detail = clean(found.detail, MAX_TEXT_CHARS)  # may leave nothing
-    return f"{dimension.value} ({found.status}{f': {detail}' if detail else ''})"
+    return f"{found.status}{f': {detail}' if detail else ''}"
 
 
 def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
@@ -262,19 +279,19 @@ def _recommend(ranked: list[RankedSkill], unranked: list[RankedSkill],
         if any(_critical(e.result) or (mixed and _safety_status(e.result) is Status.PARTIAL)
                for e in top):
             text += f" Check {its} safety notes before using {'it' if alone else 'them'}."
-        elif safety is not None and safety < LOW_SAFETY:
+        elif safety is not None and safety < _low_safety():
             text += (f" {its.capitalize()} safety score is low ({safety:.2f}); "
                      f"check {its} findings first.")
         return text + _lift_warning(first, alone)
     if unranked:  # no winner from an incomplete assessment (evaluate.md 2.1)
         return ("No complete overall comparison was available, so no skill is "
-                "recommended. The notes say which dimensions each skill is missing.")
+                "recommended.")
     return "No skills to rank."
 
 
 def _lift_warning(entry: RankedSkill, alone: bool) -> str:
     """A skill no better than no skill adds no value (evaluate.md 4.1)."""
-    if entry.result.lift > 0:
+    if entry.result.lift is None or entry.result.lift > 0:
         return ""
     its, does = ("Its", "it does") if alone else ("Their", "they do")
     return (f" {its} lift is {entry.result.lift:+.2f}: on the tasks {does} no better than "
@@ -304,6 +321,68 @@ def table(ranking: Ranking) -> str:
     if ranking.recommendation:
         lines += ["", f"Recommendation: {_escape(ranking.recommendation)}"]
     return "\n".join(lines)
+
+
+def markdown(meta: ReportMeta, ranking: Ranking) -> str:
+    """ranked-evaluation.md: the settings, table(), then each skill's details, so it has
+    the same fields as ranked-evaluation.json (evaluate.md 2.1). Everything that came
+    from a skill, a run, a backend or the judge goes through _md (judge.md 2.3)."""
+    lines = [
+        "# Skill evaluation", "",
+        f"- Time: {meta.timestamp}",
+        f"- Skills: {_md(', '.join(meta.skills))}",
+        f"- Config: {meta.config}",
+        f"- Runs per task: {meta.runs_per_task}",
+        f"- Judge model: {_md(meta.judge_model) or 'none'}",
+        f"- Safety tier: {meta.safety_tier}",
+        f"- Scanner version: {_md(meta.scanner_version) or 'not run'}",
+        f"- Checks version: {_md(meta.checks_version)}",
+        "", table(ranking),
+    ]
+    for entry in ranking.entries:
+        lines += _details(entry)
+    return "\n".join(lines) + "\n"
+
+
+def _details(entry: RankedSkill) -> list[str]:
+    result = entry.result
+    lift = "not measured" if result.lift is None else f"{result.lift:+.2f}"
+    return [
+        "", f"## {_md(entry.name)}", "", f"Lift: {lift}",
+        *_section("Dimensions", [
+            f"{d.value}: {s.status}" + "".join(f". {_md(t)}" for t in (s.reason, s.detail) if t)
+            for d, s in result.dimensions.items()]),
+        *_section("Tests", [
+            f"{_md(t.task_id)} ({_md(t.description)}), {t.variant} r{t.run}: "
+            f"{'passed' if t.passed else 'failed'}, score {t.score:.2f}, judge {t.judge}, "
+            f"{t.metrics.total_tokens} tokens, {t.metrics.llm_calls} LLM calls, "
+            f"{t.metrics.tool_calls if t.metrics.tool_calls is not None else '?'} tool calls. "
+            f"{_md(t.reason)}"
+            + (f" Evidence: {_md(t.evidence)}" if t.evidence else "")
+            + f" Output: {_md(t.output, len(t.output))}"  # uncut: it ends with the log's path
+            for t in result.tests]),
+        *_section("Clarity ratings", [
+            f"{_md(r.criterion)}: {r.rating:.2f}. {_md(r.reason)} Quote: {_md(r.quote)}"
+            for r in result.rubric]),
+        *_section("Findings", [
+            f"{f.severity} {_md(f.category)} at {_md(f.location)} "
+            f"({f.dimension}, {_md(f.source)}, {_md(f.rule)}): {_md(f.message)} "
+            f"Quote: {_md(f.quote)}"
+            for f in result.findings]),
+        *_section("Local warnings (this machine only: remove before sharing)", [
+            f"{_md(w.message)} Target: {_md(w.target)}, on this machine {_md(w.resolved)}, "
+            f"at {_md(w.location)}. Why: {_md(', '.join(w.reasons))}"
+            for w in result.local_warnings]),
+    ]
+
+
+def _section(title: str, items: list[str]) -> list[str]:
+    return ["", f"### {title}", "", *(f"- {item}" for item in items)] if items else []
+
+
+def _md(text: object, limit: int = MAX_REASON_CHARS) -> str:
+    """Untrusted text for ranked-evaluation.md: cleaned, then escaped."""
+    return _escape(clean(text, limit))
 
 
 def _escape(text: str) -> str:

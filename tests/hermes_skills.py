@@ -25,7 +25,7 @@ def skill_id(path: Path) -> str:
 
 
 def load(path: Path) -> Skill:
-    """Like Skill.load(), without PyYAML: `frontmatter` is left empty, `body` is the whole
+    """Like Skill.load(), without Hermes' YAML loader: `frontmatter` is left empty, `body` is the whole
     SKILL.md, and bundled files are listed the same way."""
     files = sorted(
         f.relative_to(path) for f in path.rglob("*")

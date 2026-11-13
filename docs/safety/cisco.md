@@ -64,11 +64,12 @@ The sketch's `except SkillScannerError` would catch neither: a setup failure wou
 
 ### `available()`
 
-True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. This is what the install prompt uses: before evaluation starts, the tool calls it and, if false, the agent asks the user whether to install `cisco-ai-skill-scanner==2.2.1` (section 3.1 of the safety design).
+True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. Hermes installs the scanner from `plugin.yaml`, so this is normally true. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
 
 ### `scan(skill, tier)`
 
 1. **Not installed:** return `not-installed`, no findings, `detail` with the install command.
+   - **Frontmatter that would stall the scanner:** return `error` without running it, when the frontmatter holds more than `MAX_FRONTMATTER_VALUES` (100,000) values once its YAML aliases are expanded, or is nested too deep to count (`frontmatter_too_large` in checks.py). The scanner parses the frontmatter itself, and its time doubles with each level of nested aliases: with 2.2.1, 6 s at 2^24 values and minutes past 2^28, from a frontmatter of a few hundred bytes. Real skills have a few hundred values. Safety is then `partial`, and our own checks report the frontmatter as a HIGH `frontmatter-aliases` finding ([checks.md](checks.md)).
 2. **Static:** run `SkillScanner().scan_skill(skill.path)`.
 3. **Deep:**
    1. Without `ctx.llm` (outside Hermes, as in tests and CI), run the static scan and return `llm-unavailable`, with `detail` saying there is no Hermes LLM access.
@@ -97,7 +98,7 @@ Findings with the scanner's sixth severity, `SAFE`, are skipped. In 2.2.1 the sc
 
 ### Scanner notices are not findings
 
-`LLM_ANALYSIS_FAILED` and `LLM_CONTEXT_BUDGET_EXCEEDED` describe the scan, not the skill. Passed through, they would cap any large skill at 0.9 (INFO under the worst-finding table) for being large, and penalize a skill when the API is down. The adapter drops them from findings and summarizes them in `detail`, for example "LLM analysis skipped 5 files over the context budget".
+`LLM_ANALYSIS_FAILED` and `LLM_CONTEXT_BUDGET_EXCEEDED` describe the scan, not the skill. Passed through, they would penalize a skill for being large or for being scanned while the API is down, neither of which is about the skill. The adapter drops them from findings and summarizes them in `detail`, for example "LLM analysis skipped 5 files over the context budget".
 
 Decided. The list of notice rule IDs lives in one constant (`SCANNER_NOTICES`), so new ones are easy to add when the scanner is upgraded.
 
@@ -116,7 +117,7 @@ Hermes never gives plugins API keys: a plugin asks Hermes for a completion throu
 
 So Cisco's LLM layer runs on whichever model the user has configured in Hermes, with Hermes's auth and permission settings. Without `ctx.llm`, Cisco runs static only.
 
-For now the adapter uses the user's active model. `judge.py` registers its own model setting, `metaskill_judge`, so a user can pin a judge model; the adapter should pass that task too, so Cisco and our review always use the same model.
+The adapter calls through `judge.py`'s model setting, `metaskill_judge` (`CiscoBackend(llm, task=JUDGE_TASK)`), so Cisco and the review always run on the same model, including when the user pins a judge model in `config.yaml`.
 
 `judge.py` reaches `ctx.llm` the same way and makes the same choice about the schema: it sends the schema as guidance, checks the reply itself and asks again up to `EvaluationConfig.judge_retries` times ([judge.md](../evaluate/judge.md) 2.4).
 
@@ -143,7 +144,7 @@ Measured on 20 Oct 2026 inside Hermes, on `gpt-5.4-nano`: 5 deep scans each of `
 | Schema as guidance + one retry | **2 / 25 (8%)** | 2 / 10 | 6 / 25 |
 
 - **Remaining failures:** one reply still missed fields after the retry; one fitted the schema but Cisco rejected its `evidence_ids`, which must point at real items in Cisco's own prompt, something a schema cannot express. Both fell back to static (`partial`).
-- **Stable scores:** across the 23 successful scans, each skill got the same safety score every run (1.0, 1.0, 0.6, 0.3, 0.0). Details varied: an extra LOW finding, or a MEDIUM reported as LOW. Cisco's majority-vote option (`llm_consensus_runs`) is therefore not used: it would multiply cost and failures without changing scores on this sample. Revisit if the validation set shows scores flipping.
+- **Stable scores:** across the 23 successful scans, each skill got the same safety score every run (1.0, 1.0, 0.31, 0.11, 0.0). Details varied: an extra LOW finding, or a MEDIUM reported as LOW. Cisco's majority-vote option (`llm_consensus_runs`) is therefore not used: it would multiply cost and failures without changing scores on this sample. Revisit if the validation set shows scores flipping.
 - **Size and cost:** about 4,400 input tokens for a small skill and 28,000 for `p5js`, a few hundred output tokens, 3 to 9 seconds per call. Cisco's prompt runs about 2.6 characters per token. A retry roughly doubles a scan's tokens.
 
 Small skills never failed; large skills did, so a stronger model than `gpt-5.4-nano` would likely fail less. The real fix is a strict-schema option in `ctx.llm`, which would be a request to Hermes upstream.

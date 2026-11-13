@@ -67,7 +67,7 @@ def test_cisco_is_listed_after_docker_and_is_optional(monkeypatch):
     monkeypatch.setattr(CiscoBackend, "available", lambda self: False)
     deps = missing_dependencies(FakeSandbox((Problem.NO_IMAGE, "not pulled")))
     assert names(deps) == [(SANDBOX, DEFAULT_IMAGE, True), ("cisco", "cisco-ai-skill-scanner", False)]
-    assert deps[1].install_command == INSTALL_COMMAND
+    assert deps[1].install_command == "" and INSTALL_COMMAND in deps[1].reason
 
 
 def test_require_raises_only_for_required(monkeypatch):

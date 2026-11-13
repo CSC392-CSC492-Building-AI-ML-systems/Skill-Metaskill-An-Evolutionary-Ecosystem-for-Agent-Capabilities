@@ -5,7 +5,7 @@ from metaskill.evaluate.models import (
     Dimension, EvaluationConfig, Finding, SafetyTier, Severity, Skill, Status)
 from metaskill.evaluate.safety.checks import CHECKS_VERSION, ChecksBackend
 from metaskill.evaluate.safety.cisco import INSTALL_COMMAND, CiscoBackend
-from metaskill.evaluate.safety.findings import BackendResult, BackendStatus
+from metaskill.evaluate.safety.findings import SEVERITY_SCORE, BackendResult, BackendStatus
 
 SKILL = Skill(path=Path("some-skill"), name="some-skill", body="")
 STATIC = EvaluationConfig(safety_tier=SafetyTier.STATIC)
@@ -54,7 +54,7 @@ def test_one_backend_not_installed_is_partial():
     result = run(FakeBackend("cisco", NOT_INSTALLED, detail="install it"),
                  FakeBackend("own-checks", OK, [finding(Severity.MEDIUM, "own-checks")]))
     assert result.status is Status.PARTIAL
-    assert result.value == 0.6
+    assert result.value == SEVERITY_SCORE[Severity.MEDIUM]
 
 
 def test_llm_fallback_is_partial_and_keeps_static_findings():
@@ -62,7 +62,7 @@ def test_llm_fallback_is_partial_and_keeps_static_findings():
                              detail="LLM analysis failed"),
                  config=DEEP)
     assert result.status is Status.PARTIAL
-    assert result.value == 0.3
+    assert result.value == SEVERITY_SCORE[Severity.HIGH]
 
 
 def test_nothing_installed_is_skipped_with_no_score():
@@ -99,7 +99,7 @@ def test_same_problem_from_two_backends_counts_once():
     [merged] = result.findings
     assert merged.severity is Severity.HIGH
     assert merged.source == "own-checks, cisco"
-    assert result.value == 0.3
+    assert result.value == SEVERITY_SCORE[Severity.HIGH]
 
 
 def test_routed_findings_are_kept_but_not_scored():
@@ -108,7 +108,7 @@ def test_routed_findings_are_kept_but_not_scored():
     result = run(FakeBackend("cisco", OK, [secret]))
     assert result.value == 1.0
     assert result.findings == [secret]
-    assert result.reason == "No findings at static tier"
+    assert result.reason == "No safety findings at static tier"
 
 
 # --- Reason and detail ---------------------------------------------------------
@@ -127,7 +127,7 @@ def test_reason_for_a_whole_skill_finding():
 
 def test_reason_reports_the_tier_that_actually_ran():
     result = run(FakeBackend("cisco", LLM_UNAVAILABLE, tier=SafetyTier.STATIC), config=DEEP)
-    assert result.reason == "No findings at static tier"
+    assert result.reason == "No safety findings at static tier"
 
 
 def test_reason_when_nothing_ran():
@@ -156,13 +156,14 @@ def test_default_backends_are_cisco_and_own_checks():
     assert isinstance(cisco, CiscoBackend)
     assert isinstance(own, ChecksBackend)
     assert cisco.llm is llm
+    assert cisco.task == "metaskill_judge"  # same model setting as judge.py
 
 
 def test_missing_dependencies_lists_cisco_when_not_installed(monkeypatch):
     monkeypatch.setattr(CiscoBackend, "available", lambda self: False)
     [dep] = safety.missing_dependencies()
     assert dep.backend == "cisco"
-    assert dep.install_command == INSTALL_COMMAND
+    assert dep.install_command == "" and INSTALL_COMMAND in dep.reason
 
 
 def test_missing_dependencies_is_empty_when_installed(monkeypatch):

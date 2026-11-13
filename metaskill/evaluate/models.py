@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
 import re
@@ -117,6 +117,17 @@ def _check_unit(name: str, value: float) -> None:
 # --- Inputs ---------------------------------------------------------------
 
 
+def load_yaml(text: str) -> Any:
+    """text parsed by Hermes' own YAML loader. The plugin runs inside Hermes, whose runtime
+    has this and not PyYAML, so the plugin needs no YAML package of its own."""
+    try:
+        from hermes_yaml import safe_load
+    except ImportError as e:
+        raise ImportError("Hermes' YAML loader (hermes_yaml) was not found: reading YAML "
+                          "needs Hermes") from e
+    return safe_load(text)
+
+
 @dataclass
 class Skill:
     """A skill loaded from disk. Every scoring module takes one of these."""
@@ -137,18 +148,18 @@ class Skill:
         match = re.match(
             r"---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", body, re.DOTALL)
         if match:
-            try:
-                import yaml
-            except ImportError as e:
-                raise ImportError(
-                    "PyYAML is required to parse SKILL.md frontmatter. "
-                    "Install it with `pip install pyyaml`."
-                ) from e
-            parsed = yaml.safe_load(match.group(1)) or {}
+            parsed = load_yaml(match.group(1)) or {}
             if not isinstance(parsed, dict):
                 raise ValueError(
                     f"{path / 'SKILL.md'}: frontmatter is not a mapping")
             frontmatter = parsed
+        # Only text, or a number as text. The name is printed and sorted as text, and
+        # str() of a crafted YAML value (aliases nested in lists) takes minutes.
+        name = frontmatter.get("name")
+        if isinstance(name, (int, float)) and not isinstance(name, bool):
+            name = str(name)
+        if not isinstance(name, str) or not name.strip():
+            name = path.name
         skip = {"__pycache__", "node_modules"}
         files = sorted(
             f.relative_to(path)
@@ -159,7 +170,7 @@ class Skill:
         )
         return Skill(
             path=path,
-            name=frontmatter.get("name", path.name),
+            name=name,
             body=body,  # full file, so line numbers match SKILL.md
             frontmatter=frontmatter,
             files=files,
@@ -388,11 +399,53 @@ class ReportMeta:
 
 @dataclass
 class Metrics:
-    """Cost of a single task run, used for efficiency."""
+    """Cost of a single task run, used for efficiency (docs/evaluate.md 3.5).
 
-    tokens: int
-    seconds: float
-    tool_calls: int
+    Tokens are split into input/output and the prompt-cache counts so efficiency can
+    score on a cache-agnostic input total: a warm-cache run and a cold one of the same
+    prompt have the same `reproducible_input`. `seconds` is recorded for the log but is
+    not scored -- it depends on the machine, network and provider load, so it is not
+    reproducible. `llm_calls` is the number of model round-trips the session made.
+    `tool_calls` is None when the source could not measure it (a `hermes -z --usage-file`
+    report does not report tool calls), so efficiency leaves that signal out rather than
+    treating it as zero.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Hidden reasoning is already inside output_tokens (the completion/output count); this
+    # is the sub-count, for the breakdown, and is NOT added to generation or the total.
+    reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    llm_calls: int = 0
+    tool_calls: int | None = 0  # None = not measured
+    seconds: float = 0.0
+
+    @property
+    def reproducible_input(self) -> int:
+        """Logical input size, independent of cache state: billed input plus the tokens a
+        warm cache served or wrote. Equal across warm and cold runs of the same prompt."""
+        return self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+    @property
+    def total_tokens(self) -> int:
+        """Every token processed, for display. Reasoning is already in output_tokens."""
+        return self.reproducible_input + self.output_tokens
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Metrics:
+        """Tolerant of unknown or missing keys, so a report written by another version of
+        the metrics still loads (reports are retained as the run's source of truth). Counts
+        are clamped to non-negative ints so a malformed report cannot divide by zero or skew
+        a ratio; `tool_calls` keeps None (not measured)."""
+        names = {f.name for f in fields(cls)}
+        values = {k: v for k, v in data.items() if k in names}
+        for key in ("input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
+                    "cache_write_tokens", "llm_calls", "tool_calls"):
+            if values.get(key) is not None:
+                values[key] = max(0, int(values[key]))
+        return cls(**values)
 
 
 @dataclass
@@ -429,9 +482,14 @@ class TestResult:
             "score": self.score,
             "reason": self.reason,
             "metrics": {
-                "tokens": self.metrics.tokens,
-                "seconds": self.metrics.seconds,
+                "input_tokens": self.metrics.input_tokens,
+                "output_tokens": self.metrics.output_tokens,
+                "reasoning_tokens": self.metrics.reasoning_tokens,
+                "cache_read_tokens": self.metrics.cache_read_tokens,
+                "cache_write_tokens": self.metrics.cache_write_tokens,
+                "llm_calls": self.metrics.llm_calls,
                 "tool_calls": self.metrics.tool_calls,
+                "seconds": self.metrics.seconds,
             },
             "output": self.output,
             "evidence": self.evidence,
@@ -448,7 +506,7 @@ class TestResult:
             passed=data["passed"],
             score=data["score"],
             reason=data["reason"],
-            metrics=Metrics(**data["metrics"]),
+            metrics=Metrics.from_dict(data["metrics"]),
             output=data["output"],
             evidence=data.get("evidence", None),
         )
@@ -684,7 +742,8 @@ class SkillResult:
 
     name: str
     scores: Scores
-    lift: float  # pass_rate(with_skill) - pass_rate(baseline), in [-1, 1]
+    # pass_rate(with_skill) - pass_rate(baseline), in [-1, 1]; None if no tasks ran.
+    lift: float | None
     dimensions: dict[Dimension, DimensionStatus] = field(default_factory=dict)
     tests: list[TestResult] = field(default_factory=list)
     rubric: list[RubricRating] = field(default_factory=list)
@@ -693,7 +752,7 @@ class SkillResult:
 
     def __post_init__(self) -> None:
         # Also refuses NaN, which would make the ranking's order depend on input order.
-        if not -1.0 <= self.lift <= 1.0:
+        if self.lift is not None and not -1.0 <= self.lift <= 1.0:
             raise ValueError(f"lift must be in [-1, 1], got {self.lift}")
 
     def to_dict(self) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 ---
 name: guide
-description: How to run the metaskill tool - find the skill's path, pick generalize or personalize, find the config.
+description: How to run the metaskill tool - find the skill's path, pick generalize, personalize, evaluate or rank, find the config.
 metadata:
   hermes:
     requires_tools: [metaskill]
@@ -9,7 +9,8 @@ metadata:
 # Using the metaskill tool
 
 `metaskill` turns a Hermes skill into a shareable template (**generalize**) or fills a
-template with a user's values (**personalize**). Follow these steps in order.
+template with a user's values (**personalize**), scores a skill (**evaluate**) or compares
+several (**rank**). Follow these steps in order.
 
 ## 1. Resolve the skill to a path
 
@@ -34,6 +35,11 @@ Check that the directory or file is there before calling the tool. If the tool r
 - **personalize**: the user has a generalized skill (a template with placeholders) and
   wants it filled in with their own values.
 
+- **evaluate**: the user wants one skill scored. **rank**: the user wants several compared;
+  pass `skill_path` as a comma separated list. If no skills were named, ask: all installed
+  skills, or a set they list. Output defaults to `./evaluation-reports/`. `config_path` is
+  optional evaluation settings for these two.
+
 If the request is unclear, ask the user which one they want.
 
 ## 4. For personalize, find the config
@@ -51,6 +57,8 @@ If the request is unclear, ask the user which one they want.
 ```
 metaskill(operation="generalize", skill_path="<dir>")
 metaskill(operation="personalize", skill_path="<dir>", config_path="<file>")
+metaskill(operation="evaluate", skill_path="<dir>")
+metaskill(operation="rank", skill_path="<dir1>,<dir2>")
 ```
 
 `output_path` is optional and defaults to `./metaskill-output/<skill>-template` or

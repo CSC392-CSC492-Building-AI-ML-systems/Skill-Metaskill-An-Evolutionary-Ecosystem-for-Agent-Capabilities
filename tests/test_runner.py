@@ -16,11 +16,15 @@ from metaskill.evaluate.models import (
     EvaluationConfig,
     JudgeType,
     Skill,
+    Status,
     Task,
+    TestResult,
     Variant,
 )
+from metaskill.evaluate import efficiency
 from metaskill.evaluate.runner import (
     AgentRun,
+    agent_run_from_hermes_usage,
     report_dir,
     run_skill,
     run_tasks,
@@ -158,7 +162,8 @@ def writes_report_with_skill(prompt, skill, workdir):
     if skill is not None:
         (workdir / "report.txt").write_text("ok", encoding="utf-8")
     output = "wrote the report to report.txt" if skill else "could not"
-    return AgentRun(output=output, tokens=120, tool_calls=3)
+    return AgentRun(output=output, input_tokens=70, output_tokens=40, reasoning_tokens=5,
+                    cache_read_tokens=10, llm_calls=2, tool_calls=3)
 
 
 # --- Running ----------------------------------------------------------------
@@ -184,9 +189,52 @@ def test_runs_are_judged_and_measured(skill, run_dir):
     assert (with_skill.passed, with_skill.score) == (True, 1.0)
     assert (baseline.passed, baseline.score) == (False, 0.0)
     assert with_skill.judge is JudgeType.DETERMINISTIC
-    assert (with_skill.metrics.tokens, with_skill.metrics.tool_calls) == (120, 3)
+    # total = reproducible_input 80 + output 40 + reasoning 5
+    # total = reproducible_input 80 + output 40 (reasoning is already inside output)
+    assert (with_skill.metrics.total_tokens, with_skill.metrics.tool_calls) == (120, 3)
+    assert with_skill.metrics.reproducible_input == 80  # input 70 + cache_read 10
+    assert with_skill.metrics.reasoning_tokens == 5
+    assert with_skill.metrics.llm_calls == 2
     assert with_skill.metrics.seconds >= 0
+    # Metrics round-trips through the report JSON unchanged.
+    assert TestResult.from_dict(with_skill.to_dict()).metrics == with_skill.metrics
     assert result.errors == [] and result.judge_model == ""
+
+
+def test_hermes_usage_file_maps_to_agent_run_excluding_auxiliary():
+    # The real usage file captured from `hermes -z --usage-file`. The mapper must read the
+    # top-level counts (the agent's own turns), not the `auxiliary` title-generation call.
+    usage = json.loads((Path(__file__).parent / "fixtures" / "hermes_usage.json").read_text())
+    run = agent_run_from_hermes_usage("ok", usage)
+    assert run.input_tokens == 12699
+    assert run.output_tokens == 5
+    assert run.reasoning_tokens == 0
+    assert (run.cache_read_tokens, run.cache_write_tokens) == (0, 0)
+    assert run.llm_calls == 1  # api_calls, not total_including_auxiliary.api_calls (2)
+    assert run.tool_calls is None  # not reported in the usage file -> unmeasured
+
+
+def cheaper_with_skill(prompt, skill, workdir):
+    """With the skill the task passes and costs less; the baseline costs more and fails."""
+    if skill is not None:
+        (workdir / "report.txt").write_text("ok", encoding="utf-8")
+        return AgentRun(output="wrote report.txt", input_tokens=50, output_tokens=10,
+                        llm_calls=1, tool_calls=1)
+    return AgentRun(output="could not", input_tokens=120, output_tokens=30,
+                    llm_calls=3, tool_calls=2)
+
+
+def test_runner_results_feed_the_efficiency_scorer(skill, run_dir):
+    # End to end: the runner's TestResults go straight into efficiency.score_from_runs.
+    result = run_tasks(skill, [task()], FakeAgent(cheaper_with_skill),
+                       config=config(runs=1), run_dir=run_dir)
+    with_skill = [t for t in result.tests if t.variant is Variant.WITH_SKILL]
+    baseline = [t for t in result.tests if t.variant is Variant.BASELINE]
+    assert all(t.passed for t in with_skill) and not any(t.passed for t in baseline)
+
+    dimension = efficiency.score_from_runs(with_skill, baseline)
+    assert dimension.status is Status.OK
+    assert dimension.value > 0.5  # the skill made the task cheaper than no skill
 
 
 def test_each_run_gets_a_fresh_workspace_with_the_fixtures(skill, run_dir, tmp_path):
