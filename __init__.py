@@ -11,7 +11,7 @@ from .metaskill.evaluate.judge import JUDGE_TASK
 GUIDE_SKILL = Path(__file__).parent / "skills" / "guide" / "SKILL.md"
 # The same text as the SKILL.md frontmatter; a colon here would break that YAML line.
 GUIDE_DESCRIPTION = (
-    "How to run the metaskill tool - find the skill's path, pick generalize or personalize, "
+    "How to run the metaskill tool - find the skill's path, pick generalize, personalize, evaluate or rank, "
     "find the config."
 )
 # Hermes reads index conditions from what is registered, not from the file, so this repeats
