@@ -33,7 +33,7 @@ A byte-identical round trip means generalization changed no formatting and no be
 | Gap | Fix |
 |---|---|
 | The MET-12 pipeline (#34) and main's detection-only pipeline conflicted, and #34 dropped the add-on detectors (metaskill-laya). | Merged the two: the pipeline writes the template and runs registered extra detectors after the regex layer. Their findings are always left for review. The result again carries `detectors`, `note`, and per-action, per-category and per-detector counts. |
-| Every review finding left in the output on purpose was also counted as an unexpected residual, so each run warned `residual_candidates` (14 across the four skills). | Residuals that match a review finding left in (same file, line, category and rule) are expected. Only new values count as unexpected (`pipeline.py`). |
+| Every review finding left in the output on purpose was also counted as an unexpected residual, so each run warned `residual_candidates` (14 across the four skills). | Up to as many residuals as there are review findings left in, per file, category and rule, are expected. Lines are not compared, because a multi-line value such as a private key becomes a one-line placeholder. A new value still exceeds the count and is reported (`pipeline.py`). |
 | Public mail endpoints in provider setup guides (`imap.gmail.com`, `smtp.mail.me.com`) were flagged as configuration (4 reviews in himalaya). | Known provider IMAP/SMTP hosts are not configuration values (`detect.py`, `_PROVIDER_HOSTS`). |
 
 Unexpected reviews went from 14 to 10, and the false residual warnings went from 14 to 0.

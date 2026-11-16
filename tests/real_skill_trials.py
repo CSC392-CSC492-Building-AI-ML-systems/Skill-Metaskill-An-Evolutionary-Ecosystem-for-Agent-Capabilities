@@ -73,10 +73,13 @@ def hermes_parse(paths: list[Path]) -> list[dict] | None:
     if found is None:
         return None
     agent, python = found
-    proc = subprocess.run([python, "-I", "-c", _HERMES_PARSE, agent, *map(str, paths)],
-                          capture_output=True, text=True, timeout=120, cwd=agent)
-    if proc.returncode != 0:
-        raise RuntimeError(f"Hermes skill loader failed: {proc.stderr.strip()[-500:]}")
+    try:
+        proc = subprocess.run([python, "-I", "-c", _HERMES_PARSE, agent, *map(str, paths)],
+                              capture_output=True, text=True, timeout=120, cwd=agent)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Hermes skill loader timed out after 120s") from None
+    if proc.returncode != 0:  # stderr is not passed on: a traceback may quote the skill
+        raise RuntimeError(f"Hermes skill loader failed with exit code {proc.returncode}")
     return json.loads(proc.stdout)
 
 

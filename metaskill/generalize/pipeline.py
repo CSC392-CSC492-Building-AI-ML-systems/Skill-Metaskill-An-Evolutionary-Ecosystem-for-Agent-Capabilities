@@ -275,17 +275,18 @@ def generalize_skill(
             )
             for finding in residual.findings
         ]
-        # Review findings that were not approved stay in the output on purpose, so a
-        # residual on the same file, line, category and rule is expected, not a miss.
-        # Placeholders never add or remove lines, so line numbers still line up.
+        # Review findings that were not approved stay in the output on purpose, so up to
+        # that many residuals of the same file, category and rule are expected. Lines are
+        # not compared: a multi-line value (a private key block) becomes a one-line
+        # placeholder and shifts every later line. A new value still exceeds the count.
         left_in = Counter(
-            (f.file, f.line, f.category, f.rule)
+            (f.file, f.category, f.rule)
             for f in result.findings
             if f.action is Action.REVIEW and f.id not in placeholders
         )
         unexpected_residuals = []
         for finding in residual.findings:
-            key = (finding.file, finding.line, finding.category, finding.rule)
+            key = (finding.file, finding.category, finding.rule)
             if finding.action is Action.KEEP:
                 continue
             if left_in[key]:

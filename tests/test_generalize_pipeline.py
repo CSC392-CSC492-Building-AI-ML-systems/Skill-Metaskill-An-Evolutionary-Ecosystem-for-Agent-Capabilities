@@ -212,6 +212,16 @@ def test_report_has_safe_review_details_and_residuals(tmp_path):
     assert all(w.get("reason") != "residual_candidates" for w in response["warnings"])
 
 
+def test_review_left_in_after_a_multiline_replacement_is_not_unexpected(tmp_path):
+    key = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(["A" * 64] * 3) + "\n-----END RSA PRIVATE KEY-----"
+    skill = write_skill(tmp_path / "skill", {
+        "SKILL.md": f"{key}\n\nUpstream: https://github.com/pimalaya/himalaya\n"})
+    response = generalize_skill(skill, output_path=tmp_path / "result")
+    assert response["counts"]["replacements"] == 1  # the key block, now one line
+    assert response["counts"]["unresolved_reviews"] == 1  # the repository URL, lines later
+    assert response["counts"]["unexpected_residual_findings"] == 0
+
+
 def test_a_residual_that_was_not_left_for_review_is_still_unexpected(tmp_path, monkeypatch):
     from metaskill.generalize import pipeline
 

@@ -13,7 +13,6 @@ from .detect import (
     scan_skill,
 )
 from .inventory import InventoryError, load_inventory
-from .pipeline import generalize_skill
 
 from .pipeline import generalize_skill
 
@@ -30,5 +29,4 @@ __all__ = [
     "load_inventory",
     "redact",
     "scan_skill",
-    "generalize_skill"
 ]
