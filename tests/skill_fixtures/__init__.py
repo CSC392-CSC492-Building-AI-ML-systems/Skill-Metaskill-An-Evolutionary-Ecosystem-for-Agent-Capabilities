@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import pytest
 from typing import NamedTuple
 
 from metaskill.generalize.detect import MASK, Action, Category
@@ -72,7 +74,10 @@ def materialize(fixture: SkillFixture, base: Path) -> Path:
     for link, target in fixture.symlinks.items():
         resolved = (base / "outside" / target[len("outside:"):]
                     if target.startswith("outside:") else Path(target))
-        os.symlink(resolved, root / link)
+        try:
+            os.symlink(resolved, root / link)
+        except OSError:  # Windows without Developer Mode or admin rights
+            pytest.skip("cannot create symlinks here")
     return root
 
 

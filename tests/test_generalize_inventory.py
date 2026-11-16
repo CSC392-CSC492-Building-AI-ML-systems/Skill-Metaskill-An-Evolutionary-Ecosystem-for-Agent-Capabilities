@@ -76,8 +76,11 @@ def test_ignores_version_control_and_cache_directories(tmp_path):
 def test_symlinks_are_skipped_not_followed(tmp_path):
     outside = write(tmp_path / "outside", {"secret.md": "jayant@company.com"})
     skill = write(tmp_path / "skill", {"SKILL.md": "# s"})
-    os.symlink(outside / "secret.md", skill / "linked.md")
-    os.symlink(outside, skill / "linked_dir")
+    try:
+        os.symlink(outside / "secret.md", skill / "linked.md")
+        os.symlink(outside, skill / "linked_dir")
+    except OSError:  # Windows without Developer Mode or admin rights
+        pytest.skip("cannot create symlinks here")
     inventory = load_inventory(skill)
     assert [f.path for f in inventory.files] == ["SKILL.md"]
     assert {(s.path, s.reason) for s in inventory.skipped} == {

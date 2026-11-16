@@ -24,17 +24,16 @@ class FakeClassifier:
 
 
 def make_skill(tmp_path):
-    (tmp_path / "SKILL.md").write_text(
+    # write_bytes, not write_text: on Windows write_text turns \n into \r\n.
+    (tmp_path / "SKILL.md").write_bytes((
         "# Deploy\n"
         "Ask jayant@company.com before deploying.\n"
         f"export GITHUB_TOKEN={GITHUB_TOKEN}\n"
-        "Clone https://github.com/atlas/streams\n",
-        encoding="utf-8")
-    (tmp_path / "run.py").write_text(
+        "Clone https://github.com/atlas/streams\n").encode())
+    (tmp_path / "run.py").write_bytes((
         f'API_KEY = "{GENERIC_SECRET}"\n'
         'key = os.getenv("API_KEY")\n'
-        'OUTPUT_PATH = "/Users/jayant/out"\n',
-        encoding="utf-8")
+        'OUTPUT_PATH = "/Users/jayant/out"\n').encode())
     return scan_skill(tmp_path)
 
 
