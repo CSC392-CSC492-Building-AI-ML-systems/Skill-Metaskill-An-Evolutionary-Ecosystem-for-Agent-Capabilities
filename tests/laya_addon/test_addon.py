@@ -216,7 +216,7 @@ def test_generalize_runs_the_addon_after_regex(monkeypatch, addon, ctx, tmp_path
     skill.mkdir()
     (skill / "SKILL.md").write_text(TEXT, encoding="utf-8", newline="")
 
-    result = pipeline.generalize_skill(str(skill), "out")
+    result = pipeline.generalize_skill(str(skill), output_path=tmp_path / "out")
     assert result["detectors"] == ["regex", "laya"]
     assert result["counts"]["by_detector"]["laya"] == 1
     [(_, skip)] = fake.calls
@@ -307,7 +307,7 @@ def test_refused_device_reaches_generalize_as_a_warning(monkeypatch, addon, ctx,
     skill = tmp_path / "skill"
     skill.mkdir()
     (skill / "SKILL.md").write_text(TEXT, encoding="utf-8", newline="")
-    result = pipeline.generalize_skill(str(skill), "out")
+    result = pipeline.generalize_skill(str(skill), output_path=tmp_path / "out")
     assert result["detectors"] == ["regex"]
     assert any("METASKILL_LAYA_DEVICE=mps:0 is not supported" in w for w in result["warnings"])
     assert addon.detector._MODELS == {}
