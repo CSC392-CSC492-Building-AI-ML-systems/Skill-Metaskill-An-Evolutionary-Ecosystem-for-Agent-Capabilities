@@ -9,9 +9,10 @@ Outcomes:
 - The session finished (completed or not): an AgentRun, which the runner judges.
 - The agent raised mid-session, or ran out of time: an exception, which the runner records
   as a failed run (the agent failing is an outcome of the task, runner.md 2.2).
-- Hermes or the sandbox backend could not be set up: HermesAgentUnavailable, a JudgeError,
-  which the runner does not swallow. Nothing ran, so scoring the run as failed would blame
-  the skill for this machine.
+- Hermes or the sandbox backend could not be set up, or the model provider could not serve
+  the session (Hermes marks it failed: model unavailable, billing, retries exhausted, a
+  content-policy block): HermesAgentUnavailable, a JudgeError, which the runner records as
+  an error. Scoring such a run as failed would blame the skill for this machine.
 """
 
 from __future__ import annotations
@@ -40,7 +41,8 @@ _RUNTIME_TIMEOUT = 60  # seconds for `hermes --print-runtime-command`
 
 
 class HermesAgentUnavailable(JudgeError):
-    """Hermes, or the sandbox backend, could not be set up for a run; no agent ran."""
+    """Hermes, the sandbox backend or the model provider failed the run: it was not set
+    up, or the provider could not serve it. Either way it tells nothing about the skill."""
 
 
 @dataclass
@@ -184,6 +186,11 @@ def _agent_run(result: dict[str, Any]) -> AgentRun:
     status = result.get("status")
     if status == "setup_error":
         raise HermesAgentUnavailable(str(result.get("error") or "Hermes setup failed"))
+    if status == "provider_error":
+        reason = result.get("failure_reason")
+        raise HermesAgentUnavailable(
+            f"the model provider could not serve the session"
+            f"{f' ({reason})' if reason else ''}: {result.get('error') or 'no detail'}")
     if status == "agent_error":
         raise RuntimeError(str(result.get("error") or "the agent failed"))
     if status != "ok":

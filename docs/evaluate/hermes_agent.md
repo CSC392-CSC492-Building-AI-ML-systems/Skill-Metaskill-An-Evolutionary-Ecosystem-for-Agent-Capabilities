@@ -41,7 +41,7 @@ AgentRun ──► judged by the runner                                         
 Two ways the first prototype sent the agent's commands to **this machine** instead of the container: Hermes' documented per-task override (`register_task_env_overrides(..., {"env_type": ...})`) does not select the terminal backend, and `config.yaml` overrides `TERMINAL_ENV`. One such run sent about 21 KB of this machine's command output to the model provider. So the child refuses to run unless both guards hold:
 
 1. **Hermes resolves our backend.** Before an agent is built, Hermes' own resolver (`_get_env_config()`, which the terminal and file tools use) must name `metaskill_sandbox`.
-2. **No other backend can be created.** Hermes creates every terminal and file backend through `_create_environment`; in the child, any backend but ours raises, and Hermes' local backend refuses at its class too.
+2. **No other backend can be created.** Hermes creates every terminal and file backend through `_create_environment`; in the child, any backend but ours raises, and Hermes' local backend refuses at its class too. Hermes' callers import `_create_environment` inside functions, which sees the replacement; any module holding the original from an earlier import is rebound as well, so the guard does not depend on how Hermes imports it.
 
 Either failing is a setup error, so no agent runs. The integration test probes both (section 5).
 
@@ -58,10 +58,11 @@ Links are left out of the file list, as the runner leaves them out of the copy. 
 
 | What happened | `run` returns or raises | The runner records |
 |---|---|---|
-| The session ended (finished, ran out of turns, or the model reported a failure) | `AgentRun` | A judged run |
+| The session ended (finished, or ran out of turns) | `AgentRun` | A judged run |
 | The agent raised during the session | `RuntimeError` | A failed run: the agent failing is an outcome of the task |
 | The session ran past `timeout` | `TimeoutError` | A failed run |
-| Hermes not found, unsupported Hermes, a guard refused, the agent could not be built (no provider), or the child died without a result | `HermesAgentUnavailable` (a `JudgeError`) | An error in `RunnerResult.errors`, not a failed run: nothing ran, so the skill must not be scored for it |
+| Hermes not found, unsupported Hermes, a guard refused, the agent could not be built (no provider), or the child died or wrote an unreadable result | `HermesAgentUnavailable` (a `JudgeError`) | An error in `RunnerResult.errors`, not a failed run: nothing ran, so the skill must not be scored for it |
+| The model provider could not serve the session: Hermes marks it `failed` (model unavailable, billing or entitlement, retries exhausted, a content-policy block) | `HermesAgentUnavailable`, with Hermes' error and `failure_reason` | An error, not a failed run. Hermes puts its own error text in the final response; judging that as the agent's answer would score the skill on this machine's provider |
 
 A timeout stops the child's whole process group, so the `docker exec` processes it started stop too; commands inside the container stop with it when the runner removes it.
 
@@ -77,7 +78,7 @@ A timeout stops the child's whole process group, so the `docker exec` processes 
 
 Opt-in integration tests:
 
-- `METASKILL_HERMES_IT=1` (Hermes and Docker, no model): Hermes' real `write_file`, `terminal` and `read_file` tools reach the container (`/work`, user `nobody`, files written by one read by another), and creating Hermes' local backend, its Docker backend, or `LocalEnvironment` directly is refused.
+- `METASKILL_HERMES_IT=1` (Hermes and Docker, no model): Hermes' real `write_file`, `terminal` and `read_file` tools reach the container (`/work`, user `nobody`, files written by one read by another), and creating Hermes' local backend, its Docker backend, or `LocalEnvironment` directly is refused. A session on a model the provider does not have is an error, not a judged run (the provider rejects it, so it costs nothing).
 - `METASKILL_HERMES_LIVE=1` (also the configured model): one real session per variant through `run_skill`, with no errors and every metric measured.
 
 ## 6. Hermes internals this relies on

@@ -142,7 +142,12 @@ def _refuse_other_backends() -> None:
             raise SetupError(f"refusing to create a {env_type!r} backend; only {BACKEND} may run")
         return create(env_type, *args, **kwargs)
 
-    backends._create_environment = only_ours
+    # Hermes' callers import it inside functions today, which sees the patched attribute;
+    # a module that imported it at load time would hold the original, so rebind those too.
+    for module in list(sys.modules.values()):
+        for name, value in list(getattr(module, "__dict__", {}).items()):
+            if value is create:
+                setattr(module, name, only_ours)
 
 
 def _bind_scope(workdir: str) -> None:
@@ -275,6 +280,15 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
     messages = result.get("messages") or []
+    if result.get("failed"):
+        # Hermes marks a session the model provider could not serve (model unavailable,
+        # billing, retries exhausted, a content-policy block) as failed, and puts its own
+        # error text in final_response. That text is not the agent's answer and must not
+        # be judged as one: the run tells nothing about the skill.
+        out.update(status="provider_error",
+                   error=str(result.get("error") or "the model provider failed"),
+                   failure_reason=result.get("failure_reason"))
+        return out
     out.update(
         status="ok", seconds=round(time.monotonic() - start, 3),
         final_response=result.get("final_response") or "",

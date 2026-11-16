@@ -169,6 +169,15 @@ def test_a_setup_error_is_unavailable_and_a_judge_error(tmp_path):
     assert isinstance(e.value, JudgeError)  # the runner records it as an error, not a failed run
 
 
+def test_a_provider_failure_is_unavailable_not_a_judged_run(tmp_path):
+    # Hermes puts its own error text in final_response when the provider cannot serve the
+    # session; the child reports it as provider_error, so that text is never judged.
+    agent = fake_agent(tmp_path, writes({"status": "provider_error", "failure_reason": "model_not_found",
+                                         "error": "Model 'x' isn't available"}))
+    with pytest.raises(HermesAgentUnavailable, match=r"provider.*\(model_not_found\).*isn't available"):
+        agent.run("p", None, docker_workspace())
+
+
 def test_an_agent_error_is_an_ordinary_failure(tmp_path):
     agent = fake_agent(tmp_path, writes({"status": "agent_error", "error": "APIError: 500"}))
     with pytest.raises(RuntimeError, match="APIError") as e:
@@ -308,6 +317,16 @@ def test_hermes_real_tools_reach_the_container_and_nothing_else_can_be_created(s
         assert "from-terminal" in check["read_file"]
         assert all(v.startswith("refused") for v in check["guards"].values()), check["guards"]
         assert "from-terminal" in workspace.run_command("cat check2.txt", 30).stdout
+    finally:
+        workspace.close()
+
+
+@needs_hermes
+def test_a_model_the_provider_does_not_have_is_an_error_not_a_judged_run(sandbox):
+    workspace = sandbox.open([])
+    try:
+        with pytest.raises(HermesAgentUnavailable, match="provider could not serve"):
+            HermesAgent(model="definitely-not-a-real-model-xyz", timeout=180).run("Say hi.", None, workspace)
     finally:
         workspace.close()
 
