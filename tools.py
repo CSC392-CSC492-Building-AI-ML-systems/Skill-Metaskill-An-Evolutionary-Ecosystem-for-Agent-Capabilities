@@ -24,7 +24,8 @@ SKILL_HELP = (
     "or a path. /metaskill skills [text] lists the ones you can use."
 )
 USAGE = (
-    "usage: /metaskill evaluate <skill> | rank <skill>, <skill> | generalize <skill> | "
+    "usage: /metaskill evaluate <skill> [--tasks <file>] | rank <skill>, <skill> [--tasks <file>] | "
+    "generalize <skill> | "
     f"personalize <skill> --config <file> | skills [text]\n{SKILL_HELP}"
 )
 
@@ -214,13 +215,14 @@ def _list_skills(text, cwd):
     return "\n".join(lines)
 
 
-def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
+def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tasks_path=None):
     """Validate arguments, route to the pipeline, and return a response dict."""
     if operation not in _ENTRY_POINTS:
         return _error(operation, f"unknown operation; expected one of {', '.join(_ENTRY_POINTS)}")
     cwd = _session_cwd(ctx)
     config_path = config_path and os.path.join(cwd, config_path)
     output_path = output_path and os.path.join(cwd, output_path)
+    tasks_path = tasks_path and os.path.join(cwd, tasks_path)
     names = skill_path if isinstance(skill_path, list) else (
         _skill_names(operation, skill_path, cwd) if skill_path else [])
     paths = [os.path.join(cwd, name) for name in names]
@@ -242,6 +244,10 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
         )
     if operation != "generalize" and config_path and not os.path.exists(config_path):
         return _error(operation, "config_path does not exist")
+    if tasks_path and operation not in EVALUATION:
+        return _error(operation, "tasks_path is only for evaluate and rank")
+    if tasks_path and not os.path.isfile(tasks_path):
+        return _error(operation, "tasks_path does not exist or is not a file")
 
     entry_point = _load_entry_point(operation)
     if entry_point is None:
@@ -250,7 +256,8 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
     target = paths if operation == "rank" else paths[0]
     if operation in EVALUATION:
         # output_path stays None by default: the config says where reports go.
-        kwargs = {"config_path": config_path, "output_path": output_path, "ctx": ctx}
+        kwargs = {"config_path": config_path, "output_path": output_path,
+                  "tasks_path": tasks_path, "ctx": ctx}
     else:
         # From the resolved path: skill_path can be a list, which has no name to take.
         default = os.path.join(cwd, default_output_path(operation, target))
@@ -284,6 +291,7 @@ def metaskill(args, ctx=None, **kwargs):
             config_path=args.get("config_path"),
             output_path=args.get("output_path"),
             ctx=ctx,
+            tasks_path=args.get("tasks_path"),
         )
         result["success"] = result["status"] == "ok"
         return json.dumps(result)
@@ -294,17 +302,27 @@ def metaskill(args, ctx=None, **kwargs):
         )
 
 
-_COMMAND = re.compile(r"(\S+)\s+(.+?)(?:\s+--config\s+(.+))?")
+_COMMAND = re.compile(r"(\S+)\s+(.+?)")
+# A trailing `--config FILE` or `--tasks FILE`; FILE is quoted, or runs to the end of the
+# request or to the other option.
+_OPTION = re.compile(r"\s+--(config|tasks)\s+(\"[^\"]*\"|'[^']*'|(?:(?!\s+--(?:config|tasks)\s).)+?)\s*$")
 
 
 def _parse_command(request):
-    """(operation, skills, config file) of `<operation> <skills> [--config FILE]`, or
-    None if the request has another shape."""
+    """(operation, skills, config file, task file) of
+    `<operation> <skills> [--config FILE] [--tasks FILE]`, either option first, or None if
+    the request has another shape."""
+    options = {}
+    while (option := _OPTION.search(request)) is not None:
+        if option[1] in options:
+            return None
+        options[option[1]] = option[2].strip("\"'")
+        request = request[:option.start()]
     match = _COMMAND.fullmatch(request)
     if match is None or match[1] not in _ENTRY_POINTS:
         return None
-    operation, skills, config_path = match.groups()
-    return operation, skills.strip("\"'"), config_path and config_path.strip("\"'")
+    operation, skills = match.groups()
+    return operation, skills.strip("\"'"), options.get("config"), options.get("tasks")
 
 
 _CELL = re.compile(r"(?<!\\)\|")  # a column border, not an escaped | in a name
@@ -425,12 +443,13 @@ def make_command_handler(ctx):
                 return f"metaskill {request}: which skill?\n{SKILL_HELP}\n{where}"
             parsed = _parse_command(request)
             if parsed:
-                operation, skills, config_path = parsed
+                operation, skills, config_path, tasks_path = parsed
                 paths, problems = _find_skills(operation, skills, cwd)
                 if problems or not paths:
                     return "\n".join([*problems, SKILL_HELP, where])
                 target = paths if operation == "rank" else paths[0]
-                result = run(operation, target, config_path=config_path, ctx=ctx)
+                result = run(operation, target, config_path=config_path, ctx=ctx,
+                             tasks_path=tasks_path)
                 return _summary(result, paths)
             if not ctx.inject_message(f"Use the metaskill tool to: {request}"):
                 return ("metaskill: could not send the request to the agent. Set "

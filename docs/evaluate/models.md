@@ -65,8 +65,10 @@ Settings for one `evaluate` or `rank` call.
 | `output_max_chars` | `2000` | Truncation length for `TestResult.output`; the full output is in the run's log ([runner.md](runner.md) 2.4) |
 | `sandbox_disk` | `16m` | Size of each run's folder in the sandbox ([runner.md](runner.md) 2.6); the task's fixtures must fit in it too. A number and `k`, `m` or `g`, nothing else, since it goes into the volume's mount options. Must be under the sandbox's 512 MB memory limit, which the folder counts against |
 | `output_dir` | `evaluation-reports` | Each run writes `[timestamp]/` here |
+| `tasks_path` | `None` | The task file every skill of the call runs ([evaluate.md](../evaluate.md) 7). `None` runs no tasks, and the task-based dimensions are `skipped` |
+| `agent_model`, `agent_provider` | `""` | The Hermes model and provider the task sessions use; empty is the user's Hermes default |
 
-- `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, since the output location does not affect scores. The result becomes `ReportMeta.config`.
+- `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir` and `tasks_path`, since where the reports and the task file are does not affect scores (the tasks do, and the agent model is hashed). The result becomes `ReportMeta.config`.
 - `to_meta(timestamp, skills, scanner_version, checks_version)` builds the `ReportMeta` for a run.
 - `from_dict` re-validates `weights` after loading them.
 
@@ -190,6 +192,7 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `safety_tier` | Tier used |
 | `scanner_version` | External scanner version; empty if it did not run |
 | `checks_version` | Version of our own safety rule set |
+| `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
 
 ### `Report`
 

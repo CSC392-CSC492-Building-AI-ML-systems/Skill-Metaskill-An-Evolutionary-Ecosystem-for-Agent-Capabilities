@@ -54,6 +54,8 @@ class HermesAgent:
     max_iterations: int = 30      # model turns per session
     timeout: float = 600.0        # seconds for a whole session
     hermes: str = "hermes"        # the Hermes launcher
+    # The models sessions actually ran on, as Hermes resolved them (for the report header).
+    models_used: set[str] = field(default_factory=set, init=False)
     _argv: list[str] | None = field(default=None, init=False, repr=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
@@ -74,7 +76,10 @@ class HermesAgent:
                 raise HermesAgentUnavailable(
                     f"the Hermes session process exited {code} without a result: "
                     f"{clean(stderr[-_STDERR_TAIL:], _STDERR_TAIL)}")
-            return _agent_run(_read_result(result_path))
+            result = _read_result(result_path)
+            if isinstance(result.get("model"), str) and result["model"]:
+                self.models_used.add(result["model"])
+            return _agent_run(result)
 
     def check(self, workspace: Workspace) -> dict[str, Any]:
         """Without a model: set Hermes up for `workspace` and drive its real terminal and

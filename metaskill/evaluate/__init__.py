@@ -6,8 +6,12 @@ tool. Each call scores its skills fresh, ranks them and writes one report folder
 counts, never quotes or finding text, which stay in the reports.
 
 A dimension whose module is not built yet is `skipped`, with a score of None, so its
-skill is not ranked (evaluate.md 5.2). No built dimension runs tasks yet, so nothing here
-needs the sandbox and `lift` is None.
+skill is not ranked (evaluate.md 5.2).
+
+With a task file (tasks_path), each skill's tasks run once in the sandbox with a Hermes
+agent (runner.py, hermes_agent.py), and every task-based dimension scores those same runs
+(score_runs). Without one, nothing runs: no model is called, Docker is not asked for, and
+the task-based dimensions are skipped. `lift` is left to Quality, which defines it.
 
 The plugin imports judge.py through this package when it registers, so whatever is
 imported at the top here has to load with it. `safety` is imported where it is used: a
@@ -37,7 +41,8 @@ from .models import (
 # Under another name: `rank` here would hide the rank module.
 from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
-from .runner import report_dir, timestamp
+from .runner import RunnerResult, report_dir, run_tasks, timestamp
+from .tasks import TaskError, load_tasks
 
 # The module that scores each dimension (evaluate.md section 6), once it exists. Each has
 # score(skill, config, llm=...) -> DimensionScore, so adding one needs no change here.
@@ -49,27 +54,35 @@ SCORERS = {
     Dimension.EFFICIENCY: "efficiency",
     Dimension.SAFETY: "safety",
 }
+# Dimensions scored from task runs. Their modules have score_runs(skill, config, runs) ->
+# DimensionScore, given the skill's RunnerResult; the others have score() above.
+TASK_DIMENSIONS = frozenset({Dimension.QUALITY, Dimension.ROBUSTNESS, Dimension.EFFICIENCY})
 
 
 def evaluate_skill(skill_path: str | Path, *, config_path: str | Path | None = None,
-                   output_path: str | Path | None = None, ctx: Any = None) -> dict[str, Any]:
-    """Score one skill, a folder or its SKILL.md, and write its report."""
-    return _evaluate([skill_path], config_path, output_path, ctx)
+                   output_path: str | Path | None = None, tasks_path: str | Path | None = None,
+                   ctx: Any = None) -> dict[str, Any]:
+    """Score one skill, a folder or its SKILL.md, and write its report. With tasks_path,
+    its tasks run first (real model calls)."""
+    return _evaluate([skill_path], config_path, output_path, tasks_path, ctx)
 
 
 def rank_skills(skill_paths: list[str | Path], *, config_path: str | Path | None = None,
-                output_path: str | Path | None = None, ctx: Any = None) -> dict[str, Any]:
-    """Score skills in one run, rank them and write their report. A skill that cannot be
-    loaded is listed in `warnings`; the others go on."""
-    return _evaluate(skill_paths, config_path, output_path, ctx)
+                output_path: str | Path | None = None, tasks_path: str | Path | None = None,
+                ctx: Any = None) -> dict[str, Any]:
+    """Score skills in one run, rank them and write their report. With tasks_path, every
+    skill runs the same tasks. A skill that cannot be loaded is listed in `warnings`; the
+    others go on."""
+    return _evaluate(skill_paths, config_path, output_path, tasks_path, ctx)
 
 
 def _evaluate(paths: list[str | Path], config_path: str | Path | None,
-              output_path: str | Path | None, ctx: Any) -> dict[str, Any]:
+              output_path: str | Path | None, tasks_path: str | Path | None,
+              ctx: Any) -> dict[str, Any]:
     from . import safety
 
     try:
-        config = _config(config_path, output_path)
+        config = _config(config_path, output_path, tasks_path)
     except (OSError, ValueError, TypeError, AttributeError):
         # Not the exception's message: it may echo the file (tools.py).
         return {"status": "error", "error": "config_path is not a valid evaluation config"}
@@ -77,33 +90,70 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     session_cwd = getattr(ctx, "session_cwd", None)
     if callable(session_cwd):
         config.output_dir = Path(session_cwd()) / config.output_dir
+        if config.tasks_path is not None:
+            config.tasks_path = Path(session_cwd()) / config.tasks_path
 
-    # Only what safety needs: no built dimension runs tasks, so Docker is not asked for.
-    # Once one does, this is dependencies.missing_dependencies(), and evaluate calls
-    # require_dependencies() before it starts (dependencies.md).
-    missing = safety.missing_dependencies()
+    tasks, agent, sandbox = None, None, None
+    if config.tasks_path is None:
+        # Nothing runs, so only what safety needs; Docker is not asked for.
+        missing = safety.missing_dependencies()
+    else:
+        try:
+            tasks = load_tasks(config.tasks_path)
+        except TaskError as e:  # names the file and the task: the user's own, not a skill's
+            return {"status": "error",
+                    "error": clean(f"tasks_path is not a usable task file: {e}", MAX_REASON_CHARS)}
+        from . import dependencies
+
+        sandbox = _make_sandbox(config)
+        missing = dependencies.missing_dependencies(sandbox)
+        if any(d.required for d in missing):  # dependencies.md: nothing starts without them
+            return {"status": "error",
+                    "error": "running the tasks needs what `dependencies` lists; nothing was run",
+                    "dependencies": [asdict(d) for d in missing]}
+        agent = _make_agent(config)
+
+    # With tasks, before scoring: the runs write their logs into this call's folder.
+    created = not config.output_dir.exists()
+    run_dir, started = _new_run_dir(config) if tasks is not None else (None, "")
     llm = getattr(ctx, "llm", None)
     results: list[SkillResult] = []
     warnings: list[str] = []
+    sessions = run_errors = 0
     for path in paths:
         try:
-            results.append(_result(Skill.load(_folder(path)), config, llm))
+            result, errors = _result(Skill.load(_folder(path)), config, llm, tasks,
+                                     agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx)
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))
+            continue
+        results.append(result)
+        sessions += len(result.tests)
+        run_errors += len(errors)
+        if errors:  # infrastructure, not the skill: the runs are left out, and it says so
+            # The kind only: the message can hold this machine's paths (a stderr tail),
+            # which stay in the report (the task-based dimensions' detail).
+            warnings.append(clean(f"{result.name}: {len(errors)} task run(s) could not be made "
+                                  f"({_error_kind(errors[0])}); the report has the details",
+                                  MAX_REASON_CHARS))
     if not results:
+        _remove_if_empty(run_dir, config.output_dir if created else None)
         return {"status": "error", "error": "no skill could be evaluated",
                 "warnings": warnings}
 
+    if run_dir is None:
+        run_dir, started = _new_run_dir(config)
     ranking = rank_results(results, config)
-    run_dir, started = _new_run_dir(config)
     versions = safety.versions()
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
     # No judge has run: to_meta gives the model asked for, and this field says which
     # models judged (models.md).
     meta.judge_model = ""
+    if agent is not None:  # the model(s) the sessions actually ran on
+        meta.agent_model = ", ".join(sorted(getattr(agent, "models_used", ())))
     artifacts = _write(Report(meta, [e.result for e in ranking.entries]), ranking, run_dir)
-    return {
+    response = {
         "artifacts": artifacts,
         "table": table(ranking),
         "counts": {"skills": len(results), "ranked": len(ranking.ranked),
@@ -112,17 +162,53 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
         "partial": _partial(ranking),
         "dependencies": [asdict(d) for d in missing],
     }
+    if tasks is not None:
+        response["task_runs"] = {"tasks": len(tasks), "sessions": sessions, "errors": run_errors}
+    return response
 
 
-def _config(config_path: str | Path | None,
-            output_path: str | Path | None) -> EvaluationConfig:
+def _config(config_path: str | Path | None, output_path: str | Path | None,
+            tasks_path: str | Path | None = None) -> EvaluationConfig:
     config = EvaluationConfig()
     if config_path:
         data = json.loads(Path(config_path).read_text(encoding="utf-8-sig"))
         config = EvaluationConfig.from_dict(data)
     if output_path:
         config.output_dir = Path(output_path)
+    if tasks_path:
+        config.tasks_path = Path(tasks_path)
     return config
+
+
+def _error_kind(error: str) -> str:
+    """The exception type in a runner error, `<task> <variant> r<n>: <Type>: <message>`."""
+    parts = error.split(": ", 2)
+    return parts[1] if len(parts) == 3 and parts[1].isidentifier() else "see the report"
+
+
+def _remove_if_empty(*folders: Path | None) -> None:
+    """Remove folders this call made that nothing was written to, innermost first; a
+    folder holding run logs stays."""
+    for folder in folders:
+        if folder is not None:
+            try:
+                folder.rmdir()
+            except OSError:
+                pass
+
+
+def _make_sandbox(config: EvaluationConfig) -> Any:
+    """The sandbox the task runs use; replaced in tests."""
+    from .sandbox import DockerSandbox
+
+    return DockerSandbox(disk=config.sandbox_disk)
+
+
+def _make_agent(config: EvaluationConfig) -> Any:
+    """The agent the task runs use: a Hermes session (hermes_agent.py); replaced in tests."""
+    from .hermes_agent import HermesAgent
+
+    return HermesAgent(model=config.agent_model or None, provider=config.agent_provider or None)
 
 
 def _folder(path: str | Path) -> Path:
@@ -131,32 +217,52 @@ def _folder(path: str | Path) -> Path:
     return path.parent if path.name.lower() == "skill.md" else path
 
 
-def _result(skill: Skill, config: EvaluationConfig, llm: Any) -> SkillResult:
+def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None = None, *,
+            agent: Any = None, sandbox: Any = None, run_dir: Path | None = None,
+            ctx: Any = None) -> tuple[SkillResult, list[str]]:
+    """The skill's result, and the task runs the runner could not make (cleaned)."""
     from . import safety
 
-    found = {d: _score(d, skill, config, llm) for d in Dimension}
+    runs = None
+    if tasks is not None:
+        try:
+            runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
+                             sandbox=sandbox)
+        except ValueError as e:  # a skill name that cannot be a log folder: no run made
+            runs = RunnerResult(tests=[], errors=[clean(str(e), MAX_REASON_CHARS)])
+    found = {d: _score(d, skill, config, llm, runs) for d in Dimension}
     return SkillResult(
         name=skill.name,
         scores=make_scores(found, config),
-        lift=None,  # no tasks ran
+        lift=None,  # Quality defines it (evaluate.md 4.1); not built yet
         dimensions={d: score.to_status() for d, score in found.items()},
+        tests=runs.tests if runs else [],
         rubric=[r for score in found.values() for r in score.rubric],
         findings=[f for score in found.values() for f in score.findings],
         local_warnings=safety.local_warnings(skill),
-    )
+    ), (runs.errors if runs else [])
 
 
 def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
-           llm: Any) -> DimensionScore:
+           llm: Any, runs: RunnerResult | None = None) -> DimensionScore:
     """The dimension's score from its module. Not built is `skipped`. A module that is
-    there but fails is `error`, as a broken import must not pass for an unbuilt one."""
+    there but fails is `error`, as a broken import must not pass for an unbuilt one. A
+    task-based dimension gets the skill's runs, and is `skipped` when no tasks ran."""
     module = SCORERS[dimension]
     name = f"{__name__}.{module}"
     if importlib.util.find_spec(name) is None:
         return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",
                               detail="not built yet")
     try:
-        return importlib.import_module(name).score(skill, config, llm=llm)
+        # Imported first even when no tasks ran, so a broken module is still an error.
+        scorer = importlib.import_module(name)
+        if dimension in TASK_DIMENSIONS:
+            if runs is None:
+                return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",
+                                      detail=f"{dimension.value} needs task runs; no tasks "
+                                             "were given (tasks_path)")
+            return scorer.score_runs(skill, config, runs)
+        return scorer.score(skill, config, llm=llm)
     except JudgeUnavailable:  # judge.md 3
         return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",
                               detail="no judge model is available")

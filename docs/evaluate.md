@@ -363,7 +363,7 @@ Dependencies:
 - `clarity.py`, `safety/` and the LLM part of `config_cleanliness.py` call `judge.py`, never a model directly.
   - Exception: the safety scanner's LLM analyzer makes its own calls, routed through Hermes's `ctx.llm` by its adapter rather than through `judge.py`. See [evaluate-safety.md](evaluate-safety.md), section 4, and [safety/cisco.md](safety/cisco.md).
 - `judge.py` itself is documented in [evaluate/judge.md](evaluate/judge.md).
-- Each scoring module exposes the same shape (`score(skill, ...) -> DimensionScore` from `models.py`), so `rank.py` treats all six uniformly.
+- Each scoring module exposes the same shape, so `rank.py` treats all six uniformly: `score(skill, config, llm=...) -> DimensionScore`, or, for the task-based dimensions (Quality, Robustness, Efficiency; `TASK_DIMENSIONS` in `__init__.py`), `score_runs(skill, config, runs) -> DimensionScore`, given the skill's `RunnerResult`. Evaluate runs a skill's tasks once and gives every task-based dimension the same runs.
 
 
 ## 7. Tool surface
@@ -375,6 +375,11 @@ Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g.
 | `skill_path` | A skill's folder or its `SKILL.md`. For `rank`, a comma separated list (section 2) |
 | `config_path` | Optional JSON file for `EvaluationConfig.from_dict` |
 | `output_path` | Optional; replaces `EvaluationConfig.output_dir` |
+| `tasks_path` | Optional task file (section 4.3) that every skill of the call runs; replaces `EvaluationConfig.tasks_path`. Giving it is the opt-in to real model calls: without it nothing runs |
+
+The command takes the same as `--config FILE` and `--tasks FILE`, in either order: `/metaskill rank s3-sync, gcp-transfer --tasks evals/file-transfer/tasks.json`.
+
+**Task runs.** With a task file, evaluate loads it once (a file that cannot be used is an error before anything runs), checks Docker with `require_dependencies()` ([evaluate/dependencies.md](evaluate/dependencies.md)), and runs each skill's tasks once through the runner with a Hermes agent ([evaluate/hermes_agent.md](evaluate/hermes_agent.md)), every skill on the same tasks. The task-based dimensions (Quality, Robustness, Efficiency) all score those same runs. The runs' logs go into the call's report folder (section 2), and the report's `tests` hold every run. A run the runner could not make (the sandbox or the agent's setup failed) is left out, never scored as the skill failing: `warnings` gives the count and the error's type, and the report the message (in the task-based dimensions' `detail`), since it can hold local paths. The response adds `task_runs`: the number of tasks, sessions run and runs that could not be made. `ReportMeta.agent_model` records the model the sessions ran on (`agent_model` in the config chooses it; empty is the user's Hermes default).
 
 A relative path, `EvaluationConfig.output_dir` included, means the folder of the user's session (`ctx.session_cwd()`), since the plugin runs in the Hermes gateway, whose own folder is the Hermes install.
 
@@ -382,7 +387,7 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 
 The tool's response goes into the agent's context, so it holds the table with its notes and recommendation, the report paths, counts, warnings, a `partial` notice when a skill is not ranked, and any missing `dependencies`. Quotes, finding text and local paths stay in the reports. A skill that cannot be loaded is listed in `warnings`, and the others go on.
 
-**Current state.** Each dimension's module is listed in `SCORERS` in `__init__.py`. A module that does not exist yet gives a `skipped` dimension with a `null` score; one that exists but fails to import or raises gives `error`. Only Safety is built, so every skill is unranked, no skill is recommended, and `warnings` says the result is partial (section 5.2). No built dimension runs tasks, so `lift` is `null` and Docker is not asked for ([evaluate/dependencies.md](evaluate/dependencies.md)).
+**Current state.** Each dimension's module is listed in `SCORERS` in `__init__.py`. A module that does not exist yet gives a `skipped` dimension with a `null` score; one that exists but fails to import or raises gives `error`. Safety is built, and Efficiency is scored when a task file is given; without one, the task-based dimensions are `skipped` ("no tasks were given") and Docker is not asked for. Quality, Robustness, Clarity and Configuration Cleanliness are not built, so every skill is unranked, no skill is recommended, and `warnings` says the result is partial (section 5.2). `lift` is `null` until Quality, which defines it, is built.
 
 ## 8. Testing
 

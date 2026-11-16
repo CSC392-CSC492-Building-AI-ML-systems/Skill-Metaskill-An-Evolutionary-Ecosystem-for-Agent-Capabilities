@@ -16,7 +16,7 @@ result = run_skill(skill, "tasks.json", HermesAgent(), config=config, run_dir=ru
 | `timeout` | 600 s | A whole session; past it the session and everything it started are stopped |
 | `hermes` | `"hermes"` | The Hermes launcher, used to find Hermes' interpreter |
 
-It is not yet called by `evaluate` itself: wiring the runner into evaluate is a separate step ([evaluate.md](../evaluate.md) 3.5).
+Evaluate uses it for every task run when it is given a task file ([evaluate.md](../evaluate.md) 7), with `agent_model` and `agent_provider` from the config.
 
 ## 1. How a run works
 
@@ -99,7 +99,6 @@ Built and tested against Hermes 0.21.5; the version is recorded in each run's tr
 
 ## 7. Limits and open questions
 
-- **Not wired into `evaluate` yet.** `evaluate_skill` does not run tasks; that is the next step, together with where a skill's tasks come from.
 - **The tool-search bridge.** Hermes may replace deferrable tools with `tool_search`/`tool_describe`/`tool_call`. It only searches the enabled tools (here `process_manage`, part of the terminal toolset), so it adds nothing outside `terminal` and `file`, but the model sees those three names.
 - **The user's own hooks and plugins** load in the child as in any Hermes session, and run on this machine. They are the user's configuration, as trusted as their Hermes; the skill's commands never reach them.
 - **Start-up cost.** Each run starts a Hermes process, about one to two seconds.

@@ -4,19 +4,23 @@ How cheaply a skill gets a task done, relative to the baseline (no skill) on the
 task. Pure logic over runner results: it runs no agent and calls no model.
 
 `score_from_runs` holds the scoring method (unweighted geometric mean of per-signal
-speedup ratios, squashed to [0, 1], success-gated). `score` is the dimension entry point
-the evaluator's SCORERS dispatch calls; the runner is not wired into `evaluate` yet (no
-task-based dimension runs tasks -- evaluate.md 3.5), so in the live pipeline it reports
-`skipped`. The logic is built and tested ahead of that integration, as safety's was.
+speedup ratios, squashed to [0, 1], success-gated). `score_runs` is what evaluate calls
+with a skill's task runs (the entry point of every task-based dimension, evaluate.md 6);
+`score` is for a call that ran no tasks, and reports `skipped`.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from statistics import geometric_mean, mean
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
+from .judge import MAX_REASON_CHARS, clean
 from .models import (
-    Dimension, DimensionScore, EvaluationConfig, Metrics, Skill, Status, TestResult)
+    Dimension, DimensionScore, EvaluationConfig, Metrics, Skill, Status, TestResult, Variant)
+
+if TYPE_CHECKING:
+    from .runner import RunnerResult
 
 # The four portable, skill-attributable cost signals (docs/evaluate-efficiency.md 1).
 # Each reads from Metrics. reproducible_input is cache-agnostic. generation is output_tokens:
@@ -33,13 +37,33 @@ _SIGNALS: dict[str, Callable[[Metrics], int | None]] = {
 
 
 def score(skill: Skill, config: EvaluationConfig, llm: Any = None) -> DimensionScore:
-    """Dimension entry point. The runner is not wired into evaluate yet, so there are no
-    task runs to score here; this reports skipped until that integration lands. The real
-    scoring is `score_from_runs`, which it will call."""
+    """Efficiency without task runs: skipped. Evaluate calls score_runs when it ran tasks."""
     return DimensionScore(
         Dimension.EFFICIENCY, None, Status.SKIPPED, reason="Not scored",
-        detail="efficiency needs task runs; the runner is not wired into evaluate yet "
-               "(evaluate.md 3.5)")
+        detail="efficiency needs task runs; no tasks were given (tasks_path)")
+
+
+def score_runs(skill: Skill, config: EvaluationConfig, runs: RunnerResult) -> DimensionScore:
+    """Efficiency from one skill's task runs, as evaluate passes them.
+
+    A run the runner could not make (runs.errors: the sandbox or the agent's setup failed)
+    is left out, as a task without a baseline is, and the detail says how many. If none
+    completed there is nothing to compare, and the dimension is an error, not a zero.
+    """
+    if not runs.tests:
+        if runs.errors:
+            return DimensionScore(
+                Dimension.EFFICIENCY, None, Status.ERROR, reason="Not scored",
+                detail=clean(f"no task run completed ({len(runs.errors)} error(s)); "
+                             f"first: {runs.errors[0]}", MAX_REASON_CHARS))
+        return DimensionScore(Dimension.EFFICIENCY, None, Status.SKIPPED, reason="Not scored",
+                              detail="the task file has no runs to score")
+    result = score_from_runs([t for t in runs.tests if t.variant is Variant.WITH_SKILL],
+                             [t for t in runs.tests if t.variant is Variant.BASELINE])
+    if runs.errors:
+        note = f"{len(runs.errors)} run(s) the runner could not make were left out"
+        result = dataclasses.replace(result, detail=f"{result.detail}; {note}" if result.detail else note)
+    return result
 
 
 def score_from_runs(with_skill: list[TestResult],
