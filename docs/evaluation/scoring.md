@@ -198,6 +198,8 @@ When all runs pass but receive different partial-credit scores, agreement stays 
 
 **[OPEN]** Agreement and score spread overlap, particularly for binary scores. The proposed equal mixture is explicit and testable, but the team may choose a single consistency statistic or different weights.
 
+[evaluate-robustness.md](../evaluate-robustness.md) extends this formula, as implemented in `robustness.py`: two failures agree fully only when they fail the same way, and two further terms compare the runs' outputs (line diff) and methods. The examples above still hold.
+
 ## Clarity
 
 ### Rubric

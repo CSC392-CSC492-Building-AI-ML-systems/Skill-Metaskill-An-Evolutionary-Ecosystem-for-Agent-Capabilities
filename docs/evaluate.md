@@ -229,7 +229,7 @@ Does the skill do its job? Run each test task with the skill and without it. Qua
 
 ### 3.2 Robustness
 
-Does the skill behave consistently? Run each task `n` times (default 3) and measure agreement between runs: the fraction of tasks with the same pass/fail result, plus the spread of the quality scores. A skill that passes 3/3 or fails 3/3 is robust; one that passes 1/3 is not, even if its mean pass rate looks acceptable.
+Does the skill behave consistently? Run each task `n` times (default 3) and measure agreement between runs: the same pass/fail result, the spread of the quality scores, how alike the outputs are (a line diff), and how alike the runs' methods are. A skill that passes 3/3 or fails 3/3 with the same flaw is robust; one that passes 1/3 is not, even if its mean pass rate looks acceptable, and one that passes 3/3 by very different routes is less so. The method is in [evaluate-robustness.md](evaluate-robustness.md).
 
 ### 3.3 Clarity (LLM judge)
 

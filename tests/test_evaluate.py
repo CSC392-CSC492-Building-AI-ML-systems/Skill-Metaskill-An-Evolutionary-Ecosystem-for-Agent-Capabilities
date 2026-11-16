@@ -29,15 +29,18 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-# Implemented dimensions have separate assertions.
+# Built dimensions; Safety, Quality, Config Cleanliness and the ones that need task runs
+# have separate assertions below, and Clarity is skipped without a judge
+# (test_clarity_without_model_access_is_skipped).
+NEEDS_RUNS = (Dimension.EFFICIENCY, Dimension.ROBUSTNESS)
 NOT_BUILT = [
     d for d in Dimension
     if d not in (
         Dimension.SAFETY,
         Dimension.CLARITY,
-        Dimension.EFFICIENCY,
         Dimension.QUALITY,
         Dimension.CONFIG_CLEANLINESS,
+        *NEEDS_RUNS,
     )
 ]
 
@@ -102,10 +105,11 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
         assert getattr(skill.scores, dimension.value) is None
         assert skill.dimensions[dimension].status is Status.SKIPPED
         assert skill.dimensions[dimension].detail == "not built yet"
-    # Efficiency's module is built, but it needs task runs the runner does not feed yet.
-    efficiency = skill.dimensions[Dimension.EFFICIENCY]
-    assert skill.scores.efficiency is None and efficiency.status is Status.SKIPPED
-    assert "task runs" in efficiency.detail
+    # These modules are built, but they need task runs the runner does not feed yet.
+    for dimension in NEEDS_RUNS:
+        assert getattr(skill.scores, dimension.value) is None
+        assert skill.dimensions[dimension].status is Status.SKIPPED
+        assert "task runs" in skill.dimensions[dimension].detail
     quality = skill.dimensions[Dimension.QUALITY]
     assert skill.scores.clarity is None and quality.status is Status.SKIPPED
     assert "task" in (quality.reason + quality.detail).lower()  # evaluate skips it: detail
