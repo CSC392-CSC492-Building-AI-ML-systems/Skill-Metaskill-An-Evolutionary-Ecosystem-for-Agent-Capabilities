@@ -342,6 +342,8 @@ metaskill/evaluate/
 
   runner.py          # Task runner: executes tasks n times, with and without
                      #   the skill; records outcomes, tokens, time, tool calls
+  hermes_agent.py    # The runner's Agent as a real Hermes session, tools in the sandbox
+  hermes_child.py    #   ...its Hermes side, run on Hermes' interpreter (evaluate/hermes_agent.md)
   tasks.py           # Test task loading (human-written, 4.3)
 
   quality.py         # 3.1: pass rate and lift, from runner results
@@ -357,7 +359,7 @@ metaskill/evaluate/
 
 Dependencies:
 
-- `runner.py` is the only module that executes the agent. `quality.py`, `robustness.py` and `efficiency.py` are pure functions over its results, so they share one execution pass and are testable without an LLM.
+- `runner.py` is the only module that executes the agent, through an `Agent`; `hermes_agent.py` is the Hermes one ([evaluate/hermes_agent.md](evaluate/hermes_agent.md)). `quality.py`, `robustness.py` and `efficiency.py` are pure functions over its results, so they share one execution pass and are testable without an LLM.
 - `clarity.py`, `safety/` and the LLM part of `config_cleanliness.py` call `judge.py`, never a model directly.
   - Exception: the safety scanner's LLM analyzer makes its own calls, routed through Hermes's `ctx.llm` by its adapter rather than through `judge.py`. See [evaluate-safety.md](evaluate-safety.md), section 4, and [safety/cisco.md](safety/cisco.md).
 - `judge.py` itself is documented in [evaluate/judge.md](evaluate/judge.md).

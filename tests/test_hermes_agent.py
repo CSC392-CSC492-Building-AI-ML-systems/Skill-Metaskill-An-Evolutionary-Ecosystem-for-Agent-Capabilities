@@ -1,0 +1,334 @@
+"""HermesAgent (docs/evaluate/hermes_agent.md).
+
+The unit tests need neither Hermes nor Docker: a fake child process stands in for the
+Hermes session. The integration tests at the end run the real thing and are opt-in:
+
+    METASKILL_HERMES_IT=1    Hermes + Docker, no model calls (the check and its guards)
+    METASKILL_HERMES_LIVE=1  also one real session per variant on the configured model
+"""
+
+import ast
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from metaskill.evaluate import hermes_agent, hermes_child
+from metaskill.evaluate.hermes_agent import (
+    CHILD, HermesAgent, HermesAgentUnavailable, skill_message)
+from metaskill.evaluate.judge import JudgeError
+from metaskill.evaluate.models import EvaluationConfig, Skill
+from metaskill.evaluate.runner import run_skill
+
+OK_RESULT = {
+    "status": "ok", "final_response": "60", "transcript": "[user] hi",
+    "usage": {"input_tokens": 100, "output_tokens": 20, "reasoning_tokens": 5,
+              "cache_read_tokens": 300, "cache_write_tokens": 0, "api_calls": 4},
+    "tool_calls": 3,
+}
+
+
+def make_skill(tmp_path, files=None):
+    folder = tmp_path / "csv-total"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text("# CSV total\n\nRun scripts/total.sh.\n")
+    for rel, text in (files or {}).items():
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text(text)
+    return Skill(path=folder, name="csv-total", body=(folder / "SKILL.md").read_text(),
+                 files=[Path(rel) for rel in (files or {})])
+
+
+def docker_workspace(name="metaskill-run-1"):
+    return SimpleNamespace(name=name, sandbox=SimpleNamespace(docker="/usr/bin/docker"),
+                           root="/work", skill_dir="/tmp/skill")
+
+
+def fake_agent(tmp_path, script: str, **kwargs):
+    """A HermesAgent whose child is `script` (Python), reading the request path in argv[1]."""
+    child = tmp_path / "fake_child.py"
+    child.write_text("import json, sys, os, time, subprocess\n"
+                     "request = json.load(open(sys.argv[1]))\n"
+                     "out = request['result']\n" + script)
+    agent = HermesAgent(**kwargs)
+    agent._argv = [sys.executable, str(child)]
+    return agent
+
+
+def writes(result: dict, seen: Path | None = None) -> str:
+    """Fake child body: optionally save the request it got to `seen`, then write `result`."""
+    save = f"json.dump(request, open({str(seen)!r}, 'w'))\n" if seen else ""
+    return save + f"json.dump({result!r}, open(out, 'w'))\n"
+
+
+# --- The skill message -------------------------------------------------------------------
+
+
+def test_skill_message_points_at_the_sandbox_copy_not_the_host(tmp_path):
+    skill = make_skill(tmp_path, {"scripts/total.sh": "echo 60\n"})
+    message = skill_message(skill, docker_workspace())
+    assert '"csv-total" skill preloaded' in message
+    assert "Run scripts/total.sh." in message
+    assert "[Skill directory: /tmp/skill]" in message
+    assert "- scripts/total.sh" in message
+    assert str(tmp_path) not in message  # no host path reaches the model
+    assert "skill_view" not in message  # Hermes' tool for it reads the host
+
+
+def test_skill_message_leaves_out_links_the_runner_does_not_copy(tmp_path):
+    skill = make_skill(tmp_path, {"scripts/total.sh": "echo 60\n"})
+    try:
+        os.symlink("/etc/hostname", skill.path / "link.txt")
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+    skill.files.append(Path("link.txt"))
+    message = skill_message(skill)
+    assert "- scripts/total.sh" in message and "link.txt" not in message
+
+
+def test_a_skill_without_bundled_files_has_no_file_list(tmp_path):
+    assert "supporting files" not in skill_message(make_skill(tmp_path))
+
+
+# --- Finding Hermes' runtime ----------------------------------------------------------------
+
+BOOT = ("import os, sys, runpy; sys.path.insert(0, '/h'); import hermes_bootstrap; "
+        "runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)")
+
+
+def runtime_reply(monkeypatch, stdout="", error=None):
+    def fake_run(argv, **kwargs):
+        assert argv[1:] == ["--print-runtime-command"]
+        if error:
+            raise error
+        return SimpleNamespace(stdout=stdout, returncode=0)
+    monkeypatch.setattr(hermes_agent.subprocess, "run", fake_run)
+
+
+def test_runtime_reuses_hermes_bootstrap_and_runs_the_child(monkeypatch):
+    runtime_reply(monkeypatch, json.dumps(["/py3", "-I", "-c", BOOT]))
+    argv = HermesAgent()._runtime_argv()
+    assert argv[:3] == ["/py3", "-I", "-c"]
+    assert argv[3].startswith("import os, sys, runpy; sys.path.insert(0, '/h'); import hermes_bootstrap; ")
+    assert argv[3].endswith(f"runpy.run_path({str(CHILD)!r}, run_name='__main__')")
+    assert "hermes_cli.main" not in argv[3]
+
+
+@pytest.mark.parametrize("stdout", [
+    "not json", json.dumps({"a": 1}), json.dumps(["/py3", "-c"]),
+    json.dumps(["/py3", "-I", "-c", "import x; run_something_else()"]),
+    json.dumps(["/py3", "-I", "-x", BOOT]),
+])
+def test_an_unexpected_runtime_is_unavailable_not_guessed(monkeypatch, stdout):
+    runtime_reply(monkeypatch, stdout)
+    with pytest.raises(HermesAgentUnavailable):
+        HermesAgent()._runtime_argv()
+
+
+def test_missing_hermes_is_unavailable(monkeypatch):
+    runtime_reply(monkeypatch, error=FileNotFoundError("hermes"))
+    with pytest.raises(HermesAgentUnavailable, match="--print-runtime-command"):
+        HermesAgent()._runtime_argv()
+
+
+# --- One run -------------------------------------------------------------------------------
+
+
+def test_a_finished_session_becomes_an_agent_run(tmp_path):
+    run = fake_agent(tmp_path, writes(OK_RESULT)).run("total it", None, docker_workspace())
+    assert run.output == "60" and run.transcript == "[user] hi"
+    assert (run.input_tokens, run.output_tokens, run.reasoning_tokens) == (100, 20, 5)
+    assert (run.cache_read_tokens, run.llm_calls, run.tool_calls) == (300, 4, 3)
+
+
+def test_the_request_names_the_container_and_carries_the_skill_only_with_it(tmp_path):
+    skill = make_skill(tmp_path)
+    seen = tmp_path / "seen.json"
+    agent = fake_agent(tmp_path, writes(OK_RESULT, seen), model="m", max_iterations=7)
+    for variant_skill in (None, skill):
+        agent.run("total it", variant_skill, docker_workspace("box-7"))
+        request = json.loads(seen.read_text())
+        assert request["protocol"] == hermes_child.PROTOCOL == hermes_agent.PROTOCOL
+        assert (request["container"], request["docker"], request["workdir"]) == \
+            ("box-7", "/usr/bin/docker", "/work")
+        assert (request["model"], request["max_iterations"], request["prompt"]) == ("m", 7, "total it")
+        if variant_skill is None:
+            assert request["skill_message"] is None
+        else:
+            assert "[Skill directory: /tmp/skill]" in request["skill_message"]
+
+
+def test_a_setup_error_is_unavailable_and_a_judge_error(tmp_path):
+    agent = fake_agent(tmp_path, writes({"status": "setup_error", "error": "resolves to 'local'"}))
+    with pytest.raises(HermesAgentUnavailable, match="resolves to 'local'") as e:
+        agent.run("p", None, docker_workspace())
+    assert isinstance(e.value, JudgeError)  # the runner records it as an error, not a failed run
+
+
+def test_an_agent_error_is_an_ordinary_failure(tmp_path):
+    agent = fake_agent(tmp_path, writes({"status": "agent_error", "error": "APIError: 500"}))
+    with pytest.raises(RuntimeError, match="APIError") as e:
+        agent.run("p", None, docker_workspace())
+    assert not isinstance(e.value, JudgeError)
+
+
+def test_a_child_that_dies_without_a_result_is_unavailable(tmp_path):
+    agent = fake_agent(tmp_path, "sys.stderr.write('ImportError: no module named run_agent')\nsys.exit(3)\n")
+    with pytest.raises(HermesAgentUnavailable, match="exited 3.*run_agent"):
+        agent.run("p", None, docker_workspace())
+
+
+@pytest.mark.parametrize("body", ["open(out, 'w').write('{not json')\n",
+                                  "json.dump([1, 2], open(out, 'w'))\n"])
+def test_an_unreadable_result_is_unavailable_not_a_failed_run(tmp_path, body):
+    with pytest.raises(HermesAgentUnavailable, match="result"):
+        fake_agent(tmp_path, body).run("p", None, docker_workspace())
+
+
+def test_unmeasured_tool_calls_stay_none(tmp_path):
+    result = dict(OK_RESULT, tool_calls=None)
+    assert fake_agent(tmp_path, writes(result)).run("p", None, docker_workspace()).tool_calls is None
+
+
+def test_a_session_past_its_timeout_is_stopped_with_everything_it_started(tmp_path):
+    pid_file = tmp_path / "grandchild.pid"
+    agent = fake_agent(tmp_path, f"p = subprocess.Popen(['sleep', '60'])\n"
+                                 f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
+                                 "time.sleep(60)\n", timeout=1.5)
+    start = time.monotonic()
+    with pytest.raises(TimeoutError):
+        agent.run("p", None, docker_workspace())
+    assert time.monotonic() - start < 10
+    pid = int(pid_file.read_text())
+    time.sleep(0.2)
+    with pytest.raises(ProcessLookupError):  # the process group was killed, grandchild too
+        os.kill(pid, 0)
+
+
+def test_a_workspace_that_is_not_docker_is_unavailable():
+    with pytest.raises(HermesAgentUnavailable, match="Docker sandbox"):
+        HermesAgent().run("p", None, SimpleNamespace(root="/work", skill_dir="/tmp/skill"))
+
+
+def test_the_runner_records_unavailable_as_an_error_not_a_failed_run(tmp_path):
+    from test_runner import FakeSandbox  # its workspaces are folders, not containers
+
+    tasks = tmp_path / "tasks.json"
+    tasks.write_text(json.dumps({"tasks": [{
+        "task_id": "t", "description": "d", "prompt": "p",
+        "checks": [{"judge": "deterministic", "kind": "exit_code", "target": "true", "expected": "0"}],
+    }]}))
+    result = run_skill(make_skill(tmp_path), tasks, HermesAgent(),
+                       config=EvaluationConfig(runs_per_task=1), run_dir=tmp_path / "run",
+                       sandbox=FakeSandbox())
+    assert result.tests == []
+    assert len(result.errors) == 2 and all("HermesAgentUnavailable" in e for e in result.errors)
+
+
+# --- The child's own helpers (no Hermes needed) ----------------------------------------------
+
+
+def test_child_imports_nothing_but_the_standard_library_at_the_top():
+    # It runs on Hermes' interpreter, where metaskill is not importable, and the tests'
+    # interpreter cannot import Hermes: Hermes is imported inside functions only.
+    tree = ast.parse(CHILD.read_text())
+    top = {(n.module or "").split(".")[0] if isinstance(n, ast.ImportFrom) else a.name.split(".")[0]
+           for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
+           for a in (n.names if isinstance(n, ast.Import) else [n])}
+    assert top <= {"__future__", "json", "os", "sys", "time", "pathlib", "typing"}
+
+
+def test_docker_argv_runs_bash_in_the_runs_container_under_its_own_timeout():
+    argv = hermes_child.docker_argv("docker", "box", "/work", "ls", login=False, timeout=30, stdin=False)
+    assert argv == ["docker", "exec", "--workdir", "/work", "box",
+                    "timeout", "-s", "KILL", "35", "bash", "-c", "ls"]
+    argv = hermes_child.docker_argv("docker", "box", "/work", "ls", login=True, timeout=30, stdin=True)
+    assert argv[:3] == ["docker", "exec", "-i"] and argv[-4:] == ["bash", "-l", "-c", "ls"]
+
+
+def test_tool_calls_are_counted_from_the_models_messages():
+    messages = [{"role": "user", "content": "x"},
+                {"role": "assistant", "tool_calls": [{"function": {"name": "terminal"}}] * 2},
+                {"role": "tool", "content": "ok"},
+                {"role": "assistant", "content": "done", "tool_calls": None}]
+    assert hermes_child.count_tool_calls(messages) == 2
+
+
+def test_the_transcript_shows_calls_and_clips_long_results():
+    messages = [{"role": "user", "content": "total it"},
+                {"role": "assistant", "tool_calls": [
+                    {"function": {"name": "terminal", "arguments": '{"command": "ls"}'}}]},
+                {"role": "tool", "name": "terminal", "content": "y" * 10_000},
+                {"role": "assistant", "content": "60"}]
+    text = hermes_child.transcript(messages, header="Hermes 1")
+    assert text.splitlines()[0] == "Hermes 1"
+    assert '[tool call: terminal] {"command": "ls"}' in text
+    assert "more chars]" in text and len(text) < 3_000
+    assert text.rstrip().endswith("[assistant] 60")
+    huge = [{"role": "tool", "content": "z" * 5_000}] * 200
+    assert len(hermes_child.transcript(huge)) <= hermes_child.MAX_TRANSCRIPT_CHARS + 50
+
+
+def test_a_request_from_another_version_is_refused_before_hermes_is_touched(tmp_path):
+    request = {"protocol": 999, "result": str(tmp_path / "result.json")}
+    (tmp_path / "request.json").write_text(json.dumps(request))
+    assert hermes_child.main(["child", str(tmp_path / "request.json")]) == 0
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["status"] == "setup_error" and "protocol" in result["error"]
+
+
+# --- Integration (opt-in) ------------------------------------------------------------------
+
+needs_hermes = pytest.mark.skipif(not os.environ.get("METASKILL_HERMES_IT")
+                                  and not os.environ.get("METASKILL_HERMES_LIVE"),
+                                  reason="set METASKILL_HERMES_IT=1 (Hermes + Docker)")
+
+
+@pytest.fixture
+def sandbox():
+    from metaskill.evaluate.sandbox import DockerSandbox
+    box = DockerSandbox()
+    problem = box.check()
+    if problem:
+        pytest.skip(f"Docker sandbox unavailable: {problem}")
+    return box
+
+
+@needs_hermes
+def test_hermes_real_tools_reach_the_container_and_nothing_else_can_be_created(sandbox):
+    workspace = sandbox.open([])
+    try:
+        check = HermesAgent().check(workspace)["check"]
+        assert '"/work/check.txt"' in check["write_file"]
+        assert "/work\\nnobody\\nwritten by the file tool" in check["terminal"]
+        assert "from-terminal" in check["read_file"]
+        assert all(v.startswith("refused") for v in check["guards"].values()), check["guards"]
+        assert "from-terminal" in workspace.run_command("cat check2.txt", 30).stdout
+    finally:
+        workspace.close()
+
+
+@pytest.mark.skipif(not os.environ.get("METASKILL_HERMES_LIVE"),
+                    reason="set METASKILL_HERMES_LIVE=1 (real model calls)")
+def test_a_real_session_through_the_runner(tmp_path, sandbox):
+    skill = make_skill(tmp_path, {"scripts/total.sh": "#!/bin/sh\necho 60\n"})
+    (skill.path / "scripts/total.sh").chmod(0o755)
+    (tmp_path / "sales.csv").write_text("item,amount\na,10\nb,20\nc,30\n")
+    tasks = tmp_path / "tasks.json"
+    tasks.write_text(json.dumps({"tasks": [{
+        "task_id": "sum", "description": "d", "fixtures": ["sales.csv"],
+        "prompt": "Write the total of the amount column of sales.csv into total.txt (just the number).",
+        "checks": [{"judge": "deterministic", "kind": "exit_code",
+                    "target": 'test "$(cat total.txt)" = 60', "expected": "0"}],
+    }]}))
+    result = run_skill(skill, tasks, HermesAgent(max_iterations=10),
+                       config=EvaluationConfig(runs_per_task=1), run_dir=tmp_path / "run",
+                       sandbox=sandbox)
+    assert not result.errors
+    assert [t.variant.value for t in result.tests] == ["with_skill", "baseline"]
+    for t in result.tests:
+        assert t.metrics.llm_calls > 0 and t.metrics.tool_calls is not None
