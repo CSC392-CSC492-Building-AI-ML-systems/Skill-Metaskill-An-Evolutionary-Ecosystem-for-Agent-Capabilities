@@ -22,10 +22,14 @@ from .findings import BackendResult, BackendStatus
 from .hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
+# Pinned in plugins/metaskill-cisco/plugin.yaml too; change both together.
 TESTED_VERSION = "2.2.1"
-# Hermes installs what plugin.yaml declares when the plugin is enabled. pip would reach
-# another Python: Hermes' own environment has no pip.
-INSTALL_COMMAND = "hermes plugins disable metaskill; hermes plugins enable metaskill"
+ADDON = "metaskill-cisco"
+# The scanner is the optional metaskill-cisco add-on: installing it makes Hermes install the
+# scanner into its own environment, after the user consents. pip would reach another Python:
+# Hermes' own environment has no pip.
+INSTALL_COMMAND = ("hermes plugins install CSC392-CSC492-Building-AI-ML-systems/"
+                   f"Skill-Metaskill-An-Evolutionary-Ecosystem-for-Agent-Capabilities#plugins/{ADDON}")
 
 # Name the scanner gives its LLM analyzer in analyzers_used and analyzers_failed.
 LLM_ANALYZER = "llm_analyzer"
@@ -76,7 +80,8 @@ class CiscoBackend:
         if not self.available():
             return BackendResult(
                 self.name, BackendStatus.NOT_INSTALLED, tier,
-                detail=(f"Cisco skill-scanner not installed; run `{INSTALL_COMMAND}` in a "
+                detail=(f"Cisco skill-scanner not installed (the optional {ADDON} add-on); "
+                        f"run `{INSTALL_COMMAND}` in a "
                         "terminal, then restart Hermes"))
         try:
             # The scanner parses the frontmatter itself, and its time doubles with each

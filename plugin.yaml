@@ -3,5 +3,5 @@ version: 0.2.0
 description: Generalize, personalize, evaluate, and merge Hermes skills
 provides_tools:
   - metaskill
-python_dependencies:
-  - "cisco-ai-skill-scanner==2.2.1"
+# No python_dependencies: Cisco's skill scanner is the optional metaskill-cisco add-on
+# (plugins/metaskill-cisco), like Laya for generalize. Without it, safety is `partial`.

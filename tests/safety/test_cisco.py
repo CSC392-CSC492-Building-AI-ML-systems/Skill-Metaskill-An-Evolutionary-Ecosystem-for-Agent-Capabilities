@@ -149,8 +149,10 @@ def test_deep_scan_without_llm_analyzer_is_not_reported_as_deep():
 # --- scan() -------------------------------------------------------------------
 
 
-def test_plugin_declares_the_tested_version():
-    manifest = Path(__file__).parents[2] / "plugin.yaml"
+def test_the_cisco_addon_declares_the_tested_version():
+    # The scanner is the optional metaskill-cisco add-on (MET-45), not a dependency of
+    # metaskill itself; tests/test_cisco_addon.py covers the rest of the packaging.
+    manifest = Path(__file__).parents[2] / "plugins" / "metaskill-cisco" / "plugin.yaml"
     assert f'"{PACKAGE}=={TESTED_VERSION}"' in manifest.read_text(encoding="utf-8")
 
 
