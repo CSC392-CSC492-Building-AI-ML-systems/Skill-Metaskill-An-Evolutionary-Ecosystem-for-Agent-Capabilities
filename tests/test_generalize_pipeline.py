@@ -206,6 +206,24 @@ def test_report_has_safe_review_details_and_residuals(tmp_path):
     assert report["residual_findings"][0]["status"] == "residual"
     assert report["residual_findings"][0]["confidence"] == 0.6
     assert report["findings"][0]["action"] == "review"
+    # The review value was left in on purpose, so it is not an unexpected residual.
+    assert report["unexpected_residual_count"] == 0
+    assert response["counts"]["unexpected_residual_findings"] == 0
+    assert all(w.get("reason") != "residual_candidates" for w in response["warnings"])
+
+
+def test_a_residual_that_was_not_left_for_review_is_still_unexpected(tmp_path, monkeypatch):
+    from metaskill.generalize import pipeline
+
+    skill = write_skill(tmp_path / "skill", {"settings.yaml": "project_id: project-42-private\n"})
+    real_replace = pipeline.replace_spans
+    # The output gains a value the source scan never saw, as a broken transform might.
+    monkeypatch.setattr(pipeline, "replace_spans",
+                        lambda text, replacements: real_replace(text, replacements)
+                        + "owner_email: priya.nair@acme-corp.com\n")
+    response = pipeline.generalize_skill(skill, output_path=tmp_path / "result")
+    assert response["counts"]["unexpected_residual_findings"] == 1
+    assert {"reason": "residual_candidates", "count": 1} in response["warnings"]
 
 
 def test_approved_values_that_remain_are_reported_without_values(tmp_path, monkeypatch):

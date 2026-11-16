@@ -275,9 +275,23 @@ def generalize_skill(
             )
             for finding in residual.findings
         ]
-        unexpected_residuals = [
-            finding for finding in residual.findings if finding.action is not Action.KEEP
-        ]
+        # Review findings that were not approved stay in the output on purpose, so a
+        # residual on the same file, line, category and rule is expected, not a miss.
+        # Placeholders never add or remove lines, so line numbers still line up.
+        left_in = Counter(
+            (f.file, f.line, f.category, f.rule)
+            for f in result.findings
+            if f.action is Action.REVIEW and f.id not in placeholders
+        )
+        unexpected_residuals = []
+        for finding in residual.findings:
+            key = (finding.file, finding.line, finding.category, finding.rule)
+            if finding.action is Action.KEEP:
+                continue
+            if left_in[key]:
+                left_in[key] -= 1
+                continue
+            unexpected_residuals.append(finding)
 
         unresolved_rows = []
         for finding in result.findings:
