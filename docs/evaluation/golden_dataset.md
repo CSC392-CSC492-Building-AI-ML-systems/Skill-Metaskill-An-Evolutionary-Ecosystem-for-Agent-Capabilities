@@ -82,7 +82,7 @@ Edge-case handling remains part of the task's expected behaviour; an edge-case f
 
 Clarity uses an LLM judge against the seven anchored rubric criteria in [evaluate-clarity.md](../evaluate-clarity.md): purpose and trigger, conciseness, accessible language, readability, structure and flow, verifiability, and failure handling.
 
-A temporary draft set of ten clear skills and ten unclear variants is described in evaluate-clarity.md, section 4, until the dataset's location below is agreed.
+A draft pilot of ten clear skills and ten unclear variants lives in `metaskill/evaluate/golden/synthetic/clarity/` and is described in evaluate-clarity.md, section 4.
 
 Golden annotations identify the relevant text, expected properties, and rationale for an anchored judgment. Each reported rating must quote supporting skill text. Exact rubric anchors still need agreement; unexplained numeric labels are insufficient.
 

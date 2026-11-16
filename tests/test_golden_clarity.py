@@ -1,5 +1,6 @@
-"""Structural checks on the draft Clarity golden dataset (tests/fixtures/golden/clarity),
-and the live-report comparison in golden_clarity.py.
+"""Structural checks on the draft Clarity golden dataset
+(metaskill/evaluate/golden/synthetic/clarity), and the live-report comparison in
+metaskill/evaluate/golden/clarity.py.
 
 These do not judge clarity. They keep the annotations honest: every case points at a real
 skill, uses the rubric's criteria, and quotes text that actually appears in that skill.
@@ -7,8 +8,9 @@ skill, uses the rubric's criteria, and quotes text that actually appears in that
 
 import pytest
 
-from golden_clarity import BY_ID, CASES, DATASET, HIGH, LOW, ROOT, compare, rank_command
 from metaskill.evaluate.clarity import CRITERIA, RUBRIC_VERSION
+from metaskill.evaluate.golden.clarity import (
+    BY_ID, CASES, DATASET, HIGH, LOW, ROOT, compare, rank_command)
 
 NAMES = [c.name for c in CRITERIA]
 

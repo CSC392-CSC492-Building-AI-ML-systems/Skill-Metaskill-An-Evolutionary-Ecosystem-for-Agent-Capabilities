@@ -1,11 +1,11 @@
-"""The draft Clarity golden dataset (tests/fixtures/golden/clarity), as shared test data.
+"""Clarity golden pilot (synthetic/clarity): loader and evaluator-owned report comparison.
 
-Temporary home until the golden dataset's location is agreed (docs/evaluate-clarity.md 4).
+Never calls a model. Annotations stay here, outside the skill folders the judge reads.
 
-Live check, after a real run in the Hermes CLI:
+Live check, from the repository root after a real run in the Hermes CLI:
 
-    py tests/golden_clarity.py --command          # prints the /metaskill rank command
-    py tests/golden_clarity.py <ranked-evaluation.json>
+    py -m metaskill.evaluate.golden.clarity --command   # prints the /metaskill rank command
+    py -m metaskill.evaluate.golden.clarity <ranked-evaluation.json>
 
 The second form compares each clear skill with its unclear variant in that report.
 """
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).parent / "fixtures" / "golden" / "clarity"
+ROOT = Path(__file__).parent / "synthetic" / "clarity"
 DATASET = json.loads((ROOT / "cases.json").read_text(encoding="utf-8"))
 CASES: list[dict[str, Any]] = DATASET["cases"]
 BY_ID = {c["case_id"]: c for c in CASES}

@@ -63,15 +63,17 @@ The plugin's `evaluate` and `rank` commands (`metaskill/evaluate/__init__.py`) a
 
 Clarity makes one judge call per skill (plus `judge_retries` on a malformed reply), with the skill's text as input: roughly the skill's size in tokens plus about 2,000 for the rubric.
 
-## 4. Golden dataset (temporary)
+## 4. Golden dataset (pilot)
 
-**Location is temporary.** The set lives in `tests/fixtures/golden/clarity/` until the team agrees where the golden dataset is stored ([golden_dataset.md](evaluation/golden_dataset.md), proposed repository structure). It is unreviewed and for analysis only.
+The set follows the golden pilot layout used by the other dimensions ([golden_dataset.md](evaluation/golden_dataset.md), proposed repository structure): a synthetic case family under `metaskill/evaluate/golden/synthetic/`, with an evaluator-owned helper beside it. It is unreviewed and for analysis only.
 
 ```text
-tests/fixtures/golden/clarity/
-  cases.json          one case per skill: expected properties, verbatim quotes, rationale
-  skills/<name>/      the skill (SKILL.md with Hermes front matter)
-tests/golden_clarity.py       loads the set; compares a live report against it
+metaskill/evaluate/golden/
+  clarity.py                  loads the set; compares a live report against it
+  synthetic/clarity/
+    README.md                 status, boundaries, review and live-check procedure
+    cases.json                one case per skill: expected properties, verbatim quotes, rationale
+    skills/<name>/            the skill (SKILL.md with Hermes front matter)
 tests/test_golden_clarity.py  structural checks
 ```
 
@@ -110,9 +112,9 @@ The `image-resize-web` and `ab-test-readout` variants keep their twin's content 
 
 Real judge runs stay out of CI (evaluate.md 6). To run one:
 
-1. From the repository root, print the command: `py tests/golden_clarity.py --command`. It is `/metaskill rank tests/fixtures/golden/clarity/skills/csv-dedupe, ...` with all twenty skills.
+1. From the repository root, print the command: `py -m metaskill.evaluate.golden.clarity --command`. It is `/metaskill rank metaskill/evaluate/golden/synthetic/clarity/skills/csv-dedupe, ...` with all twenty skills.
 2. Run it in Hermes. The report folder is written under `evaluation-reports/`.
-3. Compare: `py tests/golden_clarity.py evaluation-reports/<run>/ranked-evaluation.json`.
+3. Compare: `py -m metaskill.evaluate.golden.clarity evaluation-reports/<run>/ranked-evaluation.json`.
 
 The comparison prints one row per pair and exits non-zero unless, for every pair, the clear skill has the higher Clarity score **and** a strictly higher rating on every targeted criterion (an unrated criterion counts as 0). This is the "reference outranks its vague variant" check of golden_dataset.md, *Evaluating the Evaluator*. Clear-skill scores are not given a threshold yet.
 
@@ -120,6 +122,6 @@ The comparison prints one row per pair and exits non-zero unless, for every pair
 
 1. Equal weights across the seven criteria (section 1).
 2. Unrated criterion as 0, and ranking of a `partial` Clarity score (section 2).
-3. Permanent location and schema of the golden set (section 4); depends on where the rest of the golden dataset is stored.
+3. Final golden schema (section 4); the set uses the shared pilot layout, but the manifest schema is still draft.
 4. Whether to rate more than once and take the median, once live variability on the golden set is measured.
 5. A threshold for clear skills (for example, every clear skill at or above 0.75), once a few live runs show the spread.
