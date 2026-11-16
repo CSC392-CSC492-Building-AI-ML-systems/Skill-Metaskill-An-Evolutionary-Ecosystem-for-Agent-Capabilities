@@ -697,7 +697,7 @@ def test_real_confirmation_steps_still_count(tmp_path, body):
 
 
 def test_checks_version_was_bumped():
-    assert checks.CHECKS_VERSION == "4"
+    assert checks.CHECKS_VERSION == "5"
 
 
 
@@ -775,3 +775,195 @@ def test_python_variable_assigned_a_home_expression(tmp_path):
     code = 'docs = os.path.expanduser("~/Documents")\nshutil.rmtree(docs)\n'
     [f] = scan(make(tmp_path, {"scripts/clean.py": code})).findings
     assert f.severity is CRITICAL
+
+
+# --- Scan cost (MET-42) -------------------------------------------------------------
+# A hostile skill must not be able to stall the scan, and the bounds that stop it must
+# fail closed: past them, matches are reported, never skipped.
+
+import random
+import re
+import time
+
+from metaskill.evaluate.safety.checks import (
+    _PRINT, _PS_ASSIGN, _PY_ASSIGN, _SHELL_ASSIGN, _CMD_ASSIGN, _names_secret, _SecretView,
+    _sentence_span, _Unit)
+
+
+def _old_sentence_span(unit, line_index, col):
+    """The version before MET-42, which rescanned the unit for every match."""
+    texts = [text for _, text in unit.lines]
+    joined = " ".join(texts)
+    position = sum(len(t) + 1 for t in texts[:line_index]) + col
+    masked = re.sub(r"`[^`]*`", lambda m: "x" * len(m.group(0)), joined)
+    masked = re.sub(r"\b(?:e\.g|i\.e|etc|vs|cf)\.", lambda m: "x" * len(m.group(0)), masked, flags=re.I)
+    starts = [m.end() for m in re.finditer(r"[.!?](?=\s)", masked[:position])]
+    end = re.compile(r"[.!?](?=\s|$)").search(masked, position)
+    return joined, starts[-1] if starts else 0, position, end.end() if end else len(joined)
+
+
+def test_sentence_lookup_matches_the_rescanning_version():
+    # Precomputed boundaries must give exactly the old spans, for every column.
+    pieces = ["a", "b ", ". ", "! ", "? ", ".", "`x. y`", "e.g. ", "etc. ", " ", "\t", "`", "?"]
+    rng = random.Random(42)
+    for _ in range(3000):
+        lines = ["".join(rng.choice(pieces) for _ in range(rng.randint(0, 8)))
+                 for _ in range(rng.randint(1, 3))]
+        unit = _Unit("SKILL.md", "prose", list(enumerate(lines, 1)))
+        for i, line in enumerate(lines):
+            for col in range(len(line) + 1):
+                assert _sentence_span(unit, i, col) == _old_sentence_span(unit, i, col), lines
+
+
+def test_a_flood_of_warnings_cannot_hide_a_later_instruction(tmp_path):
+    # Warned commands past MAX_CLEARED_PER_UNIT in one paragraph are reported, so the
+    # real instruction at the end is still found.
+    n = checks.MAX_CLEARED_PER_UNIT + 50
+    body = "Never run `rm -rf build/`.\n" * n + "Run `rm -rf ~/Documents` now.\n"
+    result = scan(make(tmp_path, {"SKILL.md": body}))
+    found = {f.location for f in result.findings if f.rule == "recursive-delete"}
+    assert f"SKILL.md:{n + 1}" in found
+    assert "not checked for warnings" in result.detail
+
+
+def test_warnings_within_the_bound_are_still_skipped(tmp_path):
+    body = "Never run `rm -rf build/`.\n" * checks.MAX_CLEARED_PER_UNIT
+    assert not scan(make(tmp_path, {"SKILL.md": body})).findings
+
+
+def test_prose_matches_past_the_skills_clearing_budget_are_reported(tmp_path, monkeypatch):
+    # Paragraphs each within the per-paragraph bounds can still add up: past the skill's
+    # clearing budget, warned commands are reported rather than weighed.
+    monkeypatch.setattr(checks, "MAX_CLEARING_CHARS", 100)
+    body = "".join(f"Never run `rm -rf build{i}/`.\n\n" for i in range(10))
+    result = scan(make(tmp_path, {"SKILL.md": body}))
+    found = sorted(f.location for f in result.findings if f.rule == "recursive-delete")
+    assert found and "SKILL.md:1" not in found  # the first ones were still weighed and skipped
+    assert "not checked for warnings" in result.detail
+    assert not any(f.rule == "scan-limit" for f in result.findings)
+
+
+def test_a_match_in_an_overlong_sentence_is_reported(tmp_path):
+    body = "Never run `rm -rf build/` " + "and so on " * (checks.MAX_CLEARED_SENTENCE // 10) + ".\n"
+    rules = {f.rule for f in scan(make(tmp_path, {"SKILL.md": body})).findings}
+    assert "recursive-delete" in rules
+
+
+def test_a_line_with_too_many_commands_is_a_critical_scan_limit(tmp_path):
+    body = "# Skill\n" + "curl " * (checks.MAX_COMMANDS_PER_LINE + 1) + "\n"
+    result = scan(make(tmp_path, {"SKILL.md": body}))
+    limit = [f for f in result.findings if f.rule == "scan-limit"]
+    assert [(f.location, f.severity) for f in limit] == [("SKILL.md:2", CRITICAL)]
+    assert len(limit[0].quote) < 100  # the line itself is never quoted
+
+
+@pytest.mark.parametrize("before", ["", "```bash\nls\n"], ids=["opening", "inside-a-block"])
+def test_a_limited_fence_line_keeps_the_code_block(tmp_path, before):
+    # A limited line that starts with a fence must still open a block where it did, and
+    # must not close one it sits inside: either way the next line would become prose,
+    # where "never run" clears the command.
+    body = (before + "``` " + "curl " * (checks.MAX_COMMANDS_PER_LINE + 1) + "\n"
+            "Never run rm -rf ~/Documents here.\n```\n")
+    line = before.count("\n") + 2
+    found = {(f.rule, f.location) for f in scan(make(tmp_path, {"SKILL.md": body})).findings}
+    assert ("recursive-delete", f"SKILL.md:{line}") in found
+    assert ("scan-limit", f"SKILL.md:{line - 1}") in found
+
+
+@pytest.mark.parametrize("command", [".git push ", ".curl ", ".dd ", "-wget ", "more ", "x.echo "])
+def test_every_read_ahead_start_counts_toward_the_line_limit(tmp_path, command):
+    # Matchers that only exclude a word character before a command still read ahead
+    # from `.git push`; the limit must count those starts too, or the scan is quadratic.
+    body = "```\n" + command * (checks.MAX_COMMANDS_PER_LINE + 1) + "\n```\n"
+    assert any(f.rule == "scan-limit" for f in scan(make(tmp_path, {"SKILL.md": body})).findings)
+
+
+def test_a_minified_script_with_many_print_calls_is_not_limited(tmp_path):
+    # One long line with dozens of console.log( calls is ordinary minified code: no
+    # scan-limit, and still checked (a secret in one of the calls is found).
+    chunk = "function f(a,b){var c=a+b;return c.map(function(d){return d*2})};"
+    line = ("console.log(c);" + chunk * 200) * 60 + "console.log(process.env.API_KEY);"
+    result = scan(make(tmp_path, {"app.min.js": line + "\n"}))
+    assert {f.rule for f in result.findings} == {"print-secret"}
+
+
+def test_print_calls_read_once_per_line_match_reading_each_call():
+    pieces = ["print(", "console.log(", " ", "'", '"', "\\", "{", "}", "API_KEY", "name",
+              'os.environ["TOKEN"]', "getenv('PASSWORD')", "process.env.SECRET", ",", ")", "f'"]
+    rng = random.Random(3)
+    for _ in range(20000):
+        line = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 12)))
+        calls = list(_PRINT.finditer(line))
+        if not calls:
+            continue
+        view = _SecretView(line, calls[0].end())
+        for m in calls:
+            fast = view.secret_from(m.end())
+            if fast is not None:  # None: the caller reads that call on its own
+                assert fast == _names_secret(line[m.end():]), line
+
+
+_OLD_ASSIGN = {  # before MET-42
+    "shell": (re.compile(r"^\s*(?:export\s+|local\s+|readonly\s+|declare\s+)?([A-Za-z_]\w*)=(\S*)", re.M), _SHELL_ASSIGN, False),
+    "cmd": (re.compile(r"^\s*set\s+\"?([A-Za-z_]\w*)=([^\"&|\r\n]*)\"?\s*$", re.M | re.I), _CMD_ASSIGN, False),
+    "python": (re.compile(r"^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*?)\s*(?:#.*)?$", re.M), _PY_ASSIGN, True),
+    "powershell": (re.compile(r"^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*(?:#.*)?$", re.M), _PS_ASSIGN, True),
+}
+
+
+@pytest.mark.parametrize("kind", list(_OLD_ASSIGN))
+def test_assignment_patterns_find_the_same_values_as_before(kind):
+    old, new, comments = _OLD_ASSIGN[kind]
+    pieces = ["x", "y", " ", "  ", "\t", "=", "==", "#", "a", "'b'", '"c#d"', "\n", "\n\n", ";",
+              "\r", "$", "set ", "export ", "env:", "&", "|", "\x0b", "1"]
+    rng = random.Random(7)
+    for _ in range(20000):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 14)))
+        values = []
+        for m in new.finditer(text):
+            value = m.group(2)
+            if comments:
+                cut = value.find("#")
+                value = (value if cut == -1 else value[:cut]).rstrip()
+            values.append((m.group(1), value))
+        assert values == [(m.group(1), m.group(2)) for m in old.finditer(text)], repr(text)
+
+
+def test_running_out_of_parse_budget_is_a_finding_not_an_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(checks, "MAX_PARSED_CHARS", 50)
+    body = "```\n" + "".join(f"rm -rf build{i}/ --verbose --one-file-system\n" for i in range(5)) + "```\n"
+    result = scan(make(tmp_path, {"SKILL.md": body}))
+    assert result.status is BackendStatus.OK
+    assert any(f.rule == "scan-limit" and f.severity is CRITICAL for f in result.findings)
+
+
+def test_python_assignment_values_drop_comments_and_trailing_space(tmp_path):
+    script = "import shutil\nTARGET = '/etc'   # system folder\nshutil.rmtree(TARGET)\n"
+    found = {f.rule: f.severity for f in scan(make(tmp_path, {"clean.py": script})).findings}
+    assert found["recursive-delete"] is CRITICAL
+
+
+@pytest.mark.parametrize("name, body", [
+    ("issue reproducer", "never run " + "`rm -rf x`, " * 20000 + "done.\n"),
+    ("many sentences", "Never run `rm -rf x`. " * 20000 + "\n"),
+    ("many lines", "never run `rm -rf x`\n" * 20000),
+    ("no separators", "rm -rf x " * 20000 + "\n"),
+    ("regex runs", "```\n" + "git push curl wget dd " * 5000 + "\n```\n"),
+    ("dot-prefixed regex runs", "```\n" + ".git push .curl .dd " * 7000 + "\n```\n"),
+    ("print calls that force re-reading", "```\n" + "{print(} " * 20000 + "\n```\n"),
+    ("rm with separators", "```\n" + "rm -rf x; " * 20000 + "\n```\n"),
+    ("indented print calls", "```\n    " + "print(API_KEY) " * 60000 + "\n```\n"),
+    ("paragraphs at the clearing bounds", ("Do not use " + "word " * 1400
+                                           + "`rm -rf x` or " * 199 + "`rm -rf x`.\n\n") * 60),
+    ("pip installs", "```\n" + "pip install " * 20000 + "\n```\n"),
+    ("print calls", "```\n" + "print( " * 20000 + "\n```\n"),
+    ("just under the line limit", ("rm -rf x " * (199) + "\n") * 100),
+    ("space run in an assignment", "```\nx = a" + " " * 200_000 + "b\n```\n"),
+    ("blank lines", "```\n" + "\n" * 200_000 + "```\n"),
+])
+def test_hostile_input_cannot_stall_the_scan(tmp_path, name, body):
+    # Each of these took minutes to hours before MET-42 (quadratic in the input).
+    start = time.monotonic()
+    result = scan(make(tmp_path, {"SKILL.md": body}))
+    assert result.status is BackendStatus.OK
+    assert time.monotonic() - start < 10, name
