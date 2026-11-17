@@ -554,6 +554,15 @@ def test_redact_removes_credentials_and_keeps_line_numbers():
     assert redacted.count(REDACTED) == 2
 
 
+def test_redact_merges_overlapping_spans_so_no_tail_shows():
+    text = "a SECRETVALUE-TAIL b\nc"
+    short = Finding("s", "f.txt", 1, 3, 2, 13, "********", Category.CREDENTIAL, "r", 1.0,
+                    Action.REPLACE)
+    long = Finding("l", "f.txt", 1, 8, 7, 18, "********", Category.CREDENTIAL, "r", 1.0,
+                   Action.REPLACE)
+    assert redact(text, [short, long]) == f"a {REDACTED} b\nc"
+
+
 # --- Phone numbers --------------------------------------------------------------
 
 @pytest.mark.parametrize("text, expected", [
