@@ -18,6 +18,7 @@ from metaskill.evaluate.runner import AgentRun
 from metaskill.evaluate.sandbox import Problem
 from metaskill.evaluate.sandbox import RunFailed
 from test_runner import FakeAgent, FakeLlm, FakeSandbox, writes_report_with_skill
+from test_evaluate import scorers  # noqa: F401  (fixture: puts a stand-in scorer module in place)
 
 RUNS = 2  # runs_per_task in these tests
 
@@ -300,3 +301,38 @@ def test_without_llm_checks_no_judge_is_recorded(tmp_path, harness):
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
                             output_path=tmp_path / "out", tasks_path=harness.tasks)
     assert report(result).meta.judge_model == "" and report(result).meta.judge_usage == {}
+
+
+# --- Every judge reaches the report header (MET-51) ---------------------------------------
+
+
+def test_a_dimensions_judge_is_merged_with_the_task_judge(tmp_path, harness, monkeypatch, scorers):
+    # A stand-in LLM-judged dimension (as clarity will be) reports its judge on its score.
+    scorers("clarity", (
+        "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+        "def score(skill, config, llm=None):\n"
+        "    return DimensionScore(Dimension.CLARITY, 0.8, judge_model='openai/rubric-model',\n"
+        "                          judge_usage={'input_tokens': 500, 'output_tokens': 50, 'calls': 1})\n"))
+    harness.tasks.write_text(json.dumps({"tasks": [{
+        "task_id": "report", "description": "d", "prompt": "write the report",
+        "checks": [{"judge": "llm", "checklist": ["says it wrote the report"]}]}]}))
+    reply = {"items": [{"item": 1, "met": True, "reason": "", "quote": "wrote the report to report.txt"}]}
+    harness.agent_act = writes_report_with_skill
+    harness.config.write_text(json.dumps({"runs_per_task": 1, "judge_retries": 0}))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks,
+                            ctx=SimpleNamespace(llm=FakeLlm(*[reply] * 8)))
+    meta = report(result).meta
+    assert meta.judge_model == "fake/judge-model, openai/rubric-model"
+    assert meta.judge_usage == {"input_tokens": 600, "output_tokens": 60, "calls": 3}
+
+
+def test_a_dimensions_judge_is_recorded_without_tasks(tmp_path, scorers):
+    scorers("clarity", (
+        "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+        "def score(skill, config, llm=None):\n"
+        "    return DimensionScore(Dimension.CLARITY, 0.8, judge_model='openai/rubric-model',\n"
+        "                          judge_usage={'input_tokens': 500, 'output_tokens': 50, 'calls': 1})\n"))
+    meta = report(evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")).meta
+    assert meta.judge_model == "openai/rubric-model"
+    assert meta.judge_usage == {"input_tokens": 500, "output_tokens": 50, "calls": 1}

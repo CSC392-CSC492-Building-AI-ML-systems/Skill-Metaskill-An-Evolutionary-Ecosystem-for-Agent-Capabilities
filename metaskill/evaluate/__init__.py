@@ -130,8 +130,8 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     judge_usage = TokenUsage()
     for path in paths:
         try:
-            result, runs = _result(Skill.load(_folder(path)), config, llm, tasks,
-                                   agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx)
+            result, runs, judged = _result(Skill.load(_folder(path)), config, llm, tasks,
+                                           agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx)
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))
@@ -139,8 +139,13 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
         results.append(result)
         errors = runs.errors if runs else []
         if runs and runs.judge_model:  # task checks an LLM judged (runner.md 2.3)
-            judge_models.add(runs.judge_model)
+            judge_models.update(m for m in runs.judge_model.split(", ") if m)
             judge_usage = judge_usage + runs.judge_usage
+        for model, usage in judged:  # dimensions an LLM judged, e.g. the deep safety tier
+            judge_models.update(m for m in model.split(", ") if m)
+            judge_usage = judge_usage + TokenUsage(usage.get("input_tokens", 0),
+                                                   usage.get("output_tokens", 0),
+                                                   usage.get("calls", 0))
         sessions += len(result.tests)
         run_errors += len(errors)
         if errors:  # infrastructure, not the skill: the runs are left out, and it says so
@@ -160,7 +165,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     versions = safety.versions()
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
     # to_meta gives the model asked for; this field says which models actually judged
-    # (models.md): the judge of the task runs' LLM checks, if any ran.
+    # (models.md): the judge of the task runs' LLM checks and of any dimension an LLM judged.
     meta.judge_model = ", ".join(sorted(judge_models))
     if judge_usage.calls:
         meta.judge_usage = asdict(judge_usage)
@@ -257,8 +262,10 @@ def _folder(path: str | Path) -> Path:
 
 def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None = None, *,
             agent: Any = None, sandbox: Any = None, run_dir: Path | None = None,
-            ctx: Any = None) -> tuple[SkillResult, RunnerResult | None]:
-    """The skill's result, and its task runs (None when no tasks ran)."""
+            ctx: Any = None) -> tuple[SkillResult, RunnerResult | None,
+                                      list[tuple[str, dict[str, int]]]]:
+    """The skill's result, its task runs (None when no tasks ran), and the (judge_model,
+    judge_usage) of every dimension an LLM judged."""
     from . import safety
 
     runs = None
@@ -278,7 +285,7 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
         rubric=[r for score in found.values() for r in score.rubric],
         findings=[f for score in found.values() for f in score.findings],
         local_warnings=safety.local_warnings(skill),
-    ), runs
+    ), runs, [(s.judge_model, s.judge_usage) for s in found.values() if s.judge_usage]
 
 
 def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,

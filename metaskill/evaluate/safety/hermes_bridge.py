@@ -14,6 +14,7 @@ import json
 import threading
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any, Iterator, Protocol
 
 PROVIDER = "metaskill_hermes"
@@ -48,14 +49,42 @@ class UnsupportedRequest(ValueError):
     """Cisco sent something ctx.llm cannot express (tools, multi-turn history)."""
 
 
-_llms: dict[str, tuple[PluginLlm, str | None, str, str]] = {}  # id -> (ctx.llm, task, provider, model)
+@dataclass
+class LlmUsage:
+    """What a scan's model calls used, for the report header (ReportMeta.judge_model and
+    judge_usage): the (provider, model) every reply came from, and tokens and calls, any
+    retry included. Cisco may call from worker threads, so record() locks."""
+
+    used: set[tuple[str, str]] = field(default_factory=set)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    calls: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def record(self, result: Any, input_tokens: int, output_tokens: int) -> None:
+        with self._lock:
+            provider, model = getattr(result, "provider", ""), getattr(result, "model", "")
+            if provider or model:
+                self.used.add((str(provider), str(model)))
+            self.input_tokens += input_tokens
+            self.output_tokens += output_tokens
+            self.calls += 1
+
+    @property
+    def model(self) -> str:
+        """As Judge.judge_model: "provider/model" of every reply, sorted, joined by ", "."""
+        return ", ".join(sorted(f"{p}/{m}" for p, m in self.used))
+
+
+# id -> (ctx.llm, task, provider, model, usage tracker or None)
+_llms: dict[str, tuple[PluginLlm, str | None, str, str, LlmUsage | None]] = {}
 _lock = threading.Lock()
 _handler: Any = None
 
 
 @contextmanager
 def routed(llm: PluginLlm, task: str | None = None, provider: str = "",
-           model: str = "") -> Iterator[str]:
+           model: str = "", usage: LlmUsage | None = None) -> Iterator[str]:
     """Make `llm` reachable by Cisco for the duration of a scan.
 
     Yields the model name to give Cisco. Each scan gets its own name, so
@@ -64,11 +93,12 @@ def routed(llm: PluginLlm, task: str | None = None, provider: str = "",
     `metaskill_judge` and EvaluationConfig.judge_provider/judge_model), so Cisco runs
     on the same model as the judge, including when the user pins one through
     judge_provider/judge_model rather than the auxiliary task. Empty means the default.
+    `usage`, if given, records every call made through this name (LlmUsage).
     """
     _install()
     token = uuid.uuid4().hex
     with _lock:
-        _llms[token] = (llm, task, provider, model)
+        _llms[token] = (llm, task, provider, model, usage)
     try:
         yield f"{PROVIDER}/{token}"
     finally:
@@ -130,7 +160,7 @@ def _text(content: Any) -> str:
     raise UnsupportedRequest(f"unexpected message content: {type(content).__name__}")
 
 
-def _llm_for(model: str) -> tuple[PluginLlm, str | None, str, str]:
+def _llm_for(model: str) -> tuple[PluginLlm, str | None, str, str, LlmUsage | None]:
     token = model.split("/", 1)[1] if "/" in model else model
     with _lock:
         entry = _llms.get(token)
@@ -153,7 +183,7 @@ def _install() -> None:
             def completion(self, model: str, messages: list, *args: Any,
                            optional_params: dict | None = None, **kwargs: Any) -> Any:
                 params = optional_params or {}
-                llm, task, provider, pinned = _llm_for(model)
+                llm, task, provider, pinned, usage = _llm_for(model)
                 call = translate(messages, params)  # not `kwargs`: that is the method's own param
                 if task:
                     call["task"] = task
@@ -163,8 +193,8 @@ def _install() -> None:
                     call["provider"] = provider
                 if pinned:
                     call["model"] = pinned
-                result, usage = complete_with_retry(llm, call, _schema(params))
-                return _response(ModelResponse, result, usage)
+                result, tokens = complete_with_retry(llm, call, _schema(params), usage=usage)
+                return _response(ModelResponse, result, tokens)
 
             async def acompletion(self, model: str, messages: list, *args: Any,
                                   optional_params: dict | None = None, **kwargs: Any) -> Any:
@@ -180,16 +210,17 @@ def _install() -> None:
         litellm.custom_provider_map = providers
 
 
-def complete_with_retry(llm: PluginLlm, kwargs: dict[str, Any],
-                        schema: Any) -> tuple[Any, tuple[int, int]]:
+def complete_with_retry(llm: PluginLlm, kwargs: dict[str, Any], schema: Any,
+                        usage: LlmUsage | None = None) -> tuple[Any, tuple[int, int]]:
     """Call ctx.llm, and ask again once if the reply does not fit the schema.
 
-    Returns the last reply and the (input, output) tokens of every call made.
+    Returns the last reply and the (input, output) tokens of every call made; `usage`,
+    if given, also records each call.
     A reply that still does not fit is returned as is: Cisco then rejects it and
     the scan falls back to static, as for any other LLM failure.
     """
     tokens = [0, 0]
-    result = _call(llm, kwargs, tokens)
+    result = _call(llm, kwargs, tokens, usage)
     for _ in range(MAX_RETRIES):
         problems = schema_problems(getattr(result, "parsed", None), schema)
         if not problems:
@@ -199,7 +230,7 @@ def complete_with_retry(llm: PluginLlm, kwargs: dict[str, Any],
             "\n\nYour previous reply did not match the JSON schema:\n- "
             + "\n- ".join(problems)
             + "\nReply again with one complete JSON object that matches the schema exactly.")
-        result = _call(llm, retry, tokens)
+        result = _call(llm, retry, tokens, usage)
     return result, (tokens[0], tokens[1])
 
 
@@ -227,11 +258,16 @@ def schema_problems(parsed: Any, schema: Any) -> list[str]:
     return problems
 
 
-def _call(llm: PluginLlm, kwargs: dict[str, Any], tokens: list[int]) -> Any:
+def _call(llm: PluginLlm, kwargs: dict[str, Any], tokens: list[int],
+          usage: LlmUsage | None = None) -> Any:
     result = llm.complete_structured(**kwargs)
-    usage = getattr(result, "usage", None)
-    tokens[0] += int(getattr(usage, "input_tokens", 0) or 0)
-    tokens[1] += int(getattr(usage, "output_tokens", 0) or 0)
+    reported = getattr(result, "usage", None)
+    input_tokens = int(getattr(reported, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(reported, "output_tokens", 0) or 0)
+    tokens[0] += input_tokens
+    tokens[1] += output_tokens
+    if usage is not None:
+        usage.record(result, input_tokens, output_tokens)
     return result
 
 

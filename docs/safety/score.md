@@ -75,6 +75,14 @@ llm-review: no judge configured
 
 Scanner notes, such as files the LLM skipped, are added even when the status is `ok`, because they qualify the result.
 
+## Judge model and usage
+
+At the `deep` tier, `score()` also fills `DimensionScore.judge_model` and `judge_usage` with what its two LLM passes used: the review's `Judge` (its `judge_model`, which shows a mid-run fallback, and `total_usage`) and Cisco's LLM analyzer (counted per call by the bridge, [cisco.md](cisco.md)). Evaluate puts them in the report header (`ReportMeta.judge_model`, `judge_usage`), so a deep-tier report names the model behind its safety findings and what it cost. At the `static` tier both stay empty: no model is called.
+
+- **Per scan.** The judge and Cisco's tracker count for their whole life, so `score()` reads them before and after the scan and reports the difference. A caller that builds backends once (`backends_from_context`) and scores several skills gets each skill's own calls.
+- **Replies only.** A call counts once a reply comes back; one the provider refused or that failed in transit is not counted.
+- **Merged in the header.** The report keeps the merged model and usage in `ReportMeta`, not per dimension: a header with both a task judge and the deep safety tier does not say which model judged which.
+
 ## Tier mismatch
 
 If `deep` was requested and Cisco fell back to static, the status is `partial` and `detail` says so. The report header still records the requested tier; the per-skill status shows what actually ran. The ranking flags it.

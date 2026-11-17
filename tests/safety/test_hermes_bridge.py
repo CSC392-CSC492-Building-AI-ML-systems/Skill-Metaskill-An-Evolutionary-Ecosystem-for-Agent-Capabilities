@@ -176,7 +176,7 @@ def test_registration_is_removed_after_the_scan(tiny_skill):
     llm = FakeLlm()
     with hermes_bridge.routed(llm, "metaskill_judge") as model:
         assert model.startswith(f"{hermes_bridge.PROVIDER}/")
-        assert hermes_bridge._llm_for(model) == (llm, "metaskill_judge", "", "")
+        assert hermes_bridge._llm_for(model) == (llm, "metaskill_judge", "", "", None)
     with pytest.raises(RuntimeError):
         hermes_bridge._llm_for(model)
 
@@ -260,3 +260,36 @@ def test_problem_list_is_capped():
     problems = hermes_bridge.schema_problems({}, schema)
     assert len(problems) == hermes_bridge.MAX_PROBLEMS_LISTED + 1
     assert problems[-1] == "and 4 more problems"
+
+
+# --- What a scan's calls used, for the report header (MET-51) --------------------------
+
+
+def test_usage_records_every_call_a_retry_included():
+    pytest.importorskip("jsonschema")
+    usage = hermes_bridge.LlmUsage()
+    llm = ScriptedLlm({}, {"verdict": "SAFE"})
+    _, tokens = hermes_bridge.complete_with_retry(llm, BASE, SCHEMA, usage=usage)
+    assert tokens == (2000, 200)
+    assert (usage.input_tokens, usage.output_tokens, usage.calls) == (2000, 200, 2)
+    assert usage.model == "fake/fake-model"
+
+
+def test_no_usage_tracker_changes_nothing():
+    llm = ScriptedLlm({"verdict": "SAFE"})
+    assert hermes_bridge.complete_with_retry(llm, BASE, None)[1] == (1000, 100)
+
+
+def test_the_tracker_rides_with_the_routed_name():
+    pytest.importorskip("litellm")
+    usage = hermes_bridge.LlmUsage()
+    with hermes_bridge.routed(FakeLlm(), "metaskill_judge", usage=usage) as model:
+        assert hermes_bridge._llm_for(model)[4] is usage
+
+
+def test_usage_lists_every_model_that_answered():
+    usage = hermes_bridge.LlmUsage()
+    usage.record(FakeResult(parsed={}, provider="openai", model="b"), 10, 1)
+    usage.record(FakeResult(parsed={}, provider="openai", model="a"), 10, 1)
+    usage.record(FakeResult(parsed={}, provider="openai", model="a"), 10, 1)
+    assert usage.model == "openai/a, openai/b" and usage.calls == 3

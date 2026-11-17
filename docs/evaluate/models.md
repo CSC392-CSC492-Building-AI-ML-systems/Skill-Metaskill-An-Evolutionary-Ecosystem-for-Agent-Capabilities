@@ -113,6 +113,7 @@ What every scoring module's `score(skill, ...)` returns.
 | `detail` | What was missing or went wrong when `status` is not `ok` |
 | `rubric` | `RubricRating`s, for Clarity |
 | `findings` | `Finding`s, for Safety and Configuration Cleanliness |
+| `judge_model`, `judge_usage` | The model(s) an LLM judged this dimension with (`provider/model`, `, `-joined) and their tokens and calls; empty when no model ran. Evaluate merges every dimension's into `ReportMeta.judge_model`/`judge_usage`, with the task runs' judge. Set by Safety's deep tier; meant for Clarity too |
 
 Invariant: `value` is `None` **exactly** when `status` is `skipped` or `error`. This keeps a skill from being penalised for a missing key or backend (evaluate.md 2.1). `partial` still has a value. `to_status()` returns the `DimensionStatus` part kept in the report.
 
@@ -193,7 +194,7 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `scanner_version` | External scanner version; empty if it did not run |
 | `checks_version` | Version of our own safety rule set |
 | `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
-| `judge_usage` | Tokens and calls the judge used on the task runs' LLM checks (`input_tokens`, `output_tokens`, `calls`); empty if no LLM check ran |
+| `judge_usage` | Tokens and calls the judge(s) used (`input_tokens`, `output_tokens`, `calls`): the task runs' LLM checks plus any dimension an LLM judged (`DimensionScore.judge_usage`); empty if no model judged |
 
 ### `Report`
 

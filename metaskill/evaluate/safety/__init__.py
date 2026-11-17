@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..judge import JUDGE_TASK, Judge
+from ..judge import JUDGE_TASK, Judge, TokenUsage
 from ..models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
 from . import local
@@ -55,6 +55,7 @@ def score(skill: Skill, config: EvaluationConfig,
     tier = config.safety_tier
     if backends is None:
         backends = default_backends(config, llm, task)
+    before = [_spent(backend) for backend in backends]
     results = [backend.scan(skill, tier) for backend in backends]
 
     usable = [r for r in results if r.status in _USABLE]
@@ -62,6 +63,7 @@ def score(skill: Skill, config: EvaluationConfig,
     status = _status(results, usable)
     value = score_from_findings(findings) if usable else None
 
+    judge_model, judge_usage = _judged(backends, before)
     return DimensionScore(
         dimension=Dimension.SAFETY,
         value=value,
@@ -69,7 +71,45 @@ def score(skill: Skill, config: EvaluationConfig,
         reason=_reason(findings, usable, tier),
         detail="\n".join(f"{r.backend}: {r.detail}" for r in results if r.detail),
         findings=findings,
+        judge_model=judge_model,
+        judge_usage=judge_usage,
     )
+
+
+def _spent(backend: SafetyBackend) -> tuple[TokenUsage, str]:
+    """What a backend's model calls have used so far, and the models that answered: the
+    review's judge (`judge`) and Cisco's LLM analyzer (`llm_usage`). Both count for their
+    whole life, so score() takes this before and after a scan and keeps the difference."""
+    usage, models = TokenUsage(), []
+    judge = getattr(backend, "judge", None)
+    if judge is not None and hasattr(judge, "total_usage"):
+        usage = usage + judge.total_usage
+        models.append(judge.judge_model)
+    tracker = getattr(backend, "llm_usage", None)
+    if tracker is not None and hasattr(tracker, "calls"):
+        usage = usage + TokenUsage(tracker.input_tokens, tracker.output_tokens, tracker.calls)
+        models.append(tracker.model)
+    return usage, ", ".join(m for m in models if m)
+
+
+def _judged(backends: list[SafetyBackend],
+            before: list[tuple[TokenUsage, str]]) -> tuple[str, dict[str, int]]:
+    """The model(s) this scan's LLM passes ran on and what they used; empty when no model
+    call was made, as at the static tier. Only this scan's calls count, so a backend that
+    scored other skills before does not add theirs."""
+    models: set[str] = set()
+    used = TokenUsage()
+    for backend, (earlier, _) in zip(backends, before):
+        now, names = _spent(backend)
+        delta = TokenUsage(now.input_tokens - earlier.input_tokens,
+                           now.output_tokens - earlier.output_tokens, now.calls - earlier.calls)
+        if delta.calls:
+            models.update(m for m in names.split(", ") if m)
+            used = used + delta
+    if not used.calls:
+        return "", {}
+    return ", ".join(sorted(models)), {"input_tokens": used.input_tokens,
+                                       "output_tokens": used.output_tokens, "calls": used.calls}
 
 
 def local_warnings(skill: Skill, config_values: dict[str, str] | None = None) -> list[LocalWarning]:
