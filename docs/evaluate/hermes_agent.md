@@ -16,7 +16,7 @@ result = run_skill(skill, "tasks.json", HermesAgent(), config=config, run_dir=ru
 | `timeout` | 600 s | A whole session; past it the session and everything it started are stopped |
 | `hermes` | `"hermes"` | The Hermes launcher, used to find Hermes' interpreter |
 
-Evaluate uses it for every task run when it is given a task file ([evaluate.md](../evaluate.md) 7), with `agent_model` and `agent_provider` from the config.
+Evaluate uses it for every task run when it is given a task file ([evaluate.md](../evaluate.md) 7), with `agent_model` and `agent_provider` from the config, and calls `check()` once first, so a Hermes that cannot be set up is one error before any run. `check()`'s message never holds the child's stderr, which can name this machine's paths; it is on the exception's `stderr`.
 
 ## 1. How a run works
 

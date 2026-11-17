@@ -193,6 +193,7 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `scanner_version` | External scanner version; empty if it did not run |
 | `checks_version` | Version of our own safety rule set |
 | `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
+| `judge_usage` | Tokens and calls the judge used on the task runs' LLM checks (`input_tokens`, `output_tokens`, `calls`); empty if no LLM check ran |
 
 ### `Report`
 

@@ -386,6 +386,8 @@ class ReportMeta:
     checks_version: str = ""  # version of our own safety rule set
     # The model(s) that ran the task sessions, as Hermes reported them; empty if no task ran.
     agent_model: str = ""
+    # Tokens and calls the judge used ({input_tokens, output_tokens, calls}); empty if none.
+    judge_usage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -398,6 +400,7 @@ class ReportMeta:
             "scanner_version": self.scanner_version,
             "checks_version": self.checks_version,
             "agent_model": self.agent_model,
+            "judge_usage": dict(self.judge_usage),
         }
 
     @classmethod
@@ -413,6 +416,7 @@ class ReportMeta:
             scanner_version=data.get("scanner_version", ""),
             checks_version=data.get("checks_version", ""),
             agent_model=data.get("agent_model", ""),
+            judge_usage=dict(data.get("judge_usage") or {}),
         )
 
 

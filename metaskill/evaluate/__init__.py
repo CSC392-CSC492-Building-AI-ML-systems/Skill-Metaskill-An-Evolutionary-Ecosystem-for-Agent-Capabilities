@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .judge import MAX_REASON_CHARS, JudgeUnavailable, clean
+from .judge import MAX_REASON_CHARS, JudgeError, JudgeUnavailable, TokenUsage, clean
 from .models import (
     Dimension,
     DimensionScore,
@@ -112,6 +112,12 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
                     "error": "running the tasks needs what `dependencies` lists; nothing was run",
                     "dependencies": [asdict(d) for d in missing]}
         agent = _make_agent(config)
+        problem = _check_agent(agent, sandbox)
+        if problem:  # one clear error now, not one per run
+            return {"status": "error",
+                    "error": clean(f"the task agent (Hermes) could not be set up, so nothing was "
+                                   f"run: {problem}", MAX_REASON_CHARS),
+                    "dependencies": [asdict(d) for d in missing]}
 
     # With tasks, before scoring: the runs write their logs into this call's folder.
     created = not config.output_dir.exists()
@@ -120,15 +126,21 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     results: list[SkillResult] = []
     warnings: list[str] = []
     sessions = run_errors = 0
+    judge_models: set[str] = set()
+    judge_usage = TokenUsage()
     for path in paths:
         try:
-            result, errors = _result(Skill.load(_folder(path)), config, llm, tasks,
-                                     agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx)
+            result, runs = _result(Skill.load(_folder(path)), config, llm, tasks,
+                                   agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx)
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))
             continue
         results.append(result)
+        errors = runs.errors if runs else []
+        if runs and runs.judge_model:  # task checks an LLM judged (runner.md 2.3)
+            judge_models.add(runs.judge_model)
+            judge_usage = judge_usage + runs.judge_usage
         sessions += len(result.tests)
         run_errors += len(errors)
         if errors:  # infrastructure, not the skill: the runs are left out, and it says so
@@ -147,9 +159,11 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     ranking = rank_results(results, config)
     versions = safety.versions()
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
-    # No judge has run: to_meta gives the model asked for, and this field says which
-    # models judged (models.md).
-    meta.judge_model = ""
+    # to_meta gives the model asked for; this field says which models actually judged
+    # (models.md): the judge of the task runs' LLM checks, if any ran.
+    meta.judge_model = ", ".join(sorted(judge_models))
+    if judge_usage.calls:
+        meta.judge_usage = asdict(judge_usage)
     if agent is not None:  # the model(s) the sessions actually ran on
         meta.agent_model = ", ".join(sorted(getattr(agent, "models_used", ())))
     artifacts = _write(Report(meta, [e.result for e in ranking.entries]), ranking, run_dir)
@@ -186,6 +200,30 @@ def _error_kind(error: str) -> str:
     return parts[1] if len(parts) == 3 and parts[1].isidentifier() else "see the report"
 
 
+def _check_agent(agent: Any, sandbox: Any) -> str:
+    """Before any run: set the agent up once in a fresh workspace, without a model (for
+    Hermes, HermesAgent.check). Returns what is wrong, or "" if it works. A problem here
+    would otherwise fail every run separately. Agents without a check are taken as ready."""
+    check = getattr(agent, "check", None)
+    if not callable(check):
+        return ""
+    from .hermes_agent import HermesAgentUnavailable
+
+    try:
+        workspace = sandbox.open([])
+    except JudgeError as e:  # Docker failing to give a workspace
+        return f"the sandbox could not open a workspace ({type(e).__name__})"
+    try:
+        check(workspace)
+    except HermesAgentUnavailable as e:  # its message holds no stderr (hermes_agent.py)
+        return str(e)
+    except (JudgeError, TimeoutError) as e:  # the sandbox failing, or Hermes hanging
+        return f"the agent check failed ({type(e).__name__})"
+    finally:
+        workspace.close()
+    return ""
+
+
 def _remove_if_empty(*folders: Path | None) -> None:
     """Remove folders this call made that nothing was written to, innermost first; a
     folder holding run logs stays."""
@@ -219,8 +257,8 @@ def _folder(path: str | Path) -> Path:
 
 def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None = None, *,
             agent: Any = None, sandbox: Any = None, run_dir: Path | None = None,
-            ctx: Any = None) -> tuple[SkillResult, list[str]]:
-    """The skill's result, and the task runs the runner could not make (cleaned)."""
+            ctx: Any = None) -> tuple[SkillResult, RunnerResult | None]:
+    """The skill's result, and its task runs (None when no tasks ran)."""
     from . import safety
 
     runs = None
@@ -240,7 +278,7 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
         rubric=[r for score in found.values() for r in score.rubric],
         findings=[f for score in found.values() for f in score.findings],
         local_warnings=safety.local_warnings(skill),
-    ), (runs.errors if runs else [])
+    ), runs
 
 
 def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
