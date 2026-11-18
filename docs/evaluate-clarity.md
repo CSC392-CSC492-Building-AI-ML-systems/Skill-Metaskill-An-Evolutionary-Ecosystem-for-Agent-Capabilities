@@ -6,7 +6,7 @@ Clarity answers: "How clear is the skill to the agent and to a person reading it
 
 ## 1. Rubric
 
-Two rulesets existed: the five criteria in evaluate.md 3.3 (trigger specificity, step ordering, verifiability, failure handling, human followability) and four criteria for what a clear skill reads like (concise, understandable, readable, clearly framed and structured). Version 1 merged them into seven criteria. Version 2 adds `actionability`, which the merge had dropped: the writing criteria are about the person reading, and actionability is about the agent following the steps. There are now eight criteria, weighted equally:
+Two rulesets existed: the five criteria in evaluate.md 3.3 (trigger specificity, step ordering, verifiability, failure handling, human followability) and four criteria for what a clear skill reads like (concise, understandable, readable, clearly framed and structured). Version 1 merged them into seven criteria. Version 2 adds `actionability`, which the merge had dropped: the writing criteria are about the person reading, and actionability is about the agent following the steps. There are now eight criteria, weighted as in section 2:
 
 | Criterion | Question | From |
 |---|---|---|
@@ -27,15 +27,28 @@ Changes in version 2, beyond the new criterion:
 - **Readability** is narrowed to whether the goal is clear at a glance. Following the steps is now `actionability` and `structure_and_flow`, and jargon is `accessible_language`, so the same flaw is not counted under two criteria. It stays separate from `purpose_and_trigger`, although both read the description and opening: `purpose_and_trigger` asks when the skill should be used and whether the description is truthful, `readability` asks whether a person can tell what it achieves.
 - The instructions add that asking the user a specific question is a concrete step, so a skill is not marked down for asking rather than guessing.
 
-Each criterion has five anchored levels, worst first, normalised to `0`, `0.25`, `0.5`, `0.75` and `1` (scoring.md proposal). The anchor text lives in `CRITERIA` in `clarity.py`, which is the single source. `RUBRIC_VERSION` (now `"2"`) is bumped whenever a criterion, anchor or the instructions change, since ratings from different versions do not compare. Every report records it as `clarity_rubric_version` in its header (evaluate.md 2.1).
-
-**[OPEN]** Equal weights. Actionability, verifiability and failure handling are about the workflow more than the writing; they could weigh less, or move to Quality.
+Each criterion has five anchored levels, worst first, normalised to `0`, `0.25`, `0.5`, `0.75` and `1` (scoring.md proposal). The anchor text lives in `CRITERIA` in `clarity.py`, which is the single source. `RUBRIC_VERSION` (now `"3"`) is bumped whenever a criterion, anchor, weight or the instructions change, since ratings or scores from different versions do not compare. Version 3 changed only the weights: its ratings compare with version 2, its scores do not. Every report records it as `clarity_rubric_version` in its header (evaluate.md 2.1).
 
 ## 2. Scoring
 
 ```text
-C = (sum of the eight criterion ratings) / 8, with an unrated criterion counted as 0
+C = (sum of weight x rating over the eight criteria) / (sum of the weights), with an unrated criterion counted as 0
 ```
+
+The weights are `WEIGHTS` in `clarity.py` (rubric version 3). Only their ratios matter; they total 15.5.
+
+| Criterion | Weight | Share | Why |
+|---|---|---|---|
+| `actionability` | 3 | 19% | Decides whether the agent carries out the task without guessing, which is the skill's main job |
+| `purpose_and_trigger` | 3 | 19% | Hermes loads a skill by its description, so a wrong trigger means it is never used, or used for the wrong task |
+| `structure_and_flow` | 2 | 13% | Steps out of order and contradictions cause real execution mistakes |
+| `verifiability` | 2 | 13% | Lets the agent catch its own errors; partly overlaps Quality, whose tasks check the result |
+| `failure_handling` | 2 | 13% | Only matters when something breaks, and overlaps Robustness |
+| `accessible_language` | 1.5 | 10% | Matters to people more than to the agent, which understands jargon |
+| `readability` | 1 | 6% | Whether a person can tell the goal at a glance; tends to move with `purpose_and_trigger` |
+| `conciseness` | 1 | 6% | Efficiency already measures size; kept above 0 to push back against the judge's preference for longer text |
+
+Under equal weights (version 2) a skill weak on one criterion lost at most 0.125. A heavy criterion now costs up to 0.19, so the actionability-only pair separates by 0.105 rather than 0.06 (section 4.4). The judge's run-to-run spread is about the same under both: at most 0.094 equal, 0.089 weighted.
 
 | Outcome | Status | Score |
 |---|---|---|
@@ -87,7 +100,7 @@ metaskill/evaluate/golden/
 tests/test_golden_clarity.py  structural checks
 ```
 
-Annotations live outside the skill folders, so a judge reading a skill never sees its label. `cases.json` records the `rubric_version` it was annotated against (now `"2"`, schema `pilot-0.4`). Every case has a `kind`:
+Annotations live outside the skill folders, so a judge reading a skill never sees its label. `cases.json` records the `rubric_version` it was annotated against (now `"3"`, schema `pilot-0.4`; the annotations are the same as for version 2, since only the weights changed). Every case has a `kind`:
 
 | Kind | Count | What it is | Passes when |
 |---|---|---|---|
@@ -138,7 +151,7 @@ Unclear bases are used because they leave room for a score to rise. A lower scor
 
 **Rewording** (`<base>-reworded`, `clarity-reword-*`). The same clear skill in different words: every sentence rephrased, the description rephrased, and one or two headings renamed (for example "If Something Goes Wrong" to "Troubleshooting"), with the same content, sections, order and code blocks. A large change in score means the judge is reacting to wording, not clarity. The bases are `csv-dedupe` (script-heavy), `git-undo-last-commit` (commands) and `recipe-scaling` (prose-heavy). The changes are listed in each case's `changes`.
 
-**Tolerance.** `TOLERANCE = 0.125` in `golden/clarity.py`: one criterion moving two levels, or four criteria moving one. It is provisional, set before measuring how much the judge's own scores move between runs of the same skill (section 5, question 4); it should be tightened or loosened once that is known.
+**Tolerance.** `TOLERANCE = 0.1` in `golden/clarity.py`, just above the judge's own spread. Over four version 2 runs of the 22 pair skills on 2026-11-17, no skill's Clarity score moved more than 0.094 between runs (0.089 rescored with the version 3 weights). Most moved 0.031 or less, one criterion by one level. The largest move was `markdown-link-check-unclear`, 0.44 to 0.53. Every criterion changed rating at least once on some skill; `verifiability` and `structure_and_flow` changed most often. A real injection effect is far larger: a skill rated level 5 on every criterion would gain about 0.6 over its unclear base.
 
 ### 4.3 Structural checks (CI)
 
@@ -158,7 +171,7 @@ Unclear bases are used because they leave room for a score to rise. A lower scor
 
 Real judge runs stay out of CI (evaluate.md 6). To run one:
 
-1. From the repository root, print the command: `py -m metaskill.evaluate.golden.clarity --command`. It is `/metaskill rank metaskill/evaluate/golden/synthetic/clarity/skills/csv-dedupe, ...` with all twenty-eight skills.
+1. Print the command: `py -m metaskill.evaluate.golden.clarity --command`. It is `/metaskill rank <absolute path>/csv-dedupe, ...` with all twenty-eight skills. The paths are absolute because Hermes resolves a relative path from the folder its session started in (`Folder: ...` in its reply), which is often not this repository.
 2. Run it in Hermes. The report folder is written under `evaluation-reports/`.
 3. Compare: `py -m metaskill.evaluate.golden.clarity evaluation-reports/<run>/ranked-evaluation.json`.
 
@@ -167,9 +180,9 @@ The comparison prints two tables and exits non-zero unless everything passes:
 - **Pairs.** For every degraded case, the clear skill has the higher Clarity score **and** a strictly higher rating on every targeted criterion (an unrated criterion counts as 0). This is the "reference outranks its vague variant" check of golden_dataset.md, *Evaluating the Evaluator*.
 - **Controls.** Each injected and reworded skill against its base, by the rules in section 4.2.
 
-A pair or control is skipped when one of its skills is not in the report. The comparison warns when the report's `clarity_rubric_version` differs from the dataset's `rubric_version`: reports from before version 2 have no `actionability` rating, so that criterion counts as 0 on both sides and every pair that targets it fails.
+A pair or control is skipped when one of its skills is not in the report. The comparison warns when the report's `clarity_rubric_version` differs from the dataset's `rubric_version`: reports from before version 2 have no `actionability` rating, so that criterion counts as 0 on both sides and every pair that targets it fails. Version 2 reports have the same ratings as version 3 but equally weighted scores, so their pair results still hold, while control changes measured on them are on the old scale.
 
-The first version 2 run (2026-11-17, 22 skills, before the controls were added) ordered 11 of 11 pairs as expected. The actionability-only pair separated by 0.06 overall (0.88 against 0.81), since one criterion is an eighth of the score; its targeted rating separated by 0.5.
+The first version 2 run (2026-11-17, 22 skills, before the controls were added) ordered 11 of 11 pairs as expected. The actionability-only pair separated by 0.06 overall (0.88 against 0.81), since one criterion is an eighth of the score; its targeted rating separated by 0.5. Three repeat runs gave the same 11 of 11, with the actionability pair unchanged. Rescored with the version 3 weights, the four runs still order 11 of 11, and the actionability pair separates by 0.105 (0.863 against 0.758). No run so far has included the controls.
 
 ### 4.5 What the comparison does not check
 
@@ -182,10 +195,9 @@ Only the pair ordering is automated. These parts of `cases.json` are not compare
 
 ## 5. Open questions
 
-1. Equal weights across the eight criteria (section 1).
-2. Unrated criterion as 0, and ranking of a `partial` Clarity score (section 2).
-3. Final golden schema (section 4); the set uses the shared pilot layout, but the manifest schema is still draft.
-4. Whether to rate more than once and take the median, once live variability on the golden set is measured. Running the same 28 skills two or three times would give the judge's own spread, which also sets the control `TOLERANCE` (section 4.2).
-5. A threshold for clear skills (for example, every clear skill at or above 0.75), once a few live runs show the spread. In the first version 2 run every clear skill scored 0.84 or above.
+1. Unrated criterion as 0, and ranking of a `partial` Clarity score (section 2).
+2. Final golden schema (section 4); the set uses the shared pilot layout, but the manifest schema is still draft.
+3. Whether to rate more than once and take the median. The measured spread is at most 0.094 (section 4.2), well under the smallest pair gap but close to a single criterion's weight.
+4. A threshold for clear skills (for example, every clear skill at or above 0.75). Over four runs every clear skill scored 0.82 or above with the version 3 weights.
 
-**Answered.** Injection and rewording cases are in the pilot (section 4.2). `readability` and `purpose_and_trigger` stay separate criteria (section 1).
+**Answered.** Injection and rewording cases are in the pilot (section 4.2). `readability` and `purpose_and_trigger` stay separate criteria (section 1). The criteria are weighted (section 2), and the control tolerance is set from four repeated runs (section 4.2).

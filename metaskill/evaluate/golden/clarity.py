@@ -34,25 +34,21 @@ DEGRADED = of_kind("degraded")
 INJECTED = of_kind("injected")
 REWORDED = of_kind("reworded")
 
-# How far a control's Clarity score may move from its base before it fails. Provisional:
-# one criterion moving two levels, or four criteria moving one. Revisit once repeated runs
-# on the same skills measure the judge's own spread (evaluate-clarity.md, open question 4).
-TOLERANCE = 0.125
+# How far a control's Clarity score may move from its base before it fails. Just above
+# the judge's own spread: over four runs of the 22 pair skills (rubric 2), no skill's score
+# moved more than 0.094, or 0.089 with the version 3 weights (evaluate-clarity.md 4.2).
+TOLERANCE = 0.1
 
 
 def skill_dir(case: dict[str, Any]) -> Path:
     return (ROOT / case["skill_path"]).parent
 
 
-def rank_command(root: Path = Path.cwd()) -> str:
-    """The /metaskill command that ranks every golden skill in one run."""
-    paths = []
-    for case in CASES:
-        folder = skill_dir(case).resolve()
-        try:
-            paths.append(folder.relative_to(root.resolve()).as_posix())
-        except ValueError:
-            paths.append(folder.as_posix())
+def rank_command() -> str:
+    """The /metaskill command that ranks every golden skill in one run. Paths are
+    absolute: Hermes resolves relative ones from the folder its session started in, which
+    is often not this repository."""
+    paths = [skill_dir(case).resolve().as_posix() for case in CASES]
     return "/metaskill rank " + ", ".join(paths)
 
 
@@ -90,7 +86,8 @@ class Control:
     def change(self) -> float | None:
         if self.score is None or self.base_score is None:
             return None
-        return self.score - self.base_score
+        # Rounded so that float error (0.4 - 0.3 > 0.1) cannot fail a change at the bound.
+        return round(self.score - self.base_score, 9)
 
     @property
     def ok(self) -> bool:

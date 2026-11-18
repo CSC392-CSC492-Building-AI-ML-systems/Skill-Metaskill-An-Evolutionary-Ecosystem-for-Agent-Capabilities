@@ -202,7 +202,7 @@ When all runs pass but receive different partial-credit scores, agreement stays 
 
 ### Rubric
 
-**[IMPLEMENTED, DRAFT]** The original five criteria (trigger specificity, step ordering, verifiability, failure handling, human followability) are merged with four writing criteria (concise, understandable, readable, clearly framed and structured) into seven; rubric version 2 adds actionability, for eight weighted equally. Full anchors are in [`clarity.py`](../../metaskill/evaluate/clarity.py); the merge and the version 2 changes are explained in [evaluate-clarity.md](../evaluate-clarity.md), section 1.
+**[IMPLEMENTED, DRAFT]** The original five criteria (trigger specificity, step ordering, verifiability, failure handling, human followability) are merged with four writing criteria (concise, understandable, readable, clearly framed and structured) into seven; rubric version 2 adds actionability, for eight, and version 3 weights them. Full anchors are in [`clarity.py`](../../metaskill/evaluate/clarity.py); the merge and the version 2 changes are explained in [evaluate-clarity.md](../evaluate-clarity.md), section 1.
 
 | Criterion | 0 | 0.5 | 1 |
 | --- | --- | --- | --- |
@@ -218,8 +218,10 @@ When all runs pass but receive different partial-credit scores, agreement stays 
 Each criterion has five levels, normalized to `0`, `0.25`, `0.5`, `0.75`, and `1`; the `0.25` and `0.75` anchors are in `clarity.py`.
 
 ```text
-C = (sum of criterion ratings) / 8, an unrated criterion counting as 0
+C = (sum of weight x criterion rating) / (sum of weights), an unrated criterion counting as 0
 ```
+
+Weights (version 3): actionability and purpose and trigger 3; structure and flow, verifiability and failure handling 2; accessible language 1.5; readability and conciseness 1. The reasons are in evaluate-clarity.md, section 2.
 
 **[PROPOSED]** An unrated criterion (no verifiable quote) counts as 0 and makes the result `partial`, rather than being left out of the mean; see evaluate-clarity.md, section 2.
 

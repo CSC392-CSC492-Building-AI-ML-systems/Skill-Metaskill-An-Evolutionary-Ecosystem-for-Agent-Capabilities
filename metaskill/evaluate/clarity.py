@@ -2,8 +2,8 @@
 
 The LLM judge rates the skill on a fixed rubric of anchored levels (Judge.rate). Every
 rating must quote the skill; ratings whose quote is not found are dropped by the judge.
-The score is the mean of the criteria, with a criterion the judge could not support
-counted as 0.
+The score is the weighted mean of the criteria (WEIGHTS), with a criterion the judge
+could not support counted as 0.
 """
 
 from __future__ import annotations
@@ -18,10 +18,12 @@ from .models import Dimension, DimensionScore, EvaluationConfig, RubricRating, S
 # 2: added actionability; description/body match in purpose_and_trigger; contradictions in
 # structure_and_flow; verifiability asks for the expected result; readability narrowed to
 # telling the goal at a glance.
-RUBRIC_VERSION = "2"
+# 3: criteria weighted (WEIGHTS) instead of equally. Ratings are unchanged from 2; scores
+# are not.
+RUBRIC_VERSION = "3"
 
 # Five anchored levels per criterion, worst first; Judge.rate normalises them to
-# 0, 0.25, 0.5, 0.75, 1 (scoring.md, Clarity). Weighted equally.
+# 0, 0.25, 0.5, 0.75, 1 (scoring.md, Clarity). Weighted by WEIGHTS below.
 CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         "purpose_and_trigger",
@@ -139,6 +141,21 @@ CRITERIA: tuple[Criterion, ...] = (
     ),
 )
 
+# Relative weight of each criterion in the score; only the ratios matter
+# (docs/evaluate-clarity.md, section 2). Highest where a weak skill makes the agent do the
+# wrong thing or not load the skill at all; lowest where another dimension also measures
+# it (conciseness and Efficiency) or the agent is barely affected (readability).
+WEIGHTS: dict[str, float] = {
+    "purpose_and_trigger": 3,
+    "conciseness": 1,
+    "accessible_language": 1.5,
+    "readability": 1,
+    "structure_and_flow": 2,
+    "actionability": 3,
+    "verifiability": 2,
+    "failure_handling": 2,
+}
+
 # Trusted: sent outside the material, so it never holds text from the skill (judge.md 2.2).
 INSTRUCTIONS = (
     "You are rating how clear an agent skill is, both to a person reading it and to the "
@@ -189,7 +206,8 @@ def score_from_ratings(ratings: list[RubricRating]) -> DimensionScore:
     if len(missing) == len(CRITERIA):
         raise JudgeError("the judge gave no rating with a verifiable quote")
 
-    value = sum(r.rating for r in rated.values()) / len(CRITERIA)
+    value = (sum(WEIGHTS[name] * r.rating for name, r in rated.items())
+             / sum(WEIGHTS.values()))
     weakest = min(rated.values(), key=lambda r: r.rating)
     reason = f"{len(rated)}/{len(CRITERIA)} criteria rated; weakest: {weakest.criterion}"
     if not missing:

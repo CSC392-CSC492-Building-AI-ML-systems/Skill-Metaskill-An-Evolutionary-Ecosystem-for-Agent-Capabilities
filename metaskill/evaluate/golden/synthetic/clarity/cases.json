@@ -3,8 +3,8 @@
   "review_status": "draft",
   "reviewer": null,
   "case_family": "clarity",
-  "rubric_version": "2",
-  "notes": "Draft: eleven synthetic high-clarity skills, eleven unclear variants (one per skill), three injection controls and three rewording controls, for the eight-criterion Clarity rubric, version 2 (docs/evaluate-clarity.md). Not independently reviewed; for team analysis only.",
+  "rubric_version": "3",
+  "notes": "Draft: eleven synthetic high-clarity skills, eleven unclear variants (one per skill), three injection controls and three rewording controls, for the eight-criterion Clarity rubric, version 3: version 2's criteria and anchors, weighted (docs/evaluate-clarity.md). Not independently reviewed; for team analysis only.",
   "criteria": {
     "purpose_and_trigger": "The problem the skill solves, when to use it, and when not to are stated, and the frontmatter description matches what the body does. (User criterion 4, problem part; previous rubric: trigger specificity.)",
     "conciseness": "Says what it needs to and stops. No padding, repetition, or long preambles. (User criterion 1.)",

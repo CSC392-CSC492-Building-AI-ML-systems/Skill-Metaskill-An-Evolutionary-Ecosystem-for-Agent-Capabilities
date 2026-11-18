@@ -151,7 +151,7 @@ Example (abridged):
     "safety_tier": "static",
     "scanner_version": "...",
     "checks_version": "...",
-    "clarity_rubric_version": "2"
+    "clarity_rubric_version": "3"
   },
   "skills": [{
     "name": "gcp-file-transfer",

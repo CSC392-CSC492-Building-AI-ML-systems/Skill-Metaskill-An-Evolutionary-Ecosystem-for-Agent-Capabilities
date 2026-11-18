@@ -7,6 +7,8 @@ skill, uses the rubric's criteria, and quotes text that actually appears in that
 each control differs from its base only in the way it says it does.
 """
 
+from pathlib import Path
+
 import pytest
 
 from metaskill.evaluate.clarity import CRITERIA, RUBRIC_VERSION
@@ -190,7 +192,8 @@ def test_summary_and_exit_code_cover_pairs_and_controls(tmp_path, capsys):
     assert "Warning" not in capsys.readouterr().out
 
 
-def test_rank_command_lists_every_golden_skill():
-    command = rank_command(ROOT)
-    assert command.startswith("/metaskill rank skills/")
-    assert command.count(", ") == len(CASES) - 1
+def test_rank_command_lists_every_golden_skill_by_absolute_path():
+    # Hermes resolves relative paths from its session's folder, not this repository.
+    paths = rank_command().removeprefix("/metaskill rank ").split(", ")
+    assert len(paths) == len(CASES)
+    assert all(Path(p).is_absolute() and (Path(p) / "SKILL.md").is_file() for p in paths)

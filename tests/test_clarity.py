@@ -8,7 +8,7 @@ import pytest
 
 from metaskill.evaluate import evaluate_skill
 from metaskill.evaluate.clarity import (
-    CRITERIA, INSTRUCTIONS, RUBRIC_VERSION, score, score_from_ratings)
+    CRITERIA, INSTRUCTIONS, RUBRIC_VERSION, WEIGHTS, score, score_from_ratings)
 from metaskill.evaluate.judge import Judge, JudgeError, JudgeUnavailable
 from metaskill.evaluate.models import (
     Dimension, EvaluationConfig, Report, RubricRating, Skill, Status)
@@ -68,20 +68,37 @@ def test_folded_checks_are_in_their_criteria():
     assert "what the result should be" in by_name["verifiability"].question
 
 
+def test_every_criterion_has_a_positive_weight():
+    assert list(WEIGHTS) == NAMES and all(w > 0 for w in WEIGHTS.values())
+    # The agent-facing criteria outweigh the ones another dimension also measures.
+    assert WEIGHTS["actionability"] == WEIGHTS["purpose_and_trigger"] == max(WEIGHTS.values())
+    assert WEIGHTS["conciseness"] == WEIGHTS["readability"] == min(WEIGHTS.values())
+
+
 # --- score_from_ratings -------------------------------------------------------
 
 
-def test_all_criteria_rated_is_ok_and_the_mean():
+TOTAL = sum(WEIGHTS.values())
+
+
+def test_all_criteria_rated_is_ok_and_the_weighted_mean():
     result = score_from_ratings([rating(n, 1.0 if i else 0.5) for i, n in enumerate(NAMES)])
     assert result.status is Status.OK
-    assert result.value == pytest.approx(7.5 / 8)
+    assert result.value == pytest.approx(1 - 0.5 * WEIGHTS["purpose_and_trigger"] / TOTAL)
     assert "weakest: purpose_and_trigger" in result.reason
+
+
+def test_a_heavier_criterion_moves_the_score_more():
+    def without(name):
+        return score_from_ratings([rating(n, 0.0 if n == name else 1.0) for n in NAMES]).value
+
+    assert without("actionability") < without("structure_and_flow") < without("conciseness")
 
 
 def test_a_missing_criterion_counts_as_zero_and_is_partial():
     result = score_from_ratings([rating(n, 1.0) for n in NAMES[1:]])
     assert result.status is Status.PARTIAL
-    assert result.value == pytest.approx(7 / 8)
+    assert result.value == pytest.approx(1 - WEIGHTS["purpose_and_trigger"] / TOTAL)
     assert "purpose_and_trigger" in result.detail
 
 
@@ -107,7 +124,8 @@ def test_unverifiable_quotes_lower_the_score(skill):
     answer = reply({n: 5 for n in NAMES})
     answer["ratings"][0]["quote"] = "text that is not in the skill at all"
     result = score(skill, EvaluationConfig(), judge=Judge(FakeLlm(answer), retries=0))
-    assert result.status is Status.PARTIAL and result.value == pytest.approx(7 / 8)
+    assert result.status is Status.PARTIAL
+    assert result.value == pytest.approx(1 - WEIGHTS[NAMES[0]] / TOTAL)
 
 
 def test_builds_a_judge_from_llm_when_none_is_shared(skill):
