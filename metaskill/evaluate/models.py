@@ -229,7 +229,7 @@ class EvaluationConfig:
         return hashlib.sha256(encoded).hexdigest()[:16]
 
     def to_meta(self, timestamp: str, skills: list[str], scanner_version: str,
-                checks_version: str) -> ReportMeta:
+                checks_version: str, clarity_rubric_version: str = "") -> ReportMeta:
         return ReportMeta(
             timestamp=timestamp,
             skills=skills,
@@ -239,6 +239,7 @@ class EvaluationConfig:
             safety_tier=self.safety_tier,
             scanner_version=scanner_version,
             checks_version=checks_version,
+            clarity_rubric_version=clarity_rubric_version,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -369,6 +370,7 @@ class ReportMeta:
     safety_tier: SafetyTier = SafetyTier.STATIC
     scanner_version: str = ""  # empty if the scanner did not run
     checks_version: str = ""  # version of our own safety rule set
+    clarity_rubric_version: str = ""  # clarity.RUBRIC_VERSION; ratings across versions differ
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -380,6 +382,7 @@ class ReportMeta:
             "safety_tier": self.safety_tier.value,
             "scanner_version": self.scanner_version,
             "checks_version": self.checks_version,
+            "clarity_rubric_version": self.clarity_rubric_version,
         }
 
     @classmethod
@@ -394,6 +397,7 @@ class ReportMeta:
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             scanner_version=data.get("scanner_version", ""),
             checks_version=data.get("checks_version", ""),
+            clarity_rubric_version=data.get("clarity_rubric_version", ""),
         )
 
 
