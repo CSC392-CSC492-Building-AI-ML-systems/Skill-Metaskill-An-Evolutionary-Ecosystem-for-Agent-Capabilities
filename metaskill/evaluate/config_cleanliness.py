@@ -38,6 +38,7 @@ def score(
     llm: object = None,
     *,
     fixed_settings: Iterable[FixedSettingEvidence] = (),
+    consumed_settings: frozenset[str] | None = None,
 ) -> DimensionScore:
     """Return findings for available evidence and leave the numeric score unset."""
     schema, schema_detail = _schema(skill)
@@ -45,8 +46,11 @@ def score(
     fixed_settings = (*fixed_settings, *pilot_fixed)
     if not fixed_settings:
         schema_detail += " No reviewed profile-variability evidence supplied."
+    if consumed_settings is None:
+        schema_detail += " Necessary Setup needs a complete usage inventory."
     findings = check_configuration(
         schema=schema, skill_text=skill.body, fixed_settings=fixed_settings,
+        consumed_settings=consumed_settings,
     )
     properties = schema.get("properties", {}) if schema is not None else {}
     for name in unused:
