@@ -69,7 +69,7 @@ Settings for one `evaluate` or `rank` call.
 | `agent_model`, `agent_provider` | `""` | The Hermes model and provider the task sessions use; empty is the user's Hermes default |
 
 - `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir` and `tasks_path`, since where the reports and the task file are does not affect scores (the tasks do, and the agent model is hashed). The result becomes `ReportMeta.config`.
-- `to_meta(timestamp, skills, scanner_version, checks_version)` builds the `ReportMeta` for a run.
+- `to_meta(timestamp, skills, scanner_version, checks_version, clarity_rubric_version="")` builds the `ReportMeta` for a run.
 - `from_dict` re-validates `weights` after loading them.
 
 ### `Check`
@@ -136,7 +136,7 @@ One Clarity rubric criterion (evaluate.md 3.3), produced by `Judge.rate`.
 
 | Field | Description |
 |---|---|
-| `criterion` | e.g. `trigger_specificity` |
+| `criterion` | e.g. `purpose_and_trigger` |
 | `rating` | Anchored level normalised to `[0, 1]` |
 | `reason` | Why the judge chose this level |
 | `quote` | Verified text from the skill |
@@ -194,6 +194,7 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `checks_version` | Version of our own safety rule set |
 | `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
 | `judge_usage` | Tokens and calls the judge used on the task runs' LLM checks (`input_tokens`, `output_tokens`, `calls`); empty if no LLM check ran |
+| `clarity_rubric_version` | `clarity.RUBRIC_VERSION` for the run; empty in reports written before it was recorded |
 
 ### `Report`
 

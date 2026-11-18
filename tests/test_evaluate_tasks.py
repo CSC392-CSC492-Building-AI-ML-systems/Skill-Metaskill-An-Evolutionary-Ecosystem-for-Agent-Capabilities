@@ -18,7 +18,7 @@ from metaskill.evaluate.runner import AgentRun
 from metaskill.evaluate.sandbox import Problem
 from metaskill.evaluate.sandbox import RunFailed
 from test_runner import FakeAgent, FakeLlm, FakeSandbox, writes_report_with_skill
-from test_evaluate import scorers  # noqa: F401  (fixture: puts a stand-in scorer module in place)
+from test_evaluate import placeholder  # noqa: F401  (fixture: scores a dimension with a test module)
 
 RUNS = 2  # runs_per_task in these tests
 
@@ -298,7 +298,10 @@ def test_the_judge_of_llm_checks_is_recorded_in_the_report(tmp_path, harness, mo
                             output_path=tmp_path / "out", tasks_path=harness.tasks, ctx=ctx)
     meta = report(result).meta
     assert meta.judge_model == "fake/judge-model"
-    assert meta.judge_usage == {"input_tokens": 100, "output_tokens": 10, "calls": 2}
+    # Two task-check calls (with the skill, baseline) plus Clarity's one, which the run's
+    # shared judge makes in the same evaluate; its reply does not fit the rubric, but the
+    # call was made and used tokens.
+    assert meta.judge_usage == {"input_tokens": 150, "output_tokens": 15, "calls": 3}
 
 
 def test_without_llm_checks_no_judge_is_recorded(tmp_path, harness):
@@ -310,9 +313,9 @@ def test_without_llm_checks_no_judge_is_recorded(tmp_path, harness):
 # --- Task dimensions get the planned task ids (for Quality's assess) ---------------------
 
 
-def test_a_task_dimension_receives_the_planned_task_ids(tmp_path, harness, scorers):
+def test_a_task_dimension_receives_the_planned_task_ids(tmp_path, harness, placeholder):
     # A stand-in task-based dimension (robustness), as Quality's score_runs will use them.
-    scorers("robustness", (
+    placeholder(Dimension.ROBUSTNESS, (
         "from metaskill.evaluate.models import DimensionScore, Dimension, Status\n"
         "def score(skill, config, llm=None):\n"
         "    raise AssertionError('task dimensions are scored from runs')\n"
@@ -341,3 +344,30 @@ def test_a_skill_that_changes_the_outcome_gets_its_lift_and_quality(tmp_path, ha
     assert skill.lift == 1.0
     assert skill.dimensions[Dimension.QUALITY].status is Status.OK and skill.scores.quality == 1.0
     assert "1 task(s), 2 run(s) per task per condition" in skill.dimensions[Dimension.QUALITY].detail
+
+
+
+@pytest.mark.parametrize("dimension", sorted(evaluate.TASK_DIMENSIONS, key=lambda d: d.value),
+                         ids=lambda d: d.value)
+def test_the_placeholder_replaces_built_task_dimensions_too(tmp_path, harness, placeholder, dimension):
+    # Quality and Efficiency are built; a real module would shadow a stand-in of the same
+    # name. The placeholder's own module name does not, and it gets the skill's runs.
+    placeholder(dimension, (
+        "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+        f"def score_runs(skill, config, runs):\n"
+        f"    return DimensionScore(Dimension.{dimension.name}, 0.5, detail=str(len(runs.tests)))\n"))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks)
+    skill = report(result).skills[0]
+    assert getattr(skill.scores, dimension.value) == 0.5
+    assert skill.dimensions[dimension].detail == str(2 * RUNS * 2)
+
+
+def test_task_dimensions_are_skipped_without_a_task_file_even_when_built(tmp_path, placeholder):
+    # score() is for a call without tasks; a task dimension is skipped there, not scored.
+    placeholder(Dimension.QUALITY, (
+        "def score(skill, config, llm=None, **_):\n"
+        "    raise AssertionError('a task dimension is not scored without tasks')\n"))
+    status = report(evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")
+                    ).skills[0].dimensions[Dimension.QUALITY]
+    assert status.status is Status.SKIPPED and "no tasks were given" in status.detail
