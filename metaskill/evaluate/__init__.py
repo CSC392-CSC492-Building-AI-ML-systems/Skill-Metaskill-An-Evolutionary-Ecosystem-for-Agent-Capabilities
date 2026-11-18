@@ -10,7 +10,7 @@ skill is not ranked (evaluate.md 5.2).
 
 With a task file (tasks_path), each skill's tasks run once in the sandbox with a Hermes
 agent (runner.py, hermes_agent.py), and every task-based dimension scores those same runs
-(score_runs). Without one, nothing runs: no model is called, Docker is not asked for, and
+(score_runs). Without one, no task runs: no agent session, Docker is not asked for, and
 the task-based dimensions are skipped. `lift` is left to Quality, which defines it.
 
 The plugin imports judge.py through this package when it registers, so whatever is

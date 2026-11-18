@@ -375,7 +375,7 @@ Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g.
 | `skill_path` | A skill's folder or its `SKILL.md`. For `rank`, a comma separated list (section 2) |
 | `config_path` | Optional JSON file for `EvaluationConfig.from_dict` |
 | `output_path` | Optional; replaces `EvaluationConfig.output_dir` |
-| `tasks_path` | Optional task file (section 4.3) that every skill of the call runs; replaces `EvaluationConfig.tasks_path`. Giving it is the opt-in to real model calls: without it nothing runs |
+| `tasks_path` | Optional task file (section 4.3) that every skill of the call runs; replaces `EvaluationConfig.tasks_path`. Giving it is the opt-in to **task runs** (agent sessions, each real model calls): without it no task runs. Dimensions an LLM judges (Clarity; Safety at the `deep` tier) still call the judge either way |
 
 The command takes the same as `--config FILE` and `--tasks FILE`, in either order: `/metaskill rank s3-sync, gcp-transfer --tasks evals/file-transfer/tasks.json`.
 

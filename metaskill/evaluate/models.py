@@ -199,7 +199,8 @@ class EvaluationConfig:
     sandbox_disk: str = "16m"
     output_dir: Path = Path("evaluation-reports")  # each run writes [timestamp]/ here
     # The task file every skill of the call runs (evaluate.md 4.3); None runs no tasks, and
-    # the task-based dimensions are skipped. Giving it is the opt-in to real model calls.
+    # the task-based dimensions are skipped. Giving it is the opt-in to task runs (agent
+    # sessions); dimensions an LLM judges still call the judge without it.
     tasks_path: Path | None = None
     # The Hermes model and provider the task runs use; empty is the user's default.
     agent_model: str = ""
