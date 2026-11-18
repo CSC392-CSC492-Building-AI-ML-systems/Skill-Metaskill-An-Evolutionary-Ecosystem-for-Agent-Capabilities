@@ -27,10 +27,19 @@ def test_dataset_uses_the_rubric_in_clarity_py():
     assert DATASET["rubric_version"] == RUBRIC_VERSION
 
 
-def test_ten_clear_skills_each_with_one_unclear_variant():
-    assert len(HIGH) == len(LOW) == 10
-    assert len({c["case_id"] for c in CASES}) == len({c["skill"] for c in CASES}) == 20
+def test_eleven_clear_skills_each_with_one_unclear_variant():
+    assert len(HIGH) == len(LOW) == 11
+    assert len({c["case_id"] for c in CASES}) == len({c["skill"] for c in CASES}) == 22
     assert sorted(c["variant_of"] for c in LOW) == sorted(c["case_id"] for c in HIGH)
+
+
+def test_every_criterion_is_degraded_by_some_variant():
+    targeted = {t for c in LOW for t in c["targeted_criteria"]}
+    assert targeted == set(NAMES)
+
+
+def test_actionability_has_a_variant_that_isolates_it():
+    assert any(c["targeted_criteria"] == ["actionability"] for c in LOW)
 
 
 def test_every_skill_folder_has_a_case():
@@ -48,6 +57,7 @@ def test_unclear_case_annotates_exactly_its_targets(case):
     targets = case["targeted_criteria"]
     assert targets and set(targets) <= set(NAMES)
     assert [e["criterion"] for e in case["expectations"]] == targets
+    assert targets == [n for n in NAMES if n in targets]  # rubric order
     assert case["skill"] == BY_ID[case["variant_of"]]["skill"] + "-unclear"
 
 

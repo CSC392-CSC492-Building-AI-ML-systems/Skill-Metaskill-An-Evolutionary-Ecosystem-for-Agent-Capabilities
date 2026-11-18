@@ -14,8 +14,11 @@ from .judge import Criterion, Judge, JudgeError, JudgeUnavailable
 from .models import Dimension, DimensionScore, EvaluationConfig, RubricRating, Skill, Status
 
 # Bumped whenever a criterion, level or the instructions change, since ratings from
-# different rubric versions do not compare.
-RUBRIC_VERSION = "1"
+# different rubric versions do not compare. Recorded as ReportMeta.clarity_rubric_version.
+# 2: added actionability; description/body match in purpose_and_trigger; contradictions in
+# structure_and_flow; verifiability asks for the expected result; readability narrowed to
+# telling the goal at a glance.
+RUBRIC_VERSION = "2"
 
 # Five anchored levels per criterion, worst first; Judge.rate normalises them to
 # 0, 0.25, 0.5, 0.75, 1 (scoring.md, Clarity). Weighted equally.
@@ -23,13 +26,16 @@ CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         "purpose_and_trigger",
         "Does the skill state the problem it solves, when it should be used, and when it "
-        "should not?",
+        "should not? Does the `description` in the frontmatter match what the body "
+        "actually does?",
         (
-            "No purpose or trigger can be found, or they are misleading.",
+            "No purpose or trigger can be found, or they are misleading, for example the "
+            "description promises something the body does not do.",
             "The purpose has to be inferred from the steps; no trigger is given.",
             "The main purpose is identifiable, but when to use it, or its limits, are unclear.",
             "Purpose and trigger are stated; limits (when not to use it) are partial.",
-            "The problem, when to use it, and its relevant limits are explicit.",
+            "The description matches what the body does, and the problem, when to use it, "
+            "and its relevant limits are explicit.",
         ),
     ),
     Criterion(
@@ -59,39 +65,63 @@ CRITERIA: tuple[Criterion, ...] = (
     ),
     Criterion(
         "readability",
-        "Could a person reading the skill tell what it accomplishes, and follow it, "
-        "without an AI summarising or explaining it?",
+        "Can a person tell what the skill accomplishes, from its title, description and "
+        "opening, without an AI summarising it? Jargon, step order and vague steps are "
+        "rated under their own criteria, not here.",
         (
-            "A reader cannot tell what the skill does or what to do.",
-            "The goal is guessable only after reading most of it; the steps are hard to follow.",
-            "A knowledgeable reader can tell what it does and proceed with some guessing.",
-            "The goal is clear and the steps can be followed with minor effort.",
-            "The goal is clear at a glance, and a person could follow it as well as an agent, "
-            "given its stated prerequisites.",
+            "A reader cannot tell what the skill accomplishes.",
+            "The goal is guessable only after reading most of the skill.",
+            "The goal becomes clear from the steps, but not from the title, description or "
+            "opening.",
+            "The goal is clear from the opening, with minor effort.",
+            "The goal is clear at a glance from the title, description and opening.",
         ),
     ),
     Criterion(
         "structure_and_flow",
-        "Are the sections organised, the steps in the order they must be done, and does "
-        "the writing lead naturally from one step to the next?",
+        "Are the sections organised, the steps in the order they must be done, and the "
+        "sections, prose and code consistent with each other? Does the writing lead "
+        "naturally from one step to the next?",
         (
-            "Contradictory, or no order can be found.",
-            "Steps are out of order or scattered across sections.",
-            "The main sequence is understandable, but the reader must work out dependencies.",
-            "Well ordered, with minor jumps.",
-            "Logical sections, prerequisites before the steps that need them, smooth flow.",
+            "No order can be found, or the instructions contradict each other on what to do.",
+            "Steps are out of order or scattered across sections, or one part contradicts "
+            "another (for example the prose and a script disagree).",
+            "The main sequence is understandable, but the reader must work out dependencies "
+            "or reconcile an inconsistency.",
+            "Well ordered and consistent, with minor jumps.",
+            "Logical sections, prerequisites before the steps that need them, no "
+            "contradictions between sections, prose and code, and smooth flow.",
+        ),
+    ),
+    Criterion(
+        "actionability",
+        "Can each step be carried out as written, without guessing? Each step names a "
+        "concrete action, command or value, and each choice has a rule or a default, "
+        "rather than 'as needed', 'handle appropriately' or 'use judgement'.",
+        (
+            "The skill says what to achieve but not what to do.",
+            "Most steps are vague; the reader must invent the method.",
+            "The main steps are concrete, but several choices are left to judgement with no "
+            "rule or default.",
+            "Steps are concrete; one or two choices lack a rule or default.",
+            "Every step names a concrete action, and every choice has a rule or a stated "
+            "default.",
         ),
     ),
     Criterion(
         "verifiability",
-        "Can the reader check the required inputs, meaningful intermediate results, and "
-        "that the task is complete?",
+        "Does the skill say which inputs it needs and what the result should be (its form "
+        "and where it goes), and can the reader check the inputs, meaningful intermediate "
+        "results, and that the task is complete?",
         (
-            "Success cannot be checked from the instructions.",
-            "Almost nothing can be checked.",
-            "Some inputs or intermediate results can be checked.",
-            "Completion can be checked; some intermediate gaps.",
-            "Required inputs, meaningful intermediate checks and completion are observable.",
+            "Neither the expected result nor any way to check it is stated.",
+            "The expected result is vague, and almost nothing can be checked.",
+            "The inputs or the expected result are stated, but only some of them can be "
+            "checked.",
+            "Inputs and the expected result are stated and completion can be checked; some "
+            "intermediate gaps.",
+            "Required inputs and the expected result are stated, with meaningful intermediate "
+            "checks and an observable completion check.",
         ),
     ),
     Criterion(
@@ -119,6 +149,8 @@ INSTRUCTIONS = (
     "explained, not their length.\n"
     "- Longer is not clearer. Extra words are evidence against conciseness and never "
     "evidence for any criterion.\n"
+    "- Asking the user a specific question is a concrete step. Leaving a choice to "
+    "unstated judgement is not.\n"
     "- When a criterion is low because something is missing, quote the nearby text where "
     "it should have been and say in `reason` what is missing. Never quote text that is "
     "not in the skill.\n"

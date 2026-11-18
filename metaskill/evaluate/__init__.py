@@ -108,6 +108,8 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     ranking = rank_results(results, config)
     run_dir, started = _new_run_dir(config)
     versions = safety.versions()
+    from . import clarity  # here, like safety: an import failure costs evaluate only
+    versions["clarity_rubric_version"] = clarity.RUBRIC_VERSION
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
     # to_meta gives the model asked for; this field says which models judged (models.md),
     # so it stays empty when no judge answered.

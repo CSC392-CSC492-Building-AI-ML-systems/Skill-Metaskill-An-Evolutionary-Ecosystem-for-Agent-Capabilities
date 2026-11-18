@@ -59,7 +59,7 @@ Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their 
 
 ### 2.1 Report format **[OPEN]**
 
-This is a temporary structure for the file format. Changes might be made to this (notably, rating needs to be changed in accordance to section 3.3 with regards to clarity.)
+This is a temporary structure for the file format. Changes might be made to this.
 
 The structures below are defined in `models.py`. The Markdown report presents the same fields.
 
@@ -75,6 +75,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `safety_tier` | `static` or `deep` |
 | `scanner_version` | Version of the external safety scanner; empty if it did not run |
 | `checks_version` | Version of our own safety rule set ([evaluate-safety.md](evaluate-safety.md), section 3.2) |
+| `clarity_rubric_version` | Version of the Clarity rubric (`clarity.RUBRIC_VERSION`); ratings from different versions do not compare ([evaluate-clarity.md](evaluate-clarity.md), section 1) |
 
 **Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1; `null` if no tasks ran), a status for each dimension (`dimensions`), and four lists: `tests`, `rubric`, `findings` and `local_warnings`.
 
@@ -109,7 +110,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 
 | Field | Description |
 |---|---|
-| `criterion` | Rubric criterion, e.g. `trigger_specificity`, `step_ordering` |
+| `criterion` | Rubric criterion, e.g. `purpose_and_trigger`, `actionability` ([evaluate-clarity.md](evaluate-clarity.md), section 1) |
 | `rating` | Anchored level for this criterion, normalised to `[0, 1]` |
 | `reason` | Why the judge chose this level |
 | `quote` | Text from the skill supporting the rating |
@@ -149,7 +150,8 @@ Example (abridged):
     "judge_model": "...",
     "safety_tier": "static",
     "scanner_version": "...",
-    "checks_version": "..."
+    "checks_version": "...",
+    "clarity_rubric_version": "2"
   },
   "skills": [{
     "name": "gcp-file-transfer",
@@ -178,7 +180,7 @@ Example (abridged):
       "output": "... (full log: gcp-file-transfer/logs/upload-single-file-with_skill-r1.txt)"
     }],
     "rubric": [{
-      "criterion": "trigger_specificity",
+      "criterion": "purpose_and_trigger",
       "rating": 0.75,
       "reason": "Names the service and action, but not when to prefer it over gsutil directly",
       "quote": "Use this skill to transfer files to and from GCP buckets."
@@ -214,7 +216,7 @@ Each criterion from the Purpose is scored in `[0, 1]` with supporting evidence. 
 |---|---|---|---|
 | **Quality** | Run test tasks, with vs. without the skill | high | Task pass rate and lift over baseline |
 | **Robustness** | Repeat the same tasks `n` times | high | Agreement of outcomes across runs |
-| **Clarity** | LLM judge against a rubric | low | Purpose and trigger, conciseness, plain language, readability, structure, verifiability, failure handling |
+| **Clarity** | LLM judge against a rubric | low | Purpose and trigger, conciseness, plain language, readability, structure, actionability, verifiability, failure handling |
 | **Configuration Cleanliness** | Static + LLM | low | Number and necessity of config entries, documented placeholders, setup steps |
 | **Efficiency** | Measured during task runs | medium | Tokens, wall-clock time, tool calls per task |
 | **Safety** | External scanner + own checks; optional LLM tier | none (static), low (deep) | Malicious content, destructive actions without confirmation, credentials printed or logged, untrusted sources, excess scope |
@@ -231,7 +233,7 @@ Does the skill behave consistently? Run each task `n` times (default 3) and meas
 
 ### 3.3 Clarity (LLM judge)
 
-Fixed rubric with five anchored levels per criterion: purpose and trigger, conciseness, accessible language, readability (a person could follow it as well as an agent), structure and flow, verifiability, and failure handling. The judge must quote the text supporting each rating. The rubric, scoring rule and golden set are in [evaluate-clarity.md](evaluate-clarity.md).
+Fixed rubric with five anchored levels per criterion: purpose and trigger (including whether the description matches the body), conciseness, accessible language, readability (the goal is clear at a glance), structure and flow (including contradictions), actionability (each step can be carried out without guessing), verifiability, and failure handling. The judge must quote the text supporting each rating. The rubric, scoring rule and golden set are in [evaluate-clarity.md](evaluate-clarity.md).
 
 ### 3.4 Configuration Cleanliness
 
@@ -351,6 +353,10 @@ metaskill/evaluate/
                      #   (layout in evaluate-safety.md)
 
   rank.py            # 5: overall score, comparison and ordering
+
+  golden/            # Golden datasets and evaluator-owned comparisons
+    clarity.py       #   loads the Clarity pilot; compares a live report against it
+    synthetic/clarity/  # skills and cases.json (evaluate-clarity.md, section 4)
 ```
 
 Dependencies:
@@ -385,7 +391,8 @@ The tool's response goes into the agent's context, so it holds the table with it
 - Structure checks: fixture skills in `tests/` (one valid, several each broken in one specific way).
 - Judge and quality: fake judge returning canned output; assert report shape, null handling, and score aggregation.
 - Ranking: example tests of ordering and every tie-break, plus checks that the order does not depend on input order and the same input gives the same output; null handling, `partial` safety flags, the recommendation, and cleaning of untrusted names.
-- Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately.
+- Clarity: `test_clarity.py` scores canned judge replies (rubric shape, missing-as-0, `partial`, the rubric version in the report); `test_golden_clarity.py` checks the golden annotations against the rubric, and the pair comparison on synthetic reports.
+- Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately. The Clarity live check against the golden set is run by hand ([evaluate-clarity.md](evaluate-clarity.md), section 4.3).
 
 ## 9. Limitations
 

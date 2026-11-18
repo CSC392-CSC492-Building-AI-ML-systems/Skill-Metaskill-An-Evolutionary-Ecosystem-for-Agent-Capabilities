@@ -202,22 +202,23 @@ When all runs pass but receive different partial-credit scores, agreement stays 
 
 ### Rubric
 
-**[IMPLEMENTED, DRAFT]** The original five criteria (trigger specificity, step ordering, verifiability, failure handling, human followability) are merged with four writing criteria (concise, understandable, readable, clearly framed and structured) into seven, weighted equally. Full anchors are in [`clarity.py`](../../metaskill/evaluate/clarity.py); the merge is explained in [evaluate-clarity.md](../evaluate-clarity.md), section 1.
+**[IMPLEMENTED, DRAFT]** The original five criteria (trigger specificity, step ordering, verifiability, failure handling, human followability) are merged with four writing criteria (concise, understandable, readable, clearly framed and structured) into seven; rubric version 2 adds actionability, for eight weighted equally. Full anchors are in [`clarity.py`](../../metaskill/evaluate/clarity.py); the merge and the version 2 changes are explained in [evaluate-clarity.md](../evaluate-clarity.md), section 1.
 
 | Criterion | 0 | 0.5 | 1 |
 | --- | --- | --- | --- |
-| Purpose and trigger | No purpose or trigger can be found, or they are misleading. | The main purpose is identifiable, but when to use it, or its limits, are unclear. | The problem, when to use it, and its relevant limits are explicit. |
+| Purpose and trigger | No purpose or trigger can be found, or they are misleading (the description promises something the body does not do). | The main purpose is identifiable, but when to use it, or its limits, are unclear. | The description matches the body; the problem, when to use it, and its relevant limits are explicit. |
 | Conciseness | Mostly padding: the instructions are buried. | Noticeable filler or repetition, but the core is easy to find. | Nothing could be cut without losing information. |
 | Accessible language | Dense, unexplained jargon throughout. | Some unexplained terms a basic reader would have to look up. | Plain words; unavoidable terms explained at first use. |
-| Readability | A reader cannot tell what the skill does or what to do. | A knowledgeable reader can proceed with some guessing. | The goal is clear at a glance; a person could follow it as well as an agent. |
-| Structure and flow | Contradictory, or no order can be found. | Main sequence understandable; the reader must work out dependencies. | Logical sections, prerequisites first, smooth flow. |
-| Verifiability | Success cannot be checked from the instructions. | Some inputs or intermediate results can be checked. | Required inputs, meaningful intermediate checks, and completion are observable. |
+| Readability | A reader cannot tell what the skill accomplishes. | The goal becomes clear from the steps, but not from the title, description or opening. | The goal is clear at a glance from the title, description and opening. |
+| Structure and flow | No order can be found, or the instructions contradict each other. | Main sequence understandable; the reader must work out dependencies or reconcile an inconsistency. | Logical sections, prerequisites first, no contradictions between sections, prose and code, smooth flow. |
+| Actionability | The skill says what to achieve but not what to do. | Main steps concrete, but several choices left to judgement with no rule or default. | Every step names a concrete action; every choice has a rule or a stated default. |
+| Verifiability | Neither the expected result nor any way to check it is stated. | The inputs or the expected result are stated, but only some can be checked. | Required inputs and the expected result are stated, with meaningful intermediate checks and an observable completion check. |
 | Failure handling | Relevant failures are ignored or mishandled. | Common failures are covered, with meaningful gaps. | Relevant failures and recovery or stopping behaviour are clear. |
 
 Each criterion has five levels, normalized to `0`, `0.25`, `0.5`, `0.75`, and `1`; the `0.25` and `0.75` anchors are in `clarity.py`.
 
 ```text
-C = (sum of criterion ratings) / 7, an unrated criterion counting as 0
+C = (sum of criterion ratings) / 8, an unrated criterion counting as 0
 ```
 
 **[PROPOSED]** An unrated criterion (no verifiable quote) counts as 0 and makes the result `partial`, rather than being left out of the mean; see evaluate-clarity.md, section 2.

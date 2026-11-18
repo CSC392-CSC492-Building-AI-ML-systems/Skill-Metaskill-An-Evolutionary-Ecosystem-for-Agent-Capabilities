@@ -1,17 +1,18 @@
 {
-  "schema_version": "pilot-0.2",
+  "schema_version": "pilot-0.3",
   "review_status": "draft",
   "reviewer": null,
   "case_family": "clarity",
-  "rubric_version": "1",
-  "notes": "Draft: ten synthetic high-clarity skills and ten unclear variants, one per skill, for the merged seven-criterion Clarity rubric (docs/evaluate-clarity.md). Not independently reviewed; for team analysis only.",
+  "rubric_version": "2",
+  "notes": "Draft: eleven synthetic high-clarity skills and eleven unclear variants, one per skill, for the eight-criterion Clarity rubric, version 2 (docs/evaluate-clarity.md). Not independently reviewed; for team analysis only.",
   "criteria": {
-    "purpose_and_trigger": "The problem the skill solves, when to use it, and when not to are stated. (User criterion 4, problem part; previous rubric: trigger specificity.)",
+    "purpose_and_trigger": "The problem the skill solves, when to use it, and when not to are stated, and the frontmatter description matches what the body does. (User criterion 4, problem part; previous rubric: trigger specificity.)",
     "conciseness": "Says what it needs to and stops. No padding, repetition, or long preambles. (User criterion 1.)",
     "accessible_language": "A reader with basic subject knowledge can follow it; jargon, acronyms and scientific names are avoided or explained at first use. (User criterion 2.)",
-    "readability": "A person can tell what the skill accomplishes, and follow it, without an AI summarising or explaining it. (User criterion 3; previous rubric: human followability.)",
-    "structure_and_flow": "Sections are organised, steps are in the order they must be done, and the writing flows. (User criterion 4, structure part; previous rubric: step ordering.)",
-    "verifiability": "Required inputs, intermediate results and completion can be checked. (Previous rubric.)",
+    "readability": "A person can tell what the skill accomplishes from its title, description and opening, without an AI summarising it. Jargon, order and vague steps are rated elsewhere. (User criterion 3, narrowed in rubric version 2.)",
+    "structure_and_flow": "Sections are organised, steps are in the order they must be done, sections, prose and code do not contradict each other, and the writing flows. (User criterion 4, structure part; previous rubric: step ordering.)",
+    "actionability": "Each step can be carried out as written: it names a concrete action, command or value, and each choice has a rule or a default. (Previous rubric: 'ordered and actionable steps'; added in rubric version 2.)",
+    "verifiability": "The required inputs and the expected result (its form and where it goes) are stated, and inputs, intermediate results and completion can be checked. (Previous rubric; tightened in rubric version 2.)",
     "failure_handling": "Relevant failures and the recovery or stopping behaviour are clear. (Previous rubric.)"
   },
   "cases": [
@@ -27,10 +28,12 @@
           "expectation_id": "csv-dedupe-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "When to use and when not to use are both listed"
+            "When to use and when not to use are both listed",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user asks to remove duplicates from a CSV file."
+            "The user asks to remove duplicates from a CSV file.",
+            "description: Remove duplicate rows from a CSV file and report how many were removed."
           ],
           "rationale": "Trigger and limits (exact matches only, CSV only) are explicit."
         },
@@ -61,12 +64,12 @@
           "expectation_id": "csv-dedupe-readability",
           "criterion": "readability",
           "expected_properties": [
-            "Title, description and first line agree on what the skill does"
+            "Outcome and the safety guarantee are in the first two lines"
           ],
           "evidence_quotes": [
-            "description: Remove duplicate rows from a CSV file and report how many were removed."
+            "The original file is never changed; the cleaned copy is written next to it."
           ],
-          "rationale": "A reader knows the outcome from the metadata alone."
+          "rationale": "A reader knows what the skill does, and that it is safe, before any step."
         },
         {
           "expectation_id": "csv-dedupe-structure_and_flow",
@@ -78,6 +81,18 @@
             "Confirm the file path with the user and check that it exists."
           ],
           "rationale": "Each step depends only on the ones before it."
+        },
+        {
+          "expectation_id": "csv-dedupe-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Each choice has a default",
+            "The exact command to run is given"
+          ],
+          "evidence_quotes": [
+            "Default to every column."
+          ],
+          "rationale": "The one real choice (which columns) has a stated default, and the script is given in full."
         },
         {
           "expectation_id": "csv-dedupe-verifiability",
@@ -116,10 +131,12 @@
           "expectation_id": "git-undo-last-commit-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Concrete situations that trigger the skill"
+            "Concrete situations that trigger the skill",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user committed too early, to the wrong branch, or with a bad message, and wants to redo it."
+            "The user committed too early, to the wrong branch, or with a bad message, and wants to redo it.",
+            "description: Undo the most recent Git commit while keeping the changes, as long as it has not been pushed."
           ],
           "rationale": "Trigger is specific; pushed commits are excluded."
         },
@@ -169,6 +186,18 @@
           "rationale": "Check, confirm, act, verify."
         },
         {
+          "expectation_id": "git-undo-last-commit-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "One command per step",
+            "What to do for each possible output is stated"
+          ],
+          "evidence_quotes": [
+            "If the first line shows `[ahead 1]` (or more), the commit is local only."
+          ],
+          "rationale": "Even the check's output is interpreted, so the agent never has to guess what it means."
+        },
+        {
           "expectation_id": "git-undo-last-commit-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -206,10 +235,12 @@
           "expectation_id": "meeting-action-items-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Trigger phrased in the user's words"
+            "Trigger phrased in the user's words",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user shares a transcript or notes and asks for a summary, decisions, follow-ups, or \"what do I need to do\"."
+            "The user shares a transcript or notes and asks for a summary, decisions, follow-ups, or \"what do I need to do\".",
+            "description: Turn a meeting transcript or rough notes into a short list of decisions and action items."
           ],
           "rationale": "Clear trigger; full-record requests excluded."
         },
@@ -258,6 +289,18 @@
           "rationale": "Read, extract three lists, format."
         },
         {
+          "expectation_id": "meeting-action-items-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Output format given as a template",
+            "Missing owners and dates have a fixed rule"
+          ],
+          "evidence_quotes": [
+            "If no owner or date was said, write \"unassigned\" or \"no date\". Do not invent one."
+          ],
+          "rationale": "The judgement calls a summariser usually makes are replaced by explicit rules."
+        },
+        {
           "expectation_id": "meeting-action-items-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -294,10 +337,12 @@
           "expectation_id": "backyard-bird-log-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Two triggers: identify and log"
+            "Two triggers: identify and log",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user describes a bird they saw and wants to know what it was."
+            "The user describes a bird they saw and wants to know what it was.",
+            "description: Help the user identify a bird they saw from a description and add the sighting to their bird log."
           ],
           "rationale": "Trigger is concrete; injured birds are excluded."
         },
@@ -348,6 +393,18 @@
           "rationale": "Logging only happens after the user confirms."
         },
         {
+          "expectation_id": "backyard-bird-log-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Exactly which details to ask for",
+            "What to do when no suggestion matches"
+          ],
+          "evidence_quotes": [
+            "If none do, ask about the feature that would separate them best, then try again."
+          ],
+          "rationale": "Each step says what to ask or write, including the loop when nothing matches."
+        },
+        {
           "expectation_id": "backyard-bird-log-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -384,10 +441,12 @@
           "expectation_id": "image-resize-web-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Print use excluded with a reason"
+            "Print use excluded with a reason",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The images are for printing. Print needs the full-size originals."
+            "The images are for printing. Print needs the full-size originals.",
+            "description: Shrink a folder of photos so they load quickly on a website, without changing the originals."
           ],
           "rationale": "Limits are explicit."
         },
@@ -437,6 +496,18 @@
           "rationale": "Setup, action, verification."
         },
         {
+          "expectation_id": "image-resize-web-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Default width given",
+            "Output folder named"
+          ],
+          "evidence_quotes": [
+            "Make an output folder next to the original one, named `<folder>-web`."
+          ],
+          "rationale": "Every value the command needs (width, quality, folder) is fixed or defaulted."
+        },
+        {
           "expectation_id": "image-resize-web-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -473,10 +544,12 @@
           "expectation_id": "pdf-merge-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Out-of-scope use named"
+            "Out-of-scope use named",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user wants to edit text inside a PDF. Merging does not change page content."
+            "The user wants to edit text inside a PDF. Merging does not change page content.",
+            "description: Combine several PDF files into one, in the order the user chooses."
           ],
           "rationale": "Limits are explicit."
         },
@@ -526,6 +599,18 @@
           "rationale": "Inputs fixed before acting."
         },
         {
+          "expectation_id": "pdf-merge-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Default output name",
+            "Order confirmed by a specific question"
+          ],
+          "evidence_quotes": [
+            "Default to `merged.pdf` in the same folder as the first input."
+          ],
+          "rationale": "Both choices (order, name) have a rule or default."
+        },
+        {
           "expectation_id": "pdf-merge-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -562,10 +647,12 @@
           "expectation_id": "ab-test-readout-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Trigger and scope (two versions, counts only)"
+            "Trigger and scope (two versions, counts only)",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user has visitor and conversion counts for two versions and wants to know which one won."
+            "The user has visitor and conversion counts for two versions and wants to know which one won.",
+            "description: Explain in plain language whether an A/B test result shows a real difference between two versions."
           ],
           "rationale": "Unsupported cases are excluded."
         },
@@ -616,6 +703,18 @@
           "rationale": "Inputs, computation, interpretation, limits."
         },
         {
+          "expectation_id": "ab-test-readout-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Exact wording for each outcome",
+            "What to report besides pass or fail"
+          ],
+          "evidence_quotes": [
+            "Always state the size of the change (for example \"+1.2 percentage points\"), not just whether it passed."
+          ],
+          "rationale": "The interpretation step gives the agent the sentences to use, not a judgement to make."
+        },
+        {
           "expectation_id": "ab-test-readout-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -652,10 +751,12 @@
           "expectation_id": "recipe-scaling-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Trigger stated; substitution excluded"
+            "Trigger stated; substitution excluded",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user has a recipe and wants it for a different number of people."
+            "The user has a recipe and wants it for a different number of people.",
+            "description: Adjust a recipe's ingredient amounts for a different number of servings."
           ],
           "rationale": "Clear trigger and limit."
         },
@@ -704,6 +805,18 @@
           "rationale": "Main path first, edge cases second."
         },
         {
+          "expectation_id": "recipe-scaling-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Formula for the factor",
+            "Rounding rule per unit"
+          ],
+          "evidence_quotes": [
+            "Spoons and cups to the nearest ¼ (so 1.4 cups becomes 1½ cups)."
+          ],
+          "rationale": "Rounding, the step most often left to taste, has a rule for each unit."
+        },
+        {
           "expectation_id": "recipe-scaling-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -740,10 +853,12 @@
           "expectation_id": "markdown-link-check-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Login-protected sites excluded with a reason"
+            "Login-protected sites excluded with a reason",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The site is behind a login. The check cannot see those pages and would report them all as broken."
+            "The site is behind a login. The check cannot see those pages and would report them all as broken.",
+            "description: Find broken links in a folder of Markdown files and report where each one is."
           ],
           "rationale": "Limits are explicit."
         },
@@ -792,6 +907,18 @@
           "rationale": "Ordered and complete."
         },
         {
+          "expectation_id": "markdown-link-check-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Default folder",
+            "Flag for the optional web check"
+          ],
+          "evidence_quotes": [
+            "Ask which folder to check. Default to the current folder."
+          ],
+          "rationale": "Both choices have a default or a named flag."
+        },
+        {
           "expectation_id": "markdown-link-check-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -829,10 +956,12 @@
           "expectation_id": "monthly-spending-review-purpose_and_trigger",
           "criterion": "purpose_and_trigger",
           "expected_properties": [
-            "Advice requests excluded"
+            "Advice requests excluded",
+            "The description matches what the body does"
           ],
           "evidence_quotes": [
-            "The user wants investment, tax, or debt advice. Say this skill only summarizes past spending."
+            "The user wants investment, tax, or debt advice. Say this skill only summarizes past spending.",
+            "description: Sort a month of bank transactions into categories and show where the money went."
           ],
           "rationale": "Limits are explicit."
         },
@@ -881,6 +1010,18 @@
           "rationale": "Ordered steps lead to a shown output."
         },
         {
+          "expectation_id": "monthly-spending-review-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Fixed category list with an example mapping",
+            "Unclear columns resolved by a specific question"
+          ],
+          "evidence_quotes": [
+            "Use the description to decide (for example \"UBER\" goes under Transport)."
+          ],
+          "rationale": "Categorising is driven by a rule and an example, not left open."
+        },
+        {
           "expectation_id": "monthly-spending-review-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
@@ -906,6 +1047,110 @@
       "limitations": "Mentions 'debit column' once in failure handling; annotators consider this acceptable because bank exports use that label."
     },
     {
+      "case_id": "clarity-high-011",
+      "skill": "photo-rename-by-date",
+      "skill_path": "skills/photo-rename-by-date/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "high",
+      "expectations": [
+        {
+          "expectation_id": "photo-rename-by-date-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Scans and screenshots excluded with a reason",
+            "The description matches what the body does"
+          ],
+          "evidence_quotes": [
+            "The photos are scans or screenshots. They usually have no \"date taken\" stored in them, so the new names would be wrong.",
+            "description: Rename a folder of photos to the date and time each was taken, so they sort in order."
+          ],
+          "rationale": "Trigger and limit are explicit, and the description is what the steps do."
+        },
+        {
+          "expectation_id": "photo-rename-by-date-conciseness",
+          "criterion": "conciseness",
+          "expected_properties": [
+            "One sentence explains the only non-obvious flag"
+          ],
+          "evidence_quotes": [
+            "The `%-c` part adds `-1`, `-2` to photos taken in the same second, so no file is overwritten."
+          ],
+          "rationale": "Only the part of the command a reader could not guess is explained."
+        },
+        {
+          "expectation_id": "photo-rename-by-date-accessible_language",
+          "criterion": "accessible_language",
+          "expected_properties": [
+            "'Date taken' used instead of metadata or EXIF terminology"
+          ],
+          "evidence_quotes": [
+            "They usually have no \"date taken\" stored in them"
+          ],
+          "rationale": "The word EXIF never appears in the prose."
+        },
+        {
+          "expectation_id": "photo-rename-by-date-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "Problem and result with an example name in the opening"
+          ],
+          "evidence_quotes": [
+            "This skill renames them to the date and time they were taken, such as `2026-05-14_093012.jpg`"
+          ],
+          "rationale": "The goal is clear from the opening alone."
+        },
+        {
+          "expectation_id": "photo-rename-by-date-structure_and_flow",
+          "criterion": "structure_and_flow",
+          "expected_properties": [
+            "Prerequisite, copy, preview, confirm, rename"
+          ],
+          "evidence_quotes": [
+            "Show the user the first ten lines of the preview and ask them to confirm."
+          ],
+          "rationale": "Nothing changes until the preview is confirmed."
+        },
+        {
+          "expectation_id": "photo-rename-by-date-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Exact commands for preview and rename",
+            "Working copy named"
+          ],
+          "evidence_quotes": [
+            "Copy it to a new folder named `<folder>-renamed` and work only on the copy.",
+            "Rename, using the same command with `-filename` in place of `-testname`:"
+          ],
+          "rationale": "Every step is a concrete action; name clashes are handled by the command."
+        },
+        {
+          "expectation_id": "photo-rename-by-date-verifiability",
+          "criterion": "verifiability",
+          "expected_properties": [
+            "Expected name format shown",
+            "File counts compared"
+          ],
+          "evidence_quotes": [
+            "The renamed folder has the same number of files as the original folder."
+          ],
+          "rationale": "Completion is countable and the expected names are shown by example."
+        },
+        {
+          "expectation_id": "photo-rename-by-date-failure_handling",
+          "criterion": "failure_handling",
+          "expected_properties": [
+            "Missing dates and wrong time zones handled"
+          ],
+          "evidence_quotes": [
+            "Leave it as it is and list it for the user."
+          ],
+          "rationale": "Both realistic failures have a recovery."
+        }
+      ],
+      "limitations": "Pair for actionability: its variant keeps every other section and changes only the steps and the install check."
+    },
+    {
       "case_id": "clarity-low-001",
       "skill": "csv-dedupe-unclear",
       "skill_path": "skills/csv-dedupe-unclear/SKILL.md",
@@ -914,11 +1159,24 @@
       "expected_label": "low",
       "variant_of": "clarity-high-001",
       "targeted_criteria": [
-        "conciseness",
         "purpose_and_trigger",
+        "conciseness",
+        "actionability",
         "verifiability"
       ],
       "expectations": [
+        {
+          "expectation_id": "csv-dedupe-unclear-purpose_and_trigger",
+          "criterion": "purpose_and_trigger",
+          "expected_properties": [
+            "Description does not say the skill removes duplicates",
+            "No when-to-use section"
+          ],
+          "evidence_quotes": [
+            "A comprehensive and robust skill for working with CSV data in many different situations."
+          ],
+          "rationale": "A reader cannot tell from the metadata what the skill does."
+        },
         {
           "expectation_id": "csv-dedupe-unclear-conciseness",
           "criterion": "conciseness",
@@ -932,16 +1190,16 @@
           "rationale": "About two thirds of the text is filler around one vague step."
         },
         {
-          "expectation_id": "csv-dedupe-unclear-purpose_and_trigger",
-          "criterion": "purpose_and_trigger",
+          "expectation_id": "csv-dedupe-unclear-actionability",
+          "criterion": "actionability",
           "expected_properties": [
-            "Description does not say the skill removes duplicates",
-            "No when-to-use section"
+            "The one choice is left open with no default",
+            "The command is 'something like' this"
           ],
           "evidence_quotes": [
-            "A comprehensive and robust skill for working with CSV data in many different situations."
+            "You may want to consider which columns matter. Or you may not. It depends."
           ],
-          "rationale": "A reader cannot tell from the metadata what the skill does."
+          "rationale": "The reader is told a choice exists but not how to make it."
         },
         {
           "expectation_id": "csv-dedupe-unclear-verifiability",
@@ -986,12 +1244,12 @@
           "expectation_id": "git-undo-last-commit-unclear-readability",
           "criterion": "readability",
           "expected_properties": [
-            "The pushed-commit check is stated as jargon, not an action"
+            "Description and opening state the goal only in Git internals"
           ],
           "evidence_quotes": [
-            "Verify ref divergence against the tracking ref"
+            "description: Soft-reset HEAD to its first parent, preserving the index."
           ],
-          "rationale": "The reader cannot tell what to actually do."
+          "rationale": "A basic Git user cannot tell from the opening that this undoes the last commit and keeps the work."
         }
       ],
       "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
@@ -1006,8 +1264,9 @@
       "variant_of": "clarity-high-003",
       "targeted_criteria": [
         "purpose_and_trigger",
-        "structure_and_flow",
         "readability",
+        "structure_and_flow",
+        "actionability",
         "failure_handling"
       ],
       "expectations": [
@@ -1024,6 +1283,17 @@
           "rationale": "Purpose must be inferred."
         },
         {
+          "expectation_id": "meeting-action-items-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "Title and description do not say what is produced"
+          ],
+          "evidence_quotes": [
+            "# Meeting Things"
+          ],
+          "rationale": "Nothing in the opening says the skill produces decisions and action items."
+        },
+        {
           "expectation_id": "meeting-action-items-unclear-structure_and_flow",
           "criterion": "structure_and_flow",
           "expected_properties": [
@@ -1036,15 +1306,17 @@
           "rationale": "Format comes before content; decisions come last."
         },
         {
-          "expectation_id": "meeting-action-items-unclear-readability",
-          "criterion": "readability",
+          "expectation_id": "meeting-action-items-unclear-actionability",
+          "criterion": "actionability",
           "expected_properties": [
-            "Vague, hedged definitions"
+            "Choices left to judgement",
+            "Hedged formatting instructions"
           ],
           "evidence_quotes": [
-            "Things agreed, roughly."
+            "might be a decision or might not, use judgement",
+            "Bold the names maybe."
           ],
-          "rationale": "A reader cannot tell what counts."
+          "rationale": "The reader must decide what counts and how to format it."
         },
         {
           "expectation_id": "meeting-action-items-unclear-failure_handling",
@@ -1139,6 +1411,7 @@
       "targeted_criteria": [
         "purpose_and_trigger",
         "readability",
+        "actionability",
         "verifiability",
         "failure_handling"
       ],
@@ -1159,23 +1432,36 @@
           "expectation_id": "pdf-merge-unclear-readability",
           "criterion": "readability",
           "expected_properties": [
-            "Vague instruction"
+            "Title and only line of prose do not say what the skill does"
           ],
           "evidence_quotes": [
             "Handle the PDFs as needed."
           ],
-          "rationale": "A reader cannot tell what the skill does."
+          "rationale": "A reader must read the command to learn it merges files."
+        },
+        {
+          "expectation_id": "pdf-merge-unclear-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Vague instructions around a single command"
+          ],
+          "evidence_quotes": [
+            "Handle the PDFs as needed.",
+            "Adjust as appropriate."
+          ],
+          "rationale": "Neither line says what to do."
         },
         {
           "expectation_id": "pdf-merge-unclear-verifiability",
           "criterion": "verifiability",
           "expected_properties": [
+            "Expected result named only inside the command",
             "No check of the result"
           ],
           "evidence_quotes": [
-            "Adjust as appropriate."
+            "qpdf --empty --pages *.pdf -- out.pdf"
           ],
-          "rationale": "Nothing to verify."
+          "rationale": "Nothing says what the output should contain or how to check it."
         },
         {
           "expectation_id": "pdf-merge-unclear-failure_handling",
@@ -1241,6 +1527,7 @@
       "variant_of": "clarity-high-008",
       "targeted_criteria": [
         "conciseness",
+        "actionability",
         "failure_handling"
       ],
       "expectations": [
@@ -1255,6 +1542,18 @@
             "The history of recipe scaling is actually quite interesting."
           ],
           "rationale": "Padding buries a single instruction."
+        },
+        {
+          "expectation_id": "recipe-scaling-unclear-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "No rounding rule",
+            "Instincts in place of rules"
+          ],
+          "evidence_quotes": [
+            "trust your instincts"
+          ],
+          "rationale": "The reader is told to multiply but not how to turn 1.4 cups into something measurable."
         },
         {
           "expectation_id": "recipe-scaling-unclear-failure_handling",
@@ -1279,10 +1578,23 @@
       "expected_label": "low",
       "variant_of": "clarity-high-009",
       "targeted_criteria": [
+        "actionability",
         "verifiability",
         "failure_handling"
       ],
       "expectations": [
+        {
+          "expectation_id": "markdown-link-check-unclear-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Steps do not say how",
+            "No default folder"
+          ],
+          "evidence_quotes": [
+            "Check the links in it."
+          ],
+          "rationale": "The steps do not connect to the script or say which folder to use."
+        },
         {
           "expectation_id": "markdown-link-check-unclear-verifiability",
           "criterion": "verifiability",
@@ -1318,8 +1630,9 @@
       "variant_of": "clarity-high-010",
       "targeted_criteria": [
         "purpose_and_trigger",
+        "readability",
         "structure_and_flow",
-        "readability"
+        "actionability"
       ],
       "expectations": [
         {
@@ -1334,6 +1647,17 @@
           "rationale": "No trigger or limits."
         },
         {
+          "expectation_id": "monthly-spending-review-unclear-readability",
+          "criterion": "readability",
+          "expected_properties": [
+            "No statement of what the skill accomplishes; the first line is already a step"
+          ],
+          "evidence_quotes": [
+            "Open the file and find the right columns, which vary,"
+          ],
+          "rationale": "A reader has to read the whole paragraph to learn the goal."
+        },
+        {
           "expectation_id": "monthly-spending-review-unclear-structure_and_flow",
           "criterion": "structure_and_flow",
           "expected_properties": [
@@ -1345,15 +1669,45 @@
           "rationale": "No sections or step boundaries."
         },
         {
-          "expectation_id": "monthly-spending-review-unclear-readability",
-          "criterion": "readability",
+          "expectation_id": "monthly-spending-review-unclear-actionability",
+          "criterion": "actionability",
           "expected_properties": [
-            "Hedged, open-ended instructions"
+            "Choices left open",
+            "Edge cases 'handled' without a rule"
           ],
           "evidence_quotes": [
-            "sorted however makes sense"
+            "sorted however makes sense",
+            "in which case handle that"
           ],
-          "rationale": "A reader must guess at most choices."
+          "rationale": "Most choices have no rule or default."
+        }
+      ],
+      "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
+    },
+    {
+      "case_id": "clarity-low-011",
+      "skill": "photo-rename-by-date-unclear",
+      "skill_path": "skills/photo-rename-by-date-unclear/SKILL.md",
+      "source_type": "synthetic",
+      "stage": "original",
+      "expected_label": "low",
+      "variant_of": "clarity-high-011",
+      "targeted_criteria": [
+        "actionability"
+      ],
+      "expectations": [
+        {
+          "expectation_id": "photo-rename-by-date-unclear-actionability",
+          "criterion": "actionability",
+          "expected_properties": [
+            "Every step is a goal, not an action",
+            "Choices and clashes left to judgement"
+          ],
+          "evidence_quotes": [
+            "Set up a working copy of the folder in whatever way makes sense.",
+            "Do the renaming with ExifTool, dealing with any name clashes appropriately."
+          ],
+          "rationale": "Same purpose, structure, checks and failure handling as the clear twin: isolates actionability."
         }
       ],
       "limitations": "Controlled variant: only the targeted criteria are annotated. Its clear twin should rate higher on each of them and on overall clarity."
