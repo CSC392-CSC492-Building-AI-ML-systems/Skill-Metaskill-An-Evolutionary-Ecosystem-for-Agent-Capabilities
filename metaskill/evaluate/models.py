@@ -239,7 +239,7 @@ class EvaluationConfig:
         return hashlib.sha256(encoded).hexdigest()[:16]
 
     def to_meta(self, timestamp: str, skills: list[str], scanner_version: str,
-                checks_version: str) -> ReportMeta:
+                checks_version: str, clarity_rubric_version: str = "") -> ReportMeta:
         return ReportMeta(
             timestamp=timestamp,
             skills=skills,
@@ -249,6 +249,7 @@ class EvaluationConfig:
             safety_tier=self.safety_tier,
             scanner_version=scanner_version,
             checks_version=checks_version,
+            clarity_rubric_version=clarity_rubric_version,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -389,6 +390,7 @@ class ReportMeta:
     agent_model: str = ""
     # Tokens and calls the judge used ({input_tokens, output_tokens, calls}); empty if none.
     judge_usage: dict[str, int] = field(default_factory=dict)
+    clarity_rubric_version: str = ""  # clarity.RUBRIC_VERSION; ratings across versions differ
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -402,6 +404,7 @@ class ReportMeta:
             "checks_version": self.checks_version,
             "agent_model": self.agent_model,
             "judge_usage": dict(self.judge_usage),
+            "clarity_rubric_version": self.clarity_rubric_version,
         }
 
     @classmethod
@@ -418,6 +421,7 @@ class ReportMeta:
             checks_version=data.get("checks_version", ""),
             agent_model=data.get("agent_model", ""),
             judge_usage=dict(data.get("judge_usage") or {}),
+            clarity_rubric_version=data.get("clarity_rubric_version", ""),
         )
 
 

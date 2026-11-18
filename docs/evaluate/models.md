@@ -69,7 +69,7 @@ Settings for one `evaluate` or `rank` call.
 | `agent_model`, `agent_provider` | `""` | The Hermes model and provider the task sessions use; empty is the user's Hermes default |
 
 - `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir` and `tasks_path`, since where the reports and the task file are does not affect scores (the tasks do, and the agent model is hashed). The result becomes `ReportMeta.config`.
-- `to_meta(timestamp, skills, scanner_version, checks_version)` builds the `ReportMeta` for a run.
+- `to_meta(timestamp, skills, scanner_version, checks_version, clarity_rubric_version="")` builds the `ReportMeta` for a run.
 - `from_dict` re-validates `weights` after loading them.
 
 ### `Check`
@@ -113,7 +113,7 @@ What every scoring module's `score(skill, ...)` returns.
 | `detail` | What was missing or went wrong when `status` is not `ok` |
 | `rubric` | `RubricRating`s, for Clarity |
 | `findings` | `Finding`s, for Safety and Configuration Cleanliness |
-| `judge_model`, `judge_usage` | The model(s) an LLM judged this dimension with (`provider/model`, `, `-joined) and their tokens and calls; empty when no model ran. Evaluate merges every dimension's into `ReportMeta.judge_model`/`judge_usage`, with the task runs' judge. Set by Safety's deep tier; meant for Clarity too |
+| `judge_model`, `judge_usage` | The model(s) an LLM judged this dimension with (`provider/model`, `, `-joined) and their tokens and calls; empty when no model ran. Evaluate merges every dimension's into `ReportMeta.judge_model`/`judge_usage`, with the task runs' judge and the run's shared judge. For a dimension that builds a judge of its own (Safety's deep tier); one that uses the shared judge (Clarity) leaves them empty, since evaluate totals the shared judge once |
 
 Invariant: `value` is `None` **exactly** when `status` is `skipped` or `error`. This keeps a skill from being penalised for a missing key or backend (evaluate.md 2.1). `partial` still has a value. `to_status()` returns the `DimensionStatus` part kept in the report.
 
@@ -137,7 +137,7 @@ One Clarity rubric criterion (evaluate.md 3.3), produced by `Judge.rate`.
 
 | Field | Description |
 |---|---|
-| `criterion` | e.g. `trigger_specificity` |
+| `criterion` | e.g. `purpose_and_trigger` |
 | `rating` | Anchored level normalised to `[0, 1]` |
 | `reason` | Why the judge chose this level |
 | `quote` | Verified text from the skill |
@@ -194,7 +194,8 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `scanner_version` | External scanner version; empty if it did not run |
 | `checks_version` | Version of our own safety rule set |
 | `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
-| `judge_usage` | Tokens and calls the judge(s) used (`input_tokens`, `output_tokens`, `calls`): the task runs' LLM checks plus any dimension an LLM judged (`DimensionScore.judge_usage`); empty if no model judged |
+| `judge_usage` | Tokens and calls the judge(s) used (`input_tokens`, `output_tokens`, `calls`): the task runs' LLM checks, the run's shared judge (Clarity), and any dimension that built its own (`DimensionScore.judge_usage`, the deep safety tier); empty if no model judged |
+| `clarity_rubric_version` | `clarity.RUBRIC_VERSION` for the run; empty in reports written before it was recorded |
 
 ### `Report`
 
