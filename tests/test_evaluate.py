@@ -303,3 +303,12 @@ def test_importing_this_package_does_not_import_safety():
             "sys.exit('metaskill.evaluate.safety' in sys.modules)")
     root = Path(__file__).resolve().parent.parent
     assert subprocess.run([sys.executable, "-c", code], cwd=root).returncode == 0
+
+
+def test_a_clarity_module_that_does_not_import_leaves_the_rubric_version_empty(monkeypatch):
+    from metaskill.evaluate.clarity import RUBRIC_VERSION
+
+    assert evaluate._clarity_rubric_version() == RUBRIC_VERSION
+    monkeypatch.delattr(evaluate, "clarity", raising=False)
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate.clarity", None)  # import raises
+    assert evaluate._clarity_rubric_version() == ""

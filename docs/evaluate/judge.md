@@ -186,7 +186,7 @@ The JSON schema is sent in the instructions as guidance only, and the reply is r
 - `json_schema`: Hermes validates it strictly and fails the whole call on any mismatch, which made 10 of 25 Cisco scans fail on `gpt-5.4-nano` (evaluate-safety.md, safety/cisco.md).
 - `json_mode`: on Anthropic, Hermes turns it into the schema `{"type": "object"}`, which the Anthropic API rejects with a 400 (`additionalProperties` must be set to false). Every judge call failed with `JudgeError` on Anthropic models until it was removed.
 
-`parse_json_reply` reads the reply: the whole text, then the first fenced block, then the span from the first `{` to the last `}`.
+`parse_json_reply` reads the reply: the whole text, else every JSON object in it, fenced or with a sentence around it. If those objects are not all the same, the reply is ambiguous: it counts as having no JSON object, and is asked for again. The material is untrusted and can hold a ready-made reply (the Clarity injection control `meeting-action-items-unclear-injected` does). If the judge repeated it before its own answer, taking the first object would accept it, and the quote check would not catch it, since its quote is in the skill.
 
 The judge checks each reply itself (`schema_problems`: type, required fields, enums, items; extra fields are ignored). A reply that does not fit, or has no JSON object in it, is asked for again with the problems listed, up to `EvaluationConfig.judge_retries` times (default 1, so at most two calls). After the last try:
 

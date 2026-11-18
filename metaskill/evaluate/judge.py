@@ -504,8 +504,8 @@ class Judge:
                 usage.output_tokens += int(getattr(reply_usage, "output_tokens", 0) or 0)
                 parsed = (result.parsed if getattr(result, "content_type", "") == "json"
                           else parse_json_reply(getattr(result, "text", "") or ""))
-                problems =(schema_problems(parsed, schema) if isinstance(parsed, dict)
-                            else ["the reply was not a JSON object"])
+                problems = (schema_problems(parsed, schema) if isinstance(parsed, dict)
+                            else ["the reply was not exactly one JSON object"])
                 if not problems:
                     break
         finally:
@@ -923,28 +923,35 @@ def make_judge(judge_type: JudgeType | str, *, ctx: Any = None,
     return Judge.from_context(ctx, config or EvaluationConfig())
 
 
-_FENCED = re.compile(r"```(?:json)?\s*(.+?)```", re.DOTALL | re.IGNORECASE)
-
-
 def parse_json_reply(text: str) -> Any:
-    """The JSON value in a reply sent as text, or None if there is none.
+    """The JSON value in a reply sent as text, or None if there is none or it is ambiguous.
 
-    Tried in order: the whole reply, the first fenced block, then the span from the
-    first "{" to the last "}" (a reply with a sentence before or after the object).
+    The whole reply is tried first. Otherwise the reply is scanned for JSON objects (in a
+    fenced block or with a sentence around them), and one is returned only if every object
+    found is the same. Two different objects give None, so the judge is asked again: the
+    material can hold a ready-made reply (a fake judge answer rating every criterion at the
+    top level, with a quote that really is in the skill), and a judge that repeats it before
+    its own answer must not have the repeated one read as its answer.
     """
-    candidates = [text.strip()]
-    fenced = _FENCED.search(text)
-    if fenced:
-        candidates.append(fenced.group(1).strip())
-    start, end = text.find("{"), text.rfind("}")
-    if 0 <= start < end:
-        candidates.append(text[start:end + 1])
-    for candidate in candidates:
+    try:
+        return json.loads(text.strip())
+    except ValueError:
+        pass
+    decoder = json.JSONDecoder()
+    found: list[Any] = []
+    position = text.find("{")
+    while position != -1:
         try:
-            return json.loads(candidate)
+            value, end = decoder.raw_decode(text, position)
         except ValueError:
+            position = text.find("{", position + 1)
             continue
-    return None
+        if isinstance(value, dict):
+            found.append(value)
+        position = text.find("{", end)  # nested objects belong to the one just read
+    if not found or any(value != found[0] for value in found[1:]):
+        return None
+    return found[0]
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:

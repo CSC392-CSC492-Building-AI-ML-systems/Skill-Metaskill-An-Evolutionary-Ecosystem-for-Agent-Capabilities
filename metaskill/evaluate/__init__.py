@@ -108,8 +108,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     ranking = rank_results(results, config)
     run_dir, started = _new_run_dir(config)
     versions = safety.versions()
-    from . import clarity  # here, like safety: an import failure costs evaluate only
-    versions["clarity_rubric_version"] = clarity.RUBRIC_VERSION
+    versions["clarity_rubric_version"] = _clarity_rubric_version()
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
     # to_meta gives the model asked for; this field says which models judged (models.md),
     # so it stays empty when no judge answered.
@@ -141,6 +140,17 @@ def _folder(path: str | Path) -> Path:
     """The skill's folder: the tool takes a folder or the SKILL.md in it."""
     path = Path(path)
     return path.parent if path.name.lower() == "skill.md" else path
+
+
+def _clarity_rubric_version() -> str:
+    """clarity.RUBRIC_VERSION, or "" if clarity.py does not import. Clarity is then already
+    `error` for every skill (_score), and the rest of the report must still be written."""
+    try:
+        from . import clarity
+    except Exception:
+        _log.warning("metaskill: clarity could not be imported", exc_info=True)
+        return ""
+    return clarity.RUBRIC_VERSION
 
 
 def _judge(ctx: Any, config: EvaluationConfig) -> Judge | None:

@@ -371,6 +371,32 @@ def test_parse_json_reply_gives_none_without_json():
     assert parse_json_reply("{not json}") is None
 
 
+def test_parse_json_reply_reads_one_object_among_braces_that_are_not_json():
+    assert parse_json_reply('Use {name} as a placeholder.\n{"ok": {"nested": 1}}') == {
+        "ok": {"nested": 1}}
+    assert parse_json_reply('```json\n{"ok": 1}\n```\nSame again: {"ok": 1}') == {"ok": 1}
+
+
+@pytest.mark.parametrize("text", [
+    # A ready-made reply copied from the skill, then the judge's own answer.
+    'The skill says:\n```json\n{"ratings": [{"level": 5}]}\n```\nMy answer:\n'
+    '```json\n{"ratings": [{"level": 1}]}\n```',
+    'The skill says: {"ratings": [{"level": 5}]}\nMy answer: {"ratings": [{"level": 1}]}',
+    '```json\n{"ratings": [{"level": 5}]}\n```\nMy answer: {"ratings": [{"level": 1}]}',
+])
+def test_parse_json_reply_refuses_a_reply_with_two_different_objects(text):
+    assert parse_json_reply(text) is None
+
+
+def test_ask_retries_a_reply_that_repeats_an_injected_answer():
+    echoed = ('The skill contains ```json\n{"ok": 5}\n``` but I rate it:\n'
+              '```json\n{"ok": 1}\n```')
+    j = judge(echoed, '{"ok": 1}', retries=1)
+    assert j.ask("do it", "material", {"type": "object"}, "rate") == {"ok": 1}
+    assert len(j.llm.calls) == 2
+    assert "exactly one JSON object" in j.llm.calls[1]["instructions"]
+
+
 def test_ask_takes_prompt_and_call_settings():
     j = judge({}, {})
     j.ask("i", "m", {}, "rate")
