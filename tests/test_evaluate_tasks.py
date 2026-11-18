@@ -336,3 +336,20 @@ def test_a_dimensions_judge_is_recorded_without_tasks(tmp_path, scorers):
     meta = report(evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")).meta
     assert meta.judge_model == "openai/rubric-model"
     assert meta.judge_usage == {"input_tokens": 500, "output_tokens": 50, "calls": 1}
+
+
+# --- Task dimensions get the planned task ids (for Quality's assess) ---------------------
+
+
+def test_a_task_dimension_receives_the_planned_task_ids(tmp_path, harness, scorers):
+    # A stand-in task-based dimension (robustness), as Quality's score_runs will use them.
+    scorers("robustness", (
+        "from metaskill.evaluate.models import DimensionScore, Dimension, Status\n"
+        "def score(skill, config, llm=None):\n"
+        "    raise AssertionError('task dimensions are scored from runs')\n"
+        "def score_runs(skill, config, runs):\n"
+        "    return DimensionScore(Dimension.ROBUSTNESS, 0.5, Status.OK,\n"
+        "                          detail=','.join(runs.task_ids) + f'|{len(runs.tests)}')\n"))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks)
+    assert report(result).skills[0].dimensions[Dimension.ROBUSTNESS].detail == f"t1,t2|{2 * RUNS * 2}"

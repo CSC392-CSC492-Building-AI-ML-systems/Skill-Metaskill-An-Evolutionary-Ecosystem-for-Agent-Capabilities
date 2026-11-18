@@ -644,3 +644,12 @@ def test_a_skill_too_large_for_the_sandbox_is_a_failed_run(skill, run_dir):
     assert [c.skill for c in agent.calls] == [None]
     assert all(w.closed for w in sandbox.opened)
     assert (run_dir / "cleanup" / "logs" / "write-report-with_skill-r1.txt").is_file()
+
+
+def test_planned_task_ids_include_tasks_whose_runs_all_failed_to_be_made(skill, run_dir):
+    # Quality's assess counts a task that never ran against the skill, so the plan comes
+    # from the loaded tasks, not from the runs that happened.
+    result = run_tasks(skill, [task("judged", checks=[LLM_CHECK]), task("other")], FakeAgent(),
+                       config=config(runs=1), run_dir=run_dir)
+    assert [t.task_id for t in result.tests] == ["other", "other"]  # "judged" had no judge
+    assert result.task_ids == ["judged", "other"]
