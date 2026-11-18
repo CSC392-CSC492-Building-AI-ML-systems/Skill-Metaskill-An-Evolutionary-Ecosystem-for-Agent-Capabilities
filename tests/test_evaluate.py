@@ -345,7 +345,10 @@ def test_config_cleanliness_reports_pilot_evidence(out, variant, expected):
               / "metaskill/evaluate/golden/synthetic/ticket-summary/skills" / variant)
     [skill] = load(evaluate_skill(folder, output_path=out)).skills
     status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
-    if variant == "hardcoded":
+    if variant == "reference":
+        assert skill.scores.config_cleanliness == 1.0
+        assert status.status is Status.OK
+    elif variant == "hardcoded":
         assert skill.scores.config_cleanliness == 0.0
         assert status.status is Status.OK
         assert "Separation failure" in status.reason

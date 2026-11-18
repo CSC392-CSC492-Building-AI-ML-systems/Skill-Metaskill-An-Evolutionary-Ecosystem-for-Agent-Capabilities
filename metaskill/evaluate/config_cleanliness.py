@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterable
 
 from .config_checks import FixedSettingEvidence, check_configuration
-from .golden.config_evidence import configuration_evidence
+from .golden.config_evidence import configuration_evidence, reference_usage
 from .models import Dimension, DimensionScore, EvaluationConfig, Finding, Severity, Skill, Status
 
 SCHEMA_NAME = "config.schema.json"
@@ -44,7 +44,10 @@ def score(
     schema, schema_detail = _schema(skill)
     pilot_fixed, unused = configuration_evidence(skill)
     fixed_settings = (*fixed_settings, *pilot_fixed)
-    if not fixed_settings:
+    reviewed_usage = reference_usage(skill)
+    if consumed_settings is None:
+        consumed_settings = reviewed_usage
+    if not fixed_settings and reviewed_usage is None:
         schema_detail += " No reviewed profile-variability evidence supplied."
     if consumed_settings is None:
         schema_detail += " Necessary Setup needs a complete usage inventory."
@@ -75,6 +78,14 @@ def score(
             reason="Confirmed Separation failure: the skill cannot adapt across intended profiles.",
             detail=schema_detail,
             findings=findings,
+        )
+    if schema is not None and reviewed_usage is not None and not findings:
+        return DimensionScore(
+            dimension=Dimension.CONFIG_CLEANLINESS,
+            value=1.0,
+            status=Status.OK,
+            reason="All four Configuration Cleanliness properties pass for the reviewed reference.",
+            detail="The required organization is documented, consumed, and supplied through configuration.",
         )
     return DimensionScore(
         dimension=Dimension.CONFIG_CLEANLINESS,
