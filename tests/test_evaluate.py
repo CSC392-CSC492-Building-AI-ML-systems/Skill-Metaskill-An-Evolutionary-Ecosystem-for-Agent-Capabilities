@@ -332,3 +332,18 @@ def test_importing_this_package_does_not_import_safety():
             "sys.exit('metaskill.evaluate.safety' in sys.modules)")
     root = Path(__file__).resolve().parent.parent
     assert subprocess.run([sys.executable, "-c", code], cwd=root).returncode == 0
+
+
+@pytest.mark.parametrize("variant, expected", [
+    ("reference", []),
+    ("undocumented", ["missing-required-description"]),
+    ("hardcoded", ["fixed-profile-setting"]),
+    ("unused", ["unused-pilot-setting"]),
+])
+def test_config_cleanliness_reports_pilot_evidence(out, variant, expected):
+    folder = (Path(__file__).resolve().parents[1]
+              / "metaskill/evaluate/golden/synthetic/ticket-summary/skills" / variant)
+    [skill] = load(evaluate_skill(folder, output_path=out)).skills
+    assert skill.scores.config_cleanliness is None
+    findings = [f for f in skill.findings if f.dimension is Dimension.CONFIG_CLEANLINESS]
+    assert [f.rule for f in findings] == expected

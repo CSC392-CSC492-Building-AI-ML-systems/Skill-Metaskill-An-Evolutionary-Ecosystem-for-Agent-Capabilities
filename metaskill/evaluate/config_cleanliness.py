@@ -4,7 +4,8 @@ import json
 from collections.abc import Iterable
 
 from .config_checks import FixedSettingEvidence, check_configuration
-from .models import Dimension, DimensionScore, EvaluationConfig, Skill, Status
+from .golden.config_evidence import configuration_evidence
+from .models import Dimension, DimensionScore, EvaluationConfig, Finding, Severity, Skill, Status
 
 SCHEMA_NAME = "config.schema.json"
 MAX_SCHEMA_BYTES = 256 * 1024
@@ -40,12 +41,26 @@ def score(
 ) -> DimensionScore:
     """Return findings for available evidence and leave the numeric score unset."""
     schema, schema_detail = _schema(skill)
-    fixed_settings = tuple(fixed_settings)
+    pilot_fixed, unused = configuration_evidence(skill)
+    fixed_settings = (*fixed_settings, *pilot_fixed)
     if not fixed_settings:
         schema_detail += " No reviewed profile-variability evidence supplied."
     findings = check_configuration(
         schema=schema, skill_text=skill.body, fixed_settings=fixed_settings,
     )
+    properties = schema.get("properties", {}) if schema is not None else {}
+    for name in unused:
+        if name in properties:
+            findings.append(Finding(
+                dimension=Dimension.CONFIG_CLEANLINESS,
+                category="integrity",
+                severity=Severity.LOW,
+                source="config-checks",
+                rule="unused-pilot-setting",
+                quote="",
+                location=f"{SCHEMA_NAME}#/properties/{name}",
+                message="The instruction-only pilot declares a setting with no consumer.",
+            ))
     return DimensionScore(
         dimension=Dimension.CONFIG_CLEANLINESS,
         value=None,
