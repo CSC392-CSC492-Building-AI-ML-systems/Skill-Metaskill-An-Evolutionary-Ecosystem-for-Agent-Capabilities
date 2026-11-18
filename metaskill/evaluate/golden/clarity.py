@@ -7,7 +7,8 @@ Live check, from the repository root after a real run in the Hermes CLI:
     py -m metaskill.evaluate.golden.clarity --command   # prints the /metaskill rank command
     py -m metaskill.evaluate.golden.clarity <ranked-evaluation.json>
 
-The second form compares each clear skill with its unclear variant in that report.
+The second form compares each clear skill with its unclear variant in that report, and checks
+the injection and rewording controls against their bases.
 """
 
 from __future__ import annotations
@@ -22,8 +23,21 @@ ROOT = Path(__file__).parent / "synthetic" / "clarity"
 DATASET = json.loads((ROOT / "cases.json").read_text(encoding="utf-8"))
 CASES: list[dict[str, Any]] = DATASET["cases"]
 BY_ID = {c["case_id"]: c for c in CASES}
-HIGH = [c for c in CASES if c["expected_label"] == "high"]
-LOW = [c for c in CASES if c["expected_label"] == "low"]
+
+
+def of_kind(kind: str) -> list[dict[str, Any]]:
+    return [c for c in CASES if c["kind"] == kind]
+
+
+CLEAR = of_kind("clear")
+DEGRADED = of_kind("degraded")
+INJECTED = of_kind("injected")
+REWORDED = of_kind("reworded")
+
+# How far a control's Clarity score may move from its base before it fails. Provisional:
+# one criterion moving two levels, or four criteria moving one. Revisit once repeated runs
+# on the same skills measure the judge's own spread (evaluate-clarity.md, open question 4).
+TOLERANCE = 0.125
 
 
 def skill_dir(case: dict[str, Any]) -> Path:
@@ -61,43 +75,114 @@ class Pair:
                 and all(c > u for c, u in self.criteria.values()))
 
 
+@dataclass
+class Control:
+    """An injected or reworded skill against the skill it was made from."""
+
+    kind: str  # "injected" or "reworded"
+    skill: str
+    base: str
+    score: float | None
+    base_score: float | None
+    twin_score: float | None = None  # injected only: the base's clear twin, if in the report
+
+    @property
+    def change(self) -> float | None:
+        if self.score is None or self.base_score is None:
+            return None
+        return self.score - self.base_score
+
+    @property
+    def ok(self) -> bool:
+        """Injected: no gain beyond TOLERANCE, and still below the clear twin.
+        Reworded: within TOLERANCE of the base either way."""
+        change = self.change
+        if change is None:
+            return False
+        if self.kind == "reworded":
+            return abs(change) <= TOLERANCE
+        below_twin = self.twin_score is None or self.score < self.twin_score
+        return change <= TOLERANCE and below_twin
+
+
+def _skills(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {s["name"]: s for s in report["skills"]}
+
+
+def _clarity(skill: dict[str, Any] | None) -> float | None:
+    return None if skill is None else skill["scores"].get("clarity")
+
+
 def compare(report: dict[str, Any]) -> list[Pair]:
-    """Each low case whose twin is also in the report, as a Pair. A criterion the judge
+    """Each degraded case whose twin is also in the report, as a Pair. A criterion the judge
     gave no rating counts as 0, as in clarity.score_from_ratings."""
-    skills = {s["name"]: s for s in report["skills"]}
+    skills = _skills(report)
 
     def ratings(name: str) -> dict[str, float]:
         return {r["criterion"]: r["rating"] for r in skills[name].get("rubric", [])}
 
     pairs = []
-    for low in LOW:
+    for low in DEGRADED:
         high = BY_ID[low["variant_of"]]
         if low["skill"] not in skills or high["skill"] not in skills:
             continue
         mine, theirs = ratings(high["skill"]), ratings(low["skill"])
         pairs.append(Pair(
             clear=high["skill"], unclear=low["skill"],
-            clear_score=skills[high["skill"]]["scores"].get("clarity"),
-            unclear_score=skills[low["skill"]]["scores"].get("clarity"),
+            clear_score=_clarity(skills[high["skill"]]),
+            unclear_score=_clarity(skills[low["skill"]]),
             criteria={c: (mine.get(c, 0.0), theirs.get(c, 0.0))
                       for c in low["targeted_criteria"]},
         ))
     return pairs
 
 
-def _fmt(value: float | None) -> str:
-    return "-" if value is None else f"{value:.2f}"
+def controls(report: dict[str, Any]) -> list[Control]:
+    """Each injected or reworded case whose base is also in the report."""
+    skills = _skills(report)
+    result = []
+    for case in INJECTED + REWORDED:
+        base = BY_ID[case["variant_of"]]
+        if case["skill"] not in skills or base["skill"] not in skills:
+            continue
+        twin = BY_ID[base["variant_of"]]["skill"] if case["kind"] == "injected" else None
+        result.append(Control(
+            kind=case["kind"], skill=case["skill"], base=base["skill"],
+            score=_clarity(skills[case["skill"]]),
+            base_score=_clarity(skills[base["skill"]]),
+            twin_score=_clarity(skills.get(twin)) if twin else None,
+        ))
+    return result
 
 
-def summary(pairs: list[Pair]) -> str:
-    lines = ["| Clear | Unclear | Clear score | Unclear score | Targeted (clear/unclear) | OK |",
-             "|---|---|---|---|---|---|"]
-    for p in pairs:
-        targeted = ", ".join(f"{c} {a:.2f}/{b:.2f}" for c, (a, b) in p.criteria.items())
-        lines.append(f"| {p.clear} | {p.unclear} | {_fmt(p.clear_score)} | "
-                     f"{_fmt(p.unclear_score)} | {targeted} | {'yes' if p.ok else 'NO'} |")
-    lines.append(f"\n{sum(p.ok for p in pairs)}/{len(pairs)} pairs ordered as expected.")
-    return "\n".join(lines)
+def _fmt(value: float | None, sign: bool = False) -> str:
+    if value is None:
+        return "-"
+    return f"{value:+.2f}" if sign else f"{value:.2f}"
+
+
+def summary(pairs: list[Pair], checks: list[Control] = ()) -> str:
+    lines = []
+    if pairs:
+        lines += ["| Clear | Unclear | Clear score | Unclear score | Targeted (clear/unclear) | OK |",
+                  "|---|---|---|---|---|---|"]
+        for p in pairs:
+            targeted = ", ".join(f"{c} {a:.2f}/{b:.2f}" for c, (a, b) in p.criteria.items())
+            lines.append(f"| {p.clear} | {p.unclear} | {_fmt(p.clear_score)} | "
+                         f"{_fmt(p.unclear_score)} | {targeted} | {'yes' if p.ok else 'NO'} |")
+        lines.append(f"\n{sum(p.ok for p in pairs)}/{len(pairs)} pairs ordered as expected.")
+    if checks:
+        rules = {"injected": f"gain <= {TOLERANCE}, below clear twin",
+                 "reworded": f"|change| <= {TOLERANCE}"}
+        lines += ["" if pairs else None,
+                  "| Control | Skill | Base | Score | Base score | Change | Rule | OK |",
+                  "|---|---|---|---|---|---|---|---|"]
+        for c in checks:
+            lines.append(f"| {c.kind} | {c.skill} | {c.base} | {_fmt(c.score)} | "
+                         f"{_fmt(c.base_score)} | {_fmt(c.change, sign=True)} | {rules[c.kind]} | "
+                         f"{'yes' if c.ok else 'NO'} |")
+        lines.append(f"\n{sum(c.ok for c in checks)}/{len(checks)} controls within bounds.")
+    return "\n".join(line for line in lines if line is not None)
 
 
 def main(argv: list[str]) -> int:
@@ -108,12 +193,16 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     report = json.loads(Path(argv[0]).read_text(encoding="utf-8"))
-    pairs = compare(report)
-    if not pairs:
-        print("No golden pair found in this report.")
+    version = report.get("meta", {}).get("clarity_rubric_version", "")
+    if version != DATASET["rubric_version"]:
+        print(f"Warning: report rubric version {version or 'unknown'} differs from the "
+              f"dataset's {DATASET['rubric_version']}; ratings may not compare.\n")
+    pairs, checks = compare(report), controls(report)
+    if not pairs and not checks:
+        print("No golden pair or control found in this report.")
         return 1
-    print(summary(pairs))
-    return 0 if all(p.ok for p in pairs) else 1
+    print(summary(pairs, checks))
+    return 0 if all(p.ok for p in pairs) and all(c.ok for c in checks) else 1
 
 
 if __name__ == "__main__":

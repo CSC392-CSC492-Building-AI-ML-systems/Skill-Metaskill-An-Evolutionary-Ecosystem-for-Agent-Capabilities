@@ -392,7 +392,7 @@ The tool's response goes into the agent's context, so it holds the table with it
 - Judge and quality: fake judge returning canned output; assert report shape, null handling, and score aggregation.
 - Ranking: example tests of ordering and every tie-break, plus checks that the order does not depend on input order and the same input gives the same output; null handling, `partial` safety flags, the recommendation, and cleaning of untrusted names.
 - Clarity: `test_clarity.py` scores canned judge replies (rubric shape, missing-as-0, `partial`, the rubric version in the report); `test_golden_clarity.py` checks the golden annotations against the rubric, and the pair comparison on synthetic reports.
-- Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately. The Clarity live check against the golden set is run by hand ([evaluate-clarity.md](evaluate-clarity.md), section 4.3).
+- Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately. The Clarity live check against the golden set is run by hand ([evaluate-clarity.md](evaluate-clarity.md), section 4.4).
 
 ## 9. Limitations
 
