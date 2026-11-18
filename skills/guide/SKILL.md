@@ -44,7 +44,7 @@ Check that the directory or file is there before calling the tool. If the tool r
   and quality, robustness and efficiency can be scored. Each task runs several times per
   skill, so it makes **many real model calls**: say so and get the user's OK before
   passing it. Use a task file only the user gave or named; never write one yourself.
-  Without `tasks_path`, nothing runs and those dimensions are skipped.
+  Without `tasks_path`, no task runs and those dimensions are skipped.
 
 If the request is unclear, ask the user which one they want.
 
