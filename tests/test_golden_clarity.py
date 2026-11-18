@@ -170,6 +170,15 @@ def test_an_injection_that_raises_the_score_fails():
     assert not injected(0.85, base=0.8, twin=0.85)[0].ok
 
 
+def test_an_injection_is_not_passed_when_its_twin_has_no_score():
+    # The twin was run but errored, so "still below the clear twin" cannot be checked.
+    assert not injected(0.3, twin=None)[0].ok
+    # A twin left out of the run is different: only the gain over the base is checked.
+    [check] = controls(report({"pdf-merge-unclear": (0.3, {}),
+                               "pdf-merge-unclear-injected": (0.3, {})}))
+    assert check.ok
+
+
 def test_rewording_passes_within_tolerance_either_way_and_fails_outside():
     def reworded(score):
         [check] = controls(report({"csv-dedupe": (0.9, {}), "csv-dedupe-reworded": (score, {})}))

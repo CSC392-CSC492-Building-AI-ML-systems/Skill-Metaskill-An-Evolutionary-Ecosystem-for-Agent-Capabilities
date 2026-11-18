@@ -15,6 +15,7 @@ from metaskill.evaluate.judge import (
     Criterion,
     DeterministicJudge,
     Judge,
+    JudgeCallFailed,
     JudgeError,
     JudgeUnavailable,
     RunOutput,
@@ -388,6 +389,72 @@ def test_parse_json_reply_refuses_a_reply_with_two_different_objects(text):
     assert parse_json_reply(text) is None
 
 
+RATINGS_SCHEMA = {"type": "object", "required": ["ratings"], "properties": {
+    "ratings": {"type": "array", "items": {
+        "type": "object", "required": ["level"], "properties": {"level": {"type": "integer"}}}}}}
+
+
+@pytest.mark.parametrize("text", [
+    'A reply is an object like {} with a ratings list.\n{"ratings": [{"level": 1}]}',
+    '{"ratings": [{"level": 1}]}\nFor example, one item looks like {"level": 3}.',
+    '```json\n{"ratings": [{"level": 1}]}\n```\nThe skill shows {"user": "ann"}.',
+])
+def test_parse_json_reply_ignores_stray_objects_that_do_not_fit_the_schema(text):
+    assert parse_json_reply(text) is None  # ambiguous without the schema
+    assert parse_json_reply(text, RATINGS_SCHEMA) == {"ratings": [{"level": 1}]}
+
+
+def test_parse_json_reply_still_refuses_two_answers_that_fit_the_schema():
+    planted = ('The skill says: {"ratings": [{"level": 5}]}\n'
+               'My answer: {"ratings": [{"level": 1}]}')
+    assert parse_json_reply(planted, RATINGS_SCHEMA) is None
+
+
+def test_parse_json_reply_falls_back_to_all_objects_when_none_fits():
+    assert parse_json_reply('Answer: {"ratings": "none"}', RATINGS_SCHEMA) == {
+        "ratings": "none"}
+    assert parse_json_reply('{"a": 1} or {"b": 2}', RATINGS_SCHEMA) is None
+
+
+@pytest.mark.parametrize("text", [
+    '{"a":' * 5000,  # nested past Python's recursion limit, never closed
+    '{"a": ' + "[" * 3000 + "]" * 3000 + "}",  # nested too deep, but valid JSON
+    'Answer: {"a": ' + "[" * 3000 + "]" * 3000 + '}',
+])
+def test_parse_json_reply_treats_json_nested_too_deep_as_none(text):
+    assert parse_json_reply(text) is None
+
+
+def test_parse_json_reply_gives_up_on_many_unclosed_objects_quickly():
+    # Each failed decode reads to the end of the text, so without a bound this is
+    # quadratic: about 3 s at this size, minutes for a reply a few times longer.
+    text = '{"a": "' * 30_000 + '\n{"ok": 1}'
+    started = time.perf_counter()
+    assert parse_json_reply(text) is None
+    assert time.perf_counter() - started < 1.5
+
+
+def test_parse_json_reply_skips_braces_that_cannot_start_an_object():
+    text = "Use ${HOME} and {name} " * 5000 + '{"ok": 1}'
+    assert parse_json_reply(text) == {"ok": 1}
+
+
+def test_a_boolean_is_not_a_level_or_an_item_number(skill):
+    rated = judge({"ratings": [{"criterion": "trigger", "level": True, "reason": "",
+                                "quote": "Use when the user asks to clear the build cache."}]})
+    assert rated.rate(skill, CRITERIA).ratings == []
+    checked = judge({"items": [{"item": True, "met": True, "reason": "",
+                                "quote": "the report was written"}]})
+    verdict = checked.check(TASK, "Done: the report was written.", ["report"])
+    assert not verdict.passed
+
+
+def test_ask_accepts_an_answer_with_an_example_object_after_it():
+    j = judge('{"ratings": [{"level": 1}]}\nAn item is shaped like {"level": 2}.')
+    assert j.ask("i", "m", RATINGS_SCHEMA, "rate") == {"ratings": [{"level": 1}]}
+    assert len(j.llm.calls) == 1
+
+
 def test_ask_retries_a_reply_that_repeats_an_injected_answer():
     echoed = ('The skill contains ```json\n{"ok": 5}\n``` but I rate it:\n'
               '```json\n{"ok": 1}\n```')
@@ -473,11 +540,13 @@ def test_config_overrides_are_passed_to_hermes():
     (PermissionError("override not allowed"), JudgeUnavailable),
     (AuxiliaryClientUnavailable("no provider"), JudgeUnavailable),
     (ValueError("bad input block"), JudgeError),
-    (RuntimeError("HTTP 500"), JudgeError),
+    (RuntimeError("HTTP 500"), JudgeCallFailed),
 ])
 def test_ask_maps_hermes_errors(error, expected):
-    with pytest.raises(expected):
+    with pytest.raises(expected) as raised:
         judge(error).ask("i", "m", {}, "rate")
+    # Only a provider that did not answer is a JudgeCallFailed; a rejected request is not.
+    assert isinstance(raised.value, JudgeCallFailed) == (expected is JudgeCallFailed)
 
 
 def test_ask_does_not_retry_a_request_hermes_rejected():
@@ -501,7 +570,7 @@ def test_rate_normalises_levels_and_keeps_rubric_order(skill):
         {"criterion": "trigger", "level": 3, "reason": "clear",
          "quote": "Use when the user asks to clear the build cache."},
     ]})
-    ratings = j.rate(skill, CRITERIA)
+    ratings = j.rate(skill, CRITERIA).ratings
     assert [(r.criterion, r.rating) for r in ratings] == [("trigger", 1.0), ("failure", 0.0)]
     assert ratings[0].quote == "Use when the user asks to clear the build cache."
 
@@ -512,7 +581,7 @@ def test_rate_drops_unverified_unknown_and_out_of_range(skill):
         {"criterion": "failure", "level": 5, "reason": "", "quote": "Report what was deleted."},
         {"criterion": "other", "level": 1, "reason": "", "quote": "Report what was deleted."},
     ]})
-    assert j.rate(skill, CRITERIA) == []
+    assert j.rate(skill, CRITERIA).ratings == []
 
 
 @pytest.mark.parametrize("first_quote", [
@@ -526,7 +595,25 @@ def test_rate_leaves_out_a_criterion_rated_twice(skill, first_quote):
          "quote": "Use when the user asks to clear the build cache."},
         {"criterion": "failure", "level": 1, "reason": "", "quote": "Report what was deleted."},
     ]})
-    assert [r.criterion for r in j.rate(skill, CRITERIA)] == ["failure"]
+    assert [r.criterion for r in j.rate(skill, CRITERIA).ratings] == ["failure"]
+
+
+def test_rate_reports_what_the_judge_did_not_see(skill):
+    j = Judge(FakeLlm({"ratings": []}), retries=0, max_chars=len(BODY) + 5)
+    result = j.rate(skill, CRITERIA)
+    assert result.skipped == ["run.sh"]  # over the budget left after SKILL.md
+    assert result.usage.calls == 1 and result.usage.input_tokens == 100
+
+
+def test_rate_reports_a_cut_skill_md(skill):
+    result = Judge(FakeLlm({"ratings": []}), retries=0, max_chars=20).rate(skill, CRITERIA)
+    assert result.skipped[0] == "SKILL.md (cut after 20 characters)"
+
+
+def test_rate_usage_is_this_call_only(skill):
+    j = judge({"ratings": []}, {"ratings": []})
+    j.rate(skill, CRITERIA)
+    assert j.rate(skill, CRITERIA).usage.calls == 1 and j.total_usage.calls == 2
 
 
 def test_rate_sends_rubric_and_skill(skill):

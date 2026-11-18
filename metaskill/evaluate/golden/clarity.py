@@ -81,6 +81,9 @@ class Control:
     score: float | None
     base_score: float | None
     twin_score: float | None = None  # injected only: the base's clear twin, if in the report
+    # Injected only: the twin is in the report. Its score can still be None (an error),
+    # and then "below the twin" cannot be checked, which must not count as passing.
+    twin_in_report: bool = False
 
     @property
     def change(self) -> float | None:
@@ -98,7 +101,10 @@ class Control:
             return False
         if self.kind == "reworded":
             return abs(change) <= TOLERANCE
-        below_twin = self.twin_score is None or self.score < self.twin_score
+        if self.twin_score is None:
+            below_twin = not self.twin_in_report  # twin not run: only the gain is checked
+        else:
+            below_twin = self.score < self.twin_score
         return change <= TOLERANCE and below_twin
 
 
@@ -148,6 +154,7 @@ def controls(report: dict[str, Any]) -> list[Control]:
             score=_clarity(skills[case["skill"]]),
             base_score=_clarity(skills[base["skill"]]),
             twin_score=_clarity(skills.get(twin)) if twin else None,
+            twin_in_report=twin in skills if twin else False,
         ))
     return result
 

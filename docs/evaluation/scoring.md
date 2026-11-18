@@ -223,7 +223,7 @@ C = (sum of weight x criterion rating) / (sum of weights), an unrated criterion 
 
 Weights (version 3): actionability and purpose and trigger 3; structure and flow, verifiability and failure handling 2; accessible language 1.5; readability and conciseness 1. The reasons are in evaluate-clarity.md, section 2.
 
-**[PROPOSED]** An unrated criterion (no verifiable quote) counts as 0 and makes the result `partial`, rather than being left out of the mean; see evaluate-clarity.md, section 2.
+**[IMPLEMENTED, OPEN]** An unrated criterion (no verifiable quote) counts as 0 and makes the result `partial`, rather than being left out of the mean. This is how `clarity.py` scores now; whether to keep it is still open (evaluate-clarity.md, sections 2 and 5).
 
 Require real supporting quotes. For an omitted requirement, quote the relevant surrounding workflow and explain the omission; do not invent a quote of absent text. Extra verbosity is not itself evidence of clarity.
 

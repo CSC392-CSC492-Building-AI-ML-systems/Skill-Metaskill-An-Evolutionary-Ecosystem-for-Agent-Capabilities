@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from metaskill.evaluate import evaluate_skill
+from metaskill.evaluate import evaluate_skill, rank_skills
 from metaskill.evaluate.clarity import (
     CRITERIA, INSTRUCTIONS, RUBRIC_VERSION, WEIGHTS, score, score_from_ratings)
 from metaskill.evaluate.judge import Judge, JudgeError, JudgeUnavailable
@@ -28,6 +28,8 @@ class FakeLlm:
     def complete_structured(self, **kwargs):
         self.calls.append(kwargs)
         reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
         # Like Hermes: parsed only when JSON output is asked for; the judge asks for text.
         structured = bool(kwargs.get("json_mode") or kwargs.get("json_schema"))
         return SimpleNamespace(
@@ -102,6 +104,25 @@ def test_a_missing_criterion_counts_as_zero_and_is_partial():
     assert "purpose_and_trigger" in result.detail
 
 
+def test_files_the_judge_did_not_see_make_it_partial_and_are_named():
+    result = score_from_ratings([rating(n, 1.0) for n in NAMES],
+                                left_out=["SKILL.md (cut after 100 characters)", "big.md"])
+    assert result.status is Status.PARTIAL and result.value == 1.0
+    assert "SKILL.md (cut after 100 characters), big.md" in result.detail
+
+
+def test_missing_criteria_and_left_out_files_are_both_named():
+    result = score_from_ratings([rating(n, 1.0) for n in NAMES[1:]], left_out=["big.md"])
+    assert "purpose_and_trigger" in result.detail and "big.md" in result.detail
+
+
+def test_left_out_file_names_are_cleaned_and_capped():
+    names = ["a\n# Heading\u200b.md"] + [f"f{i}.md" for i in range(9)]
+    detail = score_from_ratings([rating(n, 1.0) for n in NAMES], left_out=names).detail
+    assert "\n" not in detail and "\u200b" not in detail
+    assert "a # Heading.md" in detail and detail.endswith("and 5 more")
+
+
 def test_no_usable_rating_is_an_error():
     with pytest.raises(JudgeError):
         score_from_ratings([])
@@ -126,6 +147,14 @@ def test_unverifiable_quotes_lower_the_score(skill):
     result = score(skill, EvaluationConfig(), judge=Judge(FakeLlm(answer), retries=0))
     assert result.status is Status.PARTIAL
     assert result.value == pytest.approx(1 - WEIGHTS[NAMES[0]] / TOTAL)
+
+
+def test_a_skill_over_the_budget_is_partial(skill):
+    (skill.path / "notes.md").write_text("x" * 500, encoding="utf-8")
+    skill.files = [Path("notes.md")]
+    config = EvaluationConfig(judge_retries=0, judge_max_chars=len(BODY) + 10)
+    result = score(skill, config, llm=FakeLlm(reply({n: 5 for n in NAMES})))
+    assert result.status is Status.PARTIAL and "notes.md" in result.detail
 
 
 def test_builds_a_judge_from_llm_when_none_is_shared(skill):
@@ -155,3 +184,33 @@ def test_evaluate_scores_clarity_and_records_the_judge_model(tmp_path):
     assert len(skill.rubric) == len(CRITERIA)
     assert report.meta.judge_model == "fake/judge-1"
     assert report.meta.clarity_rubric_version == RUBRIC_VERSION
+
+
+def test_a_provider_failure_is_named_in_the_status_and_warnings(tmp_path):
+    folders = []
+    for name in ("first", "second"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "SKILL.md").write_text(BODY, encoding="utf-8")
+        folders.append(folder)
+    ctx = SimpleNamespace(llm=FakeLlm(reply({n: 4 for n in NAMES}), RuntimeError("HTTP 429")))
+    result = rank_skills(folders, output_path=tmp_path / "reports", ctx=ctx)
+    report = Report.from_dict(json.loads(Path(result["artifacts"][0]).read_text(encoding="utf-8")))
+    by_name = {s.name: s.dimensions[Dimension.CLARITY] for s in report.skills}
+    assert by_name["first"].status is Status.OK
+    assert by_name["second"].status is Status.ERROR and "provider" in by_name["second"].detail
+    [warning] = result["warnings"]
+    assert "provider did not answer for 1 of 2" in warning and "clarity" in warning
+    assert "429" not in json.dumps(result)  # the provider's message stays in the log
+
+
+def test_a_bad_reply_is_not_called_a_provider_failure(tmp_path):
+    folder = tmp_path / "tidy"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text(BODY, encoding="utf-8")
+    ctx = SimpleNamespace(llm=FakeLlm("not json", "still not json"))
+    result = evaluate_skill(folder, output_path=tmp_path / "reports", ctx=ctx)
+    report = Report.from_dict(json.loads(Path(result["artifacts"][0]).read_text(encoding="utf-8")))
+    status = report.skills[0].dimensions[Dimension.CLARITY]
+    assert status.status is Status.ERROR and status.detail == "failed: JudgeError"
+    assert result["warnings"] == []

@@ -3,18 +3,20 @@
 The LLM judge rates the skill on a fixed rubric of anchored levels (Judge.rate). Every
 rating must quote the skill; ratings whose quote is not found are dropped by the judge.
 The score is the weighted mean of the criteria (WEIGHTS), with a criterion the judge
-could not support counted as 0.
+could not support counted as 0. A skill too large for judge_max_chars is rated on what
+fit, and the result is `partial`, naming what was left out.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
-from .judge import Criterion, Judge, JudgeError, JudgeUnavailable
+from .judge import MAX_REASON_CHARS, Criterion, Judge, JudgeError, JudgeUnavailable, clean
 from .models import Dimension, DimensionScore, EvaluationConfig, RubricRating, Skill, Status
 
-# Bumped whenever a criterion, level or the instructions change, since ratings from
-# different rubric versions do not compare. Recorded as ReportMeta.clarity_rubric_version.
+# Bumped whenever a criterion, level, weight or the instructions change, since ratings
+# or scores from different rubric versions do not compare. Recorded as ReportMeta.clarity_rubric_version.
 # 2: added actionability; description/body match in purpose_and_trigger; contradictions in
 # structure_and_flow; verifiability asks for the expected result; readability narrowed to
 # telling the goal at a glance.
@@ -174,13 +176,15 @@ INSTRUCTIONS = (
     "- Rate each criterion on its own: a skill can be concise and still full of jargon."
 )
 
+MAX_LEFT_OUT_LISTED = 5  # files named in `detail` when the judge did not see them all
+
 
 def score(skill: Skill, config: EvaluationConfig, llm: Any = None,
           judge: Judge | None = None) -> DimensionScore:
     """Clarity score for one skill.
 
-    judge is the run's shared Judge (so ReportMeta.judge_model lists every model that
-    answered); without one, a judge is built on llm, Hermes' ctx.llm. Raises
+    judge is the run's shared Judge (so ReportMeta.judge_model lists the models that
+    answered for Clarity); without one, a judge is built on llm, Hermes' ctx.llm. Raises
     JudgeUnavailable when neither is there, which the caller reports as `skipped`.
     """
     if judge is None:
@@ -189,17 +193,22 @@ def score(skill: Skill, config: EvaluationConfig, llm: Any = None,
         judge = Judge(llm, provider=config.judge_provider, model=config.judge_model,
                       retries=config.judge_retries, max_chars=config.judge_max_chars)
 
-    ratings = judge.rate(skill, list(CRITERIA), INSTRUCTIONS)
-    return score_from_ratings(ratings)
+    result = judge.rate(skill, list(CRITERIA), INSTRUCTIONS)
+    return score_from_ratings(result.ratings, left_out=result.skipped)
 
 
-def score_from_ratings(ratings: list[RubricRating]) -> DimensionScore:
+def score_from_ratings(ratings: list[RubricRating],
+                       left_out: Sequence[str] = ()) -> DimensionScore:
     """The DimensionScore for the ratings the judge could support.
 
     A criterion with no rating counts as 0, so a skill cannot gain from the judge failing
     to quote a weakness, which it often does for something that is absent. Some missing
     is `partial`; all missing is an `error` with no score, since the judge's answer was
     unusable.
+
+    left_out lists the files the judge did not see (Judge.rate's `skipped`). The ratings
+    are then of part of the skill, and a criterion whose evidence was in the missing part
+    may have scored 0, so the result is `partial` and `detail` names them.
     """
     rated = {r.criterion: r for r in ratings}
     missing = [c.name for c in CRITERIA if c.name not in rated]
@@ -210,10 +219,24 @@ def score_from_ratings(ratings: list[RubricRating]) -> DimensionScore:
              / sum(WEIGHTS.values()))
     weakest = min(rated.values(), key=lambda r: r.rating)
     reason = f"{len(rated)}/{len(CRITERIA)} criteria rated; weakest: {weakest.criterion}"
-    if not missing:
+    notes = []
+    if missing:
+        notes.append(f"no verifiable rating for {', '.join(missing)}, counted as 0")
+    if left_out:
+        notes.append(_left_out_note(left_out))
+    if not notes:
         return DimensionScore(Dimension.CLARITY, value, Status.OK, reason=reason,
                               rubric=ratings)
-    return DimensionScore(
-        Dimension.CLARITY, value, Status.PARTIAL, reason=reason,
-        detail=f"no verifiable rating for {', '.join(missing)}, counted as 0",
-        rubric=ratings)
+    return DimensionScore(Dimension.CLARITY, value, Status.PARTIAL, reason=reason,
+                          detail="; ".join(notes), rubric=ratings)
+
+
+def _left_out_note(left_out: Sequence[str]) -> str:
+    """What the judge did not see, for `detail`. File names come from the skill, so they
+    are cleaned like any other untrusted text (judge.md 2.3)."""
+    shown = ", ".join(clean(name, 120) for name in left_out[:MAX_LEFT_OUT_LISTED])
+    more = len(left_out) - MAX_LEFT_OUT_LISTED
+    if more > 0:
+        shown += f" and {more} more"
+    return clean(f"judged without (over judge_max_chars, or a link): {shown}",
+                 MAX_REASON_CHARS)

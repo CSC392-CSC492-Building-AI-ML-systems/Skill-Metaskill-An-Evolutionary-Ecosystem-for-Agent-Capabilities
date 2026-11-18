@@ -77,6 +77,12 @@ class JudgeError(Exception):
     """The judge ran but its answer could not be used. The dimension is `error`."""
 
 
+class JudgeCallFailed(JudgeError):
+    """The provider did not answer, e.g. a rate limit, an outage or a timeout. The
+    dimension is `error`, but the cause is the provider, not the skill or the reply, so
+    evaluate says so (judge.md 3)."""
+
+
 class PluginLlm(Protocol):
     """The part of Hermes' `ctx.llm` the judge uses (agent.plugin_llm.PluginLlm)."""
 
@@ -401,6 +407,17 @@ class ReviewResult:
     usage: TokenUsage = field(default_factory=TokenUsage)  # this review's calls
 
 
+@dataclass
+class RateResult:
+    """What rate() could rate, and what the judge did not see."""
+
+    ratings: list[RubricRating]  # in the order of the criteria; unusable ones left out
+    # Files not sent, each with why: over max_chars, too big to read, a link, or SKILL.md
+    # cut short. A criterion whose evidence was there may go unrated.
+    skipped: list[str] = field(default_factory=list)
+    usage: TokenUsage = field(default_factory=TokenUsage)  # this rating's calls
+
+
 class TaskJudge(Protocol):
     """Judges task runs. runner.py depends on this, not on a concrete judge."""
 
@@ -503,7 +520,7 @@ class Judge:
                 usage.input_tokens += int(getattr(reply_usage, "input_tokens", 0) or 0)
                 usage.output_tokens += int(getattr(reply_usage, "output_tokens", 0) or 0)
                 parsed = (result.parsed if getattr(result, "content_type", "") == "json"
-                          else parse_json_reply(getattr(result, "text", "") or ""))
+                          else parse_json_reply(getattr(result, "text", "") or "", schema))
                 problems = (schema_problems(parsed, schema) if isinstance(parsed, dict)
                             else ["the reply was not exactly one JSON object"])
                 if not problems:
@@ -554,14 +571,15 @@ class Judge:
             # by name, since plugins should not import Hermes internals.
             if any(c.__name__ == "AuxiliaryClientUnavailable" for c in type(e).__mro__):
                 raise JudgeUnavailable(str(e)) from e
-            raise JudgeError(f"judge request failed: {e}") from e
+            raise JudgeCallFailed(f"judge request failed: {e}") from e
 
     def rate(self, skill: Skill, criteria: list[Criterion], instructions: str = "",
-             **options: Unpack[CallOptions]) -> list[RubricRating]:
+             **options: Unpack[CallOptions]) -> RateResult:
         """Rate the skill on each criterion. A level is normalised to [0, 1].
 
         Criteria the judge skipped, rated twice, or rated with a quote not in the skill,
-        are left out; the caller decides how a missing criterion scores.
+        are left out; the caller decides how a missing criterion scores. `skipped` says
+        what the judge did not see, so the caller can say the rating is partial.
         """
         by_name = {c.name: c for c in criteria}
         rubric = "\n\n".join(
@@ -578,8 +596,8 @@ class Judge:
             "reason": {"type": "string"},
             "quote": {"type": "string"},
         }))})
-        sources, _ = self._material(skill)
-        data, _ = self._ask(task, _render(sources), schema, "rate", **options)
+        sources, skipped = self._material(skill)
+        data, usage = self._ask(task, _render(sources), schema, "rate", **options)
 
         ratings: dict[str, RubricRating] = {}
         items = _items(data, "ratings")
@@ -590,7 +608,7 @@ class Judge:
             level = item.get("level")
             if criterion is None or times_rated[criterion.name] > 1:
                 continue
-            if not isinstance(level, int) or not 1 <= level <= len(criterion.levels):
+            if not _is_int(level) or not 1 <= level <= len(criterion.levels):
                 continue
             if locate(sources, item.get("quote")) is None:
                 continue
@@ -600,7 +618,8 @@ class Judge:
                 reason=_plain(_text(item, "reason")),
                 quote=clean_quote(item["quote"]),
             )
-        return [ratings[c.name] for c in criteria if c.name in ratings]
+        return RateResult([ratings[c.name] for c in criteria if c.name in ratings],
+                          skipped=skipped, usage=usage)
 
     def _material(self, skill: Skill, *,
                   keep_hidden: bool = False) -> tuple[dict[str, str], list[str]]:
@@ -711,7 +730,7 @@ class Judge:
         reasons: dict[int, str] = {}
         for entry in _items(data, "items"):
             number = entry.get("item")
-            if not isinstance(number, int) or not 1 <= number <= len(checklist):
+            if not _is_int(number) or not 1 <= number <= len(checklist):
                 continue
             if number in reasons:
                 continue
@@ -740,6 +759,11 @@ def _items(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
     """The objects in data[key]; anything else the judge put there is ignored."""
     items = data.get(key)
     return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+
+def _is_int(value: Any) -> bool:
+    """A JSON integer: Python's bool is an int, but `true` is not a level or item number."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _text(item: dict[str, Any], key: str) -> str:
@@ -923,32 +947,54 @@ def make_judge(judge_type: JudgeType | str, *, ctx: Any = None,
     return Judge.from_context(ctx, config or EvaluationConfig())
 
 
-def parse_json_reply(text: str) -> Any:
+# Where a JSON object can start: `{` then a key or `}`. Braces in prose and code, like
+# `{name}` or `${HOME}`, are passed over without a decode.
+_OBJECT_START = re.compile(r'\{\s*["}]')
+MAX_JSON_FAILURES = 1000  # failed decodes before parse_json_reply gives up on a reply
+
+
+def parse_json_reply(text: str, schema: dict[str, Any] | None = None) -> Any:
     """The JSON value in a reply sent as text, or None if there is none or it is ambiguous.
 
     The whole reply is tried first. Otherwise the reply is scanned for JSON objects (in a
-    fenced block or with a sentence around them), and one is returned only if every object
-    found is the same. Two different objects give None, so the judge is asked again: the
-    material can hold a ready-made reply (a fake judge answer rating every criterion at the
-    top level, with a quote that really is in the skill), and a judge that repeats it before
-    its own answer must not have the repeated one read as its answer.
+    fenced block or with a sentence around them), and one is returned only if every
+    candidate is the same. Two different candidates give None, so the judge is asked
+    again: the material can hold a ready-made reply (a fake judge answer rating every
+    criterion at the top level, with a quote that really is in the skill), and a judge
+    that repeats it before its own answer must not have the repeated one read as its
+    answer.
+
+    With a schema, the candidates are only the objects that fit it, so a stray `{}` or an
+    example object around the answer does not make it ambiguous, while a planted full
+    answer still does, since it fits too. If no object fits, all of them are candidates,
+    so a reply that is close to the schema can still be asked about again or used in part.
+
+    The reply is shaped by untrusted material, so the scan is bounded: a failed decode can
+    read to the end of the text, so after MAX_JSON_FAILURES of them the reply counts as
+    unreadable (None) rather than taking quadratic time. JSON nested too deep for Python's
+    parser is not JSON here either.
     """
     try:
         return json.loads(text.strip())
-    except ValueError:
+    except (ValueError, RecursionError):
         pass
     decoder = json.JSONDecoder()
     found: list[Any] = []
-    position = text.find("{")
-    while position != -1:
+    failures = 0
+    start = _OBJECT_START.search(text)
+    while start:
         try:
-            value, end = decoder.raw_decode(text, position)
-        except ValueError:
-            position = text.find("{", position + 1)
+            value, end = decoder.raw_decode(text, start.start())
+        except (ValueError, RecursionError):
+            failures += 1
+            if failures > MAX_JSON_FAILURES:
+                return None  # giving up early could miss a second, different answer
+            start = _OBJECT_START.search(text, start.start() + 1)
             continue
-        if isinstance(value, dict):
-            found.append(value)
-        position = text.find("{", end)  # nested objects belong to the one just read
+        found.append(value)  # a decode that starts at `{` gives an object
+        start = _OBJECT_START.search(text, end)  # nested objects belong to the one just read
+    if schema is not None:
+        found = [v for v in found if not schema_problems(v, schema)] or found
     if not found or any(value != found[0] for value in found[1:]):
         return None
     return found[0]

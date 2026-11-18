@@ -54,6 +54,7 @@ Under equal weights (version 2) a skill weak on one criterion lost at most 0.125
 |---|---|---|
 | All eight criteria rated | `ok` | `C` |
 | Some criteria have no usable rating | `partial` | `C`, with the missing criteria named in `detail` |
+| The judge did not see the whole skill (over `judge_max_chars`, or a link) | `partial` | `C`, with the files left out named in `detail` (at most five, then a count) |
 | No usable rating at all | `error` | `null` |
 | No model available (no `ctx.llm`, no provider) | `skipped` | `null` |
 
@@ -71,7 +72,7 @@ A rating is unusable when the judge skipped it, rated it twice, rated it out of 
 | `INSTRUCTIONS` | Trusted judge instructions. Holds no text from the skill (judge.md 2.2). Says: judge the writing only; code blocks are judged on explanation, not length; longer is never clearer; asking the user is a concrete step; quote nearby text for an absence; rate criteria independently |
 | `RUBRIC_VERSION` | Version of the rubric above, recorded in each report as `clarity_rubric_version` |
 | `score(skill, config, llm=None, judge=None)` | Calls `judge.rate(skill, CRITERIA, INSTRUCTIONS)` and returns `score_from_ratings`. Builds a `Judge` on `llm` if no shared judge is given; raises `JudgeUnavailable` if neither is |
-| `score_from_ratings(ratings)` | The `DimensionScore` of section 2. `reason` gives the number rated and the weakest criterion; `rubric` keeps every rating with its quote |
+| `score_from_ratings(ratings, left_out=())` | The `DimensionScore` of section 2. `reason` gives the number rated and the weakest criterion; `rubric` keeps every rating with its quote; `left_out` is `RateResult.skipped`, named in `detail` |
 
 What the judge sees is decided by `Judge.rate`: `SKILL.md`, scripts and other text files, hidden text stripped so a comment aimed at the judge cannot sway a rating, cut to `judge_max_chars` (judge.md 2.3). Visible text aimed at the judge is not stripped; the injection controls in section 4.2 test whether it sways the judge.
 
@@ -79,10 +80,10 @@ What the judge sees is decided by `Judge.rate`: `SKILL.md`, scripts and other te
 
 The plugin's `evaluate` and `rank` commands (`metaskill/evaluate/__init__.py`) score each dimension by importing its module from `SCORERS`. With `clarity.py` present, Clarity is no longer `skipped: not built yet`. Changes there:
 
-- One `Judge` is built per call with `Judge.from_context(ctx, config)` and passed as `judge=` to the dimensions in `JUDGED` (Clarity for now; Configuration Cleanliness and the safety review later). Reusing one judge is what makes `judge_model` complete (judge.md 1.1).
+- One `Judge` is built per call with `Judge.from_context(ctx, config)` and passed as `judge=` to the dimensions in `JUDGED` (Clarity for now; Configuration Cleanliness and the safety review later). Reusing one judge is what makes `judge_model` complete (judge.md 1.1). It is not complete yet: the safety review's deep tier builds its own `Judge`, so its model is not listed.
 - `ReportMeta.judge_model` is the judge's record of which models answered. It stays `""` when no judge answered.
 - `ReportMeta.clarity_rubric_version` is `clarity.RUBRIC_VERSION`, and the Markdown report prints it in its header.
-- `JudgeUnavailable` from Clarity becomes `skipped: no judge model is available`; any other failure, including `JudgeError`, becomes `error`, as for every dimension.
+- `JudgeUnavailable` from Clarity becomes `skipped: no judge model is available`; any other failure, including `JudgeError`, becomes `error`, as for every dimension. A provider that stops answering mid-run (`JudgeCallFailed`) is `error` with `detail` saying so, and the result's `warnings` say how many skills it left unranked, so they are not read as broken skills.
 
 Clarity makes one judge call per skill (plus `judge_retries` on a malformed reply), with the skill's text as input: roughly the skill's size in tokens plus about 2,500 for the rubric.
 
@@ -178,7 +179,7 @@ Real judge runs stay out of CI (evaluate.md 6). To run one:
 The comparison prints two tables and exits non-zero unless everything passes:
 
 - **Pairs.** For every degraded case, the clear skill has the higher Clarity score **and** a strictly higher rating on every targeted criterion (an unrated criterion counts as 0). This is the "reference outranks its vague variant" check of golden_dataset.md, *Evaluating the Evaluator*.
-- **Controls.** Each injected and reworded skill against its base, by the rules in section 4.2.
+- **Controls.** Each injected and reworded skill against its base, by the rules in section 4.2. An injected skill whose clear twin is in the report but has no Clarity score fails, since "below the twin" cannot be checked; a twin left out of the run is skipped, and only the gain over the base is checked.
 
 A pair or control is skipped when one of its skills is not in the report. The comparison warns when the report's `clarity_rubric_version` differs from the dataset's `rubric_version`: reports from before version 2 have no `actionability` rating, so that criterion counts as 0 on both sides and every pair that targets it fails. Version 2 reports have the same ratings as version 3 but equally weighted scores, so their pair results still hold, while control changes measured on them are on the old scale.
 
@@ -186,7 +187,7 @@ The first version 2 run (2026-11-17, 22 skills, before the controls were added) 
 
 ### 4.5 What the comparison does not check
 
-Only the pair ordering is automated. These parts of `cases.json` are not compared with a live report yet:
+Only the pair ordering and the injection and rewording controls (4.2) are automated. These parts of `cases.json` are not compared with a live report yet:
 
 - **`expected_label` as a threshold.** No clear skill has to reach a minimum score (section 5, question 5).
 - **`expected_properties` and `evidence_quotes`.** They are checked for consistency offline (4.3) but not against the judge's `reason` and `quote`.
