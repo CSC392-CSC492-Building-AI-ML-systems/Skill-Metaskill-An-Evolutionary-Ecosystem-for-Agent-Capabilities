@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "organization": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Organization label to include in the report.",
+      "pattern": "\\S"
+    }
+  },
+  "required": [
+    "organization"
+  ],
+  "additionalProperties": false
+}

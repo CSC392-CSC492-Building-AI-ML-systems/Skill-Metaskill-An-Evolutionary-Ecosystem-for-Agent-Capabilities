@@ -29,8 +29,12 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-NOT_BUILT = [d for d in Dimension
-             if d not in (Dimension.SAFETY, Dimension.CLARITY, Dimension.EFFICIENCY)]
+# Built dimensions; Safety, Efficiency and Quality have separate assertions below, and
+# Clarity is skipped without a judge (test_clarity_without_model_access_is_skipped).
+NOT_BUILT = [
+    d for d in Dimension
+    if d not in (Dimension.SAFETY, Dimension.CLARITY, Dimension.EFFICIENCY, Dimension.QUALITY)
+]
 
 
 def make_skill(root, name, body="# Skill\n\nSummarize the file.\n"):
@@ -96,6 +100,9 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
     efficiency = skill.dimensions[Dimension.EFFICIENCY]
     assert skill.scores.efficiency is None and efficiency.status is Status.SKIPPED
     assert "task runs" in efficiency.detail
+    quality = skill.dimensions[Dimension.QUALITY]
+    assert skill.scores.clarity is None and quality.status is Status.SKIPPED
+    assert "task" in quality.reason.lower()
 
 
 def test_no_tasks_means_no_lift(tmp_path, out):
