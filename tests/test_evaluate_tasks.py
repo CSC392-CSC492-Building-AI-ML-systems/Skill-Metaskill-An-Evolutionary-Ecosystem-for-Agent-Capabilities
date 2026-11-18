@@ -109,7 +109,9 @@ def test_tasks_run_once_per_skill_and_efficiency_scores_them(tmp_path, harness):
     assert efficiency.status is Status.OK and skill.scores.efficiency > 0.5
     assert len(skill.tests) == 2 * RUNS * 2
     assert {t.variant for t in skill.tests} == {Variant.WITH_SKILL, Variant.BASELINE}
-    assert skill.lift is None  # Quality defines it; not built yet
+    # Both variants pass every run: Quality scores the same runs, and its lift is 0, not None.
+    assert skill.dimensions[Dimension.QUALITY].status is Status.OK and skill.scores.quality == 0.75
+    assert skill.lift == 0.0
     assert report(result).meta.agent_model == "fake-model"
 
 
@@ -178,6 +180,8 @@ def test_runs_the_runner_cannot_make_are_errors_not_scores(tmp_path, harness):
     skill = report(result).skills[0]
     efficiency = skill.dimensions[Dimension.EFFICIENCY]
     assert efficiency.status is Status.ERROR and "no task run completed" in efficiency.detail
+    # Quality cannot compare without runs, so lift stays None rather than an invented 0.
+    assert skill.dimensions[Dimension.QUALITY].status is Status.ERROR and skill.lift is None
     assert "resolves the terminal backend" in efficiency.detail
     assert skill.dimensions[Dimension.SAFETY].status is not Status.SKIPPED  # still scored
 
@@ -353,3 +357,22 @@ def test_a_task_dimension_receives_the_planned_task_ids(tmp_path, harness, score
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
                             output_path=tmp_path / "out", tasks_path=harness.tasks)
     assert report(result).skills[0].dimensions[Dimension.ROBUSTNESS].detail == f"t1,t2|{2 * RUNS * 2}"
+
+
+
+# --- Quality scores the runs, and its lift reaches the report -----------------------------
+
+
+def test_a_skill_that_changes_the_outcome_gets_its_lift_and_quality(tmp_path, harness):
+    # Only the skill makes the agent write report.txt, so with-skill runs pass and
+    # baseline runs fail: lift +1, and the provisional formula gives Quality 1.0.
+    harness.tasks.write_text(json.dumps({"tasks": [{
+        "task_id": "report", "description": "d", "prompt": "write the report",
+        "checks": [{"judge": "deterministic", "kind": "file_exists", "target": "report.txt"}]}]}))
+    harness.agent_act = writes_report_with_skill
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks)
+    skill = report(result).skills[0]
+    assert skill.lift == 1.0
+    assert skill.dimensions[Dimension.QUALITY].status is Status.OK and skill.scores.quality == 1.0
+    assert "1 task(s), 2 run(s) per task per condition" in skill.dimensions[Dimension.QUALITY].detail

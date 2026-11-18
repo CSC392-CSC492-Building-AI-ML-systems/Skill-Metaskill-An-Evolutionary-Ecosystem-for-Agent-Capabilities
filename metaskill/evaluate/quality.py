@@ -8,10 +8,14 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .models import (
     Dimension, DimensionScore, EvaluationConfig, Skill, Status, TestResult, Variant,
 )
+
+if TYPE_CHECKING:
+    from .runner import RunnerResult
 
 FORMULA_VERSION = "provisional-v1"
 
@@ -144,3 +148,16 @@ def score(skill: Skill, config: EvaluationConfig, results: Iterable[TestResult] 
     """
     return assess(results, task_ids=task_ids, runs_per_task=config.runs_per_task,
                   runner_errors=runner_errors).dimension_score
+
+
+def assess_runs(config: EvaluationConfig, runs: RunnerResult) -> QualityAssessment:
+    """assess() over one skill's task runs as the runner returns them: their records, the
+    planned task ids (so a task that never ran still counts) and the runner's errors."""
+    return assess(runs.tests, task_ids=runs.task_ids, runs_per_task=config.runs_per_task,
+                  runner_errors=runs.errors)
+
+
+def score_runs(skill: Skill, config: EvaluationConfig, runs: RunnerResult) -> DimensionScore:
+    """Entry point when evaluate ran a task file (task-based dimensions, evaluate.md 6).
+    Evaluate copies the same assessment's lift into SkillResult.lift."""
+    return assess_runs(config, runs).dimension_score

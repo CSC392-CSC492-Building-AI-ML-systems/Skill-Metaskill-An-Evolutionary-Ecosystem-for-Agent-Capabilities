@@ -11,7 +11,8 @@ skill is not ranked (evaluate.md 5.2).
 With a task file (tasks_path), each skill's tasks run once in the sandbox with a Hermes
 agent (runner.py, hermes_agent.py), and every task-based dimension scores those same runs
 (score_runs). Without one, no task runs: no agent session, Docker is not asked for, and
-the task-based dimensions are skipped. `lift` is left to Quality, which defines it.
+the task-based dimensions are skipped. `lift` comes from Quality's assessment of the same
+runs (quality.assess_runs); None without tasks, or when Quality cannot compare.
 
 The plugin imports judge.py through this package when it registers, so whatever is
 imported at the top here has to load with it. `safety` is imported where it is used: a
@@ -23,6 +24,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -43,6 +45,8 @@ from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
 from .runner import RunnerResult, report_dir, run_tasks, timestamp
 from .tasks import TaskError, load_tasks
+
+_log = logging.getLogger(__name__)
 
 # The module that scores each dimension (evaluate.md section 6), once it exists. Each has
 # score(skill, config, llm=...) -> DimensionScore, so adding one needs no change here.
@@ -280,13 +284,28 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
     return SkillResult(
         name=skill.name,
         scores=make_scores(found, config),
-        lift=None,  # Quality defines it (evaluate.md 4.1); not built yet
+        lift=_lift(config, runs),
         dimensions={d: score.to_status() for d, score in found.items()},
         tests=runs.tests if runs else [],
         rubric=[r for score in found.values() for r in score.rubric],
         findings=[f for score in found.values() for f in score.findings],
         local_warnings=safety.local_warnings(skill),
     ), runs, [(s.judge_model, s.judge_usage) for s in found.values() if s.judge_usage]
+
+
+def _lift(config: EvaluationConfig, runs: RunnerResult | None) -> float | None:
+    """SkillResult.lift from Quality, which defines it (evaluate.md 4.1): with-skill minus
+    baseline pass rate over the skill's runs. None when no tasks ran, or when Quality cannot
+    compare (incomplete evidence, runner errors), never an invented 0."""
+    if runs is None:
+        return None
+    try:
+        from . import quality
+
+        return quality.assess_runs(config, runs).lift
+    except Exception:  # Quality's own score reports what went wrong
+        _log.warning("metaskill: lift could not be computed", exc_info=True)
+        return None
 
 
 def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
