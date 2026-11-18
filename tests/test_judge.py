@@ -416,13 +416,21 @@ def test_parse_json_reply_falls_back_to_all_objects_when_none_fits():
     assert parse_json_reply('{"a": 1} or {"b": 2}', RATINGS_SCHEMA) is None
 
 
-@pytest.mark.parametrize("text", [
-    '{"a":' * 5000,  # nested past Python's recursion limit, never closed
-    '{"a": ' + "[" * 3000 + "]" * 3000 + "}",  # nested too deep, but valid JSON
-    'Answer: {"a": ' + "[" * 3000 + "]" * 3000 + '}',
-])
-def test_parse_json_reply_treats_json_nested_too_deep_as_none(text):
-    assert parse_json_reply(text) is None
+def test_parse_json_reply_treats_deep_unclosed_nesting_as_none():
+    assert parse_json_reply('{"a":' * 5000) is None  # never closed, so never JSON
+
+
+DEEP = '{"a": ' + "[" * 3000 + "]" * 3000 + "}"
+
+
+@pytest.mark.parametrize("text", [DEEP, f"Answer: {DEEP}"], ids=["whole", "in-prose"])
+def test_parse_json_reply_does_not_raise_on_deeply_nested_json(text):
+    # How deep the json module can go depends on the Python version and platform: 3.12 on
+    # Linux reads this, 3.13 on Windows raises RecursionError. Either way the parser must
+    # not raise: the reply is read, or counts as having no JSON object.
+    # (Not compared with json.loads(DEEP): where that raises, so would the comparison.)
+    result = parse_json_reply(text)
+    assert result is None or (isinstance(result, dict) and list(result) == ["a"])
 
 
 def test_parse_json_reply_gives_up_on_many_unclosed_objects_quickly():
