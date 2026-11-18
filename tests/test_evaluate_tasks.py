@@ -18,6 +18,7 @@ from metaskill.evaluate.runner import AgentRun
 from metaskill.evaluate.sandbox import Problem
 from metaskill.evaluate.sandbox import RunFailed
 from test_runner import FakeAgent, FakeLlm, FakeSandbox, writes_report_with_skill
+from test_evaluate import scorers  # noqa: F401  (fixture: puts a stand-in scorer module in place)
 
 RUNS = 2  # runs_per_task in these tests
 
@@ -300,3 +301,20 @@ def test_without_llm_checks_no_judge_is_recorded(tmp_path, harness):
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
                             output_path=tmp_path / "out", tasks_path=harness.tasks)
     assert report(result).meta.judge_model == "" and report(result).meta.judge_usage == {}
+
+
+# --- Task dimensions get the planned task ids (for Quality's assess) ---------------------
+
+
+def test_a_task_dimension_receives_the_planned_task_ids(tmp_path, harness, scorers):
+    # A stand-in task-based dimension (robustness), as Quality's score_runs will use them.
+    scorers("robustness", (
+        "from metaskill.evaluate.models import DimensionScore, Dimension, Status\n"
+        "def score(skill, config, llm=None):\n"
+        "    raise AssertionError('task dimensions are scored from runs')\n"
+        "def score_runs(skill, config, runs):\n"
+        "    return DimensionScore(Dimension.ROBUSTNESS, 0.5, Status.OK,\n"
+        "                          detail=','.join(runs.task_ids) + f'|{len(runs.tests)}')\n"))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks)
+    assert report(result).skills[0].dimensions[Dimension.ROBUSTNESS].detail == f"t1,t2|{2 * RUNS * 2}"

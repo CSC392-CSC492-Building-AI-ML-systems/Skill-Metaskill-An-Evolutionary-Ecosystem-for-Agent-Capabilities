@@ -267,7 +267,8 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
             runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
                              sandbox=sandbox)
         except ValueError as e:  # a skill name that cannot be a log folder: no run made
-            runs = RunnerResult(tests=[], errors=[clean(str(e), MAX_REASON_CHARS)])
+            runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
+                                errors=[clean(str(e), MAX_REASON_CHARS)])
     found = {d: _score(d, skill, config, llm, runs) for d in Dimension}
     return SkillResult(
         name=skill.name,
