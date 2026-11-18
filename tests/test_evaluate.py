@@ -29,8 +29,11 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-# Safety is scored; efficiency's module is built but needs task runs (handled below).
-NOT_BUILT = [d for d in Dimension if d not in (Dimension.SAFETY, Dimension.EFFICIENCY)]
+# Safety, Efficiency, and Quality have separate assertions below.
+NOT_BUILT = [
+    d for d in Dimension
+    if d not in (Dimension.SAFETY, Dimension.EFFICIENCY, Dimension.QUALITY)
+]
 
 
 def make_skill(root, name, body="# Skill\n\nSummarize the file.\n"):
@@ -84,6 +87,9 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
     efficiency = skill.dimensions[Dimension.EFFICIENCY]
     assert skill.scores.efficiency is None and efficiency.status is Status.SKIPPED
     assert "task runs" in efficiency.detail
+    quality = skill.dimensions[Dimension.QUALITY]
+    assert skill.scores.clarity is None and quality.status is Status.SKIPPED
+    assert "task" in quality.reason.lower()
 
 
 def test_no_tasks_means_no_lift(tmp_path, out):
@@ -109,11 +115,11 @@ def test_a_new_dimension_module_is_picked_up(tmp_path, out, scorers):
 
 
 def test_a_module_that_fails_to_import_is_an_error_not_a_skip(tmp_path, out, scorers):
-    scorers("quality", "import a_module_that_is_not_there\n")
+    scorers("clarity", "import a_module_that_is_not_there\n")
     skill = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)).skills[0]
-    status = skill.dimensions[Dimension.QUALITY]
+    status = skill.dimensions[Dimension.CLARITY]
     assert status.status is Status.ERROR and status.detail == "failed: ModuleNotFoundError"
-    assert skill.scores.quality is None
+    assert skill.scores.clarity is None
 
 
 def test_a_scorer_that_raises_is_an_error_without_its_message(tmp_path, out, scorers):

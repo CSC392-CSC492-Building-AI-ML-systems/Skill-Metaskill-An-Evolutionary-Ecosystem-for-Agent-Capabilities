@@ -123,8 +123,9 @@ def assess(results: Iterable[TestResult], *, task_ids: Iterable[str],
     return QualityAssessment(dimension, with_skill, baseline, lift)
 
 
-def score(skill: Skill, config: EvaluationConfig, results: Iterable[TestResult], *,
-          task_ids: Iterable[str], runner_errors: Iterable[str] = ()) -> DimensionScore:
+def score(skill: Skill, config: EvaluationConfig, results: Iterable[TestResult] = (), *,
+          task_ids: Iterable[str] = (), runner_errors: Iterable[str] = (),
+          llm: object = None) -> DimensionScore:
     """Uniform scoring-module entry point; skill is not re-read or executed.
 
     Use assess() when the caller also needs unrounded rates and SkillResult.lift.
