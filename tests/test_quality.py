@@ -15,7 +15,7 @@ def matrix(skill_outcomes, baseline_outcomes, task_id="task-a"):
         TestResult(task_id=task_id, description="Controlled task", variant=variant,
                    run=i, judge=JudgeType.DETERMINISTIC, passed=passed,
                    score=float(passed), reason="Fixed evidence",
-                   metrics=Metrics(tokens=0, seconds=0, tool_calls=0), output="")
+                   metrics=Metrics(), output="")
         for variant, outcomes in ((Variant.WITH_SKILL, skill_outcomes),
                                   (Variant.BASELINE, baseline_outcomes))
         for i, passed in enumerate(outcomes, 1)

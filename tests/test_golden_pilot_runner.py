@@ -25,7 +25,7 @@ def answering_agent(wrong_with_skill=False):
         answer = expected_report(tickets, config["organization"])
         if wrong_with_skill and skill is not None:
             answer["total_minutes"] += 1
-        return AgentRun(output=json.dumps(answer), tokens=10, tool_calls=0)
+        return AgentRun(output=json.dumps(answer), output_tokens=10, tool_calls=0)
     return FakeAgent(act)
 
 
