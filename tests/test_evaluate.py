@@ -89,7 +89,7 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
     assert "task runs" in efficiency.detail
     quality = skill.dimensions[Dimension.QUALITY]
     assert skill.scores.clarity is None and quality.status is Status.SKIPPED
-    assert "task" in quality.reason.lower()
+    assert "task" in (quality.reason + quality.detail).lower()  # evaluate skips it: detail
 
 
 def test_no_tasks_means_no_lift(tmp_path, out):
