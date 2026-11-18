@@ -40,7 +40,7 @@ def score(
     fixed_settings: Iterable[FixedSettingEvidence] = (),
     consumed_settings: frozenset[str] | None = None,
 ) -> DimensionScore:
-    """Return findings for available evidence and leave the numeric score unset."""
+    """Report available findings and apply the confirmed Separation gate."""
     schema, schema_detail = _schema(skill)
     pilot_fixed, unused = configuration_evidence(skill)
     fixed_settings = (*fixed_settings, *pilot_fixed)
@@ -65,6 +65,17 @@ def score(
                 location=f"{SCHEMA_NAME}#/properties/{name}",
                 message="The instruction-only pilot declares a setting with no consumer.",
             ))
+    # A confirmed portability failure fixes the maximum score at zero,
+    # even when the remaining properties have incomplete evidence.
+    if any(f.rule == "fixed-profile-setting" for f in findings):
+        return DimensionScore(
+            dimension=Dimension.CONFIG_CLEANLINESS,
+            value=0.0,
+            status=Status.OK,
+            reason="Confirmed Separation failure: the skill cannot adapt across intended profiles.",
+            detail=schema_detail,
+            findings=findings,
+        )
     return DimensionScore(
         dimension=Dimension.CONFIG_CLEANLINESS,
         value=None,

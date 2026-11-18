@@ -344,6 +344,13 @@ def test_config_cleanliness_reports_pilot_evidence(out, variant, expected):
     folder = (Path(__file__).resolve().parents[1]
               / "metaskill/evaluate/golden/synthetic/ticket-summary/skills" / variant)
     [skill] = load(evaluate_skill(folder, output_path=out)).skills
-    assert skill.scores.config_cleanliness is None
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    if variant == "hardcoded":
+        assert skill.scores.config_cleanliness == 0.0
+        assert status.status is Status.OK
+        assert "Separation failure" in status.reason
+    else:
+        assert skill.scores.config_cleanliness is None
+        assert status.status is Status.SKIPPED
     findings = [f for f in skill.findings if f.dimension is Dimension.CONFIG_CLEANLINESS]
     assert [f.rule for f in findings] == expected
