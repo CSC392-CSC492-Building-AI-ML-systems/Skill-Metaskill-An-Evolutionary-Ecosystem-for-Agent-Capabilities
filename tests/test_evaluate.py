@@ -29,10 +29,10 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-# Safety, Efficiency, and Quality have separate assertions below.
+# Implemented dimensions have separate assertions.
 NOT_BUILT = [
     d for d in Dimension
-    if d not in (Dimension.SAFETY, Dimension.EFFICIENCY, Dimension.QUALITY)
+    if d not in (Dimension.SAFETY, Dimension.EFFICIENCY, Dimension.QUALITY, Dimension.CONFIG_CLEANLINESS)
 ]
 
 
@@ -90,6 +90,30 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
     quality = skill.dimensions[Dimension.QUALITY]
     assert skill.scores.clarity is None and quality.status is Status.SKIPPED
     assert "task" in quality.reason.lower()
+
+
+@pytest.mark.parametrize("schema, expected_rule", [
+    (None, None),
+    ("{broken", None),
+    ('{"required":["org"],"properties":{"org":{"description":"Organization"}}}', None),
+    ('{"required":["org"],"properties":{"org":{}}}', "missing-required-description"),
+])
+def test_config_cleanliness_reports_findings_without_a_score(tmp_path, out, schema, expected_rule):
+    folder = make_skill(tmp_path, "config-example")
+    if schema is not None:
+        (folder / "config.schema.json").write_text(schema, encoding="utf-8")
+
+    result = evaluate_skill(folder, output_path=out)
+    [skill] = load(result).skills
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    assert skill.scores.config_cleanliness is None
+    assert status.status is Status.SKIPPED
+    assert "incomplete coverage" in status.reason
+    findings = [f for f in skill.findings if f.dimension is Dimension.CONFIG_CLEANLINESS]
+    assert [f.rule for f in findings] == ([expected_rule] if expected_rule else [])
+    if expected_rule:
+        report = next(p for p in result["artifacts"] if p.endswith(".md"))
+        assert "config.schema.json#/properties/org" in Path(report).read_text(encoding="utf-8")
 
 
 def test_no_tasks_means_no_lift(tmp_path, out):
