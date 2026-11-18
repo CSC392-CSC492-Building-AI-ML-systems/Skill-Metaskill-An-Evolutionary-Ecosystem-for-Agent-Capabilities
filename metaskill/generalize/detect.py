@@ -43,6 +43,9 @@ class Category(StrEnum):
     # A reference to a variable by name, e.g. os.getenv("API_KEY"). It is already a
     # configuration interface, so it is reported but not replaced (design.md, section 3.2).
     ENVIRONMENT_VARIABLE = "environment_variable"
+    # Free-form personal data found by an extra detector from an add-on plugin, such as a
+    # name, street address, birth date, or ID or card number (see extras.py).
+    PERSONAL_DATA = "personal_data"
 
 
 class Action(StrEnum):
@@ -59,6 +62,10 @@ REPLACE_THRESHOLD = 0.9
 def action_for(category: Category, confidence: float) -> Action:
     if category is Category.ENVIRONMENT_VARIABLE:
         return Action.KEEP
+    # A model's confidence does not separate its false alarms from real hits, so its
+    # findings are never replaced without a decision.
+    if category is Category.PERSONAL_DATA:
+        return Action.REVIEW
     if category is Category.CREDENTIAL or confidence >= REPLACE_THRESHOLD:
         return Action.REPLACE
     return Action.REVIEW
@@ -1038,6 +1045,18 @@ def _reserve(spans: list[tuple[int, int]], start: int, end: int) -> None:
 
 
 def detect_file(source: SourceFile, detectors: Iterable[Detector] = DETECTORS) -> list[Finding]:
+    return detect_file_with_claims(source, detectors)[0]
+
+
+def detect_file_with_claims(
+    source: SourceFile, detectors: Iterable[Detector] = DETECTORS,
+) -> tuple[list[Finding], list[tuple[int, int]]]:
+    """detect_file, plus every span the detectors claimed, sorted and merged.
+
+    Claimed spans are the findings and the values rejected as shared or example values,
+    such as 555 phone numbers. Extra detectors skip them (see extras.py), so they neither
+    repeat a finding nor report a known example value.
+    """
     kept: list[Candidate] = []  # sorted by start and never overlapping, like spans
     spans: list[tuple[int, int]] = []
     reserved: list[tuple[int, int]] = []
@@ -1067,7 +1086,10 @@ def detect_file(source: SourceFile, detectors: Iterable[Detector] = DETECTORS) -
                     break
                 if not other.name and start <= other.start and other.end <= end:
                     kept[i] = replace(other, name=candidate.name)
-    return [_to_finding(source, c) for c in kept]
+    claimed = list(spans)
+    for start, end in reserved:
+        _reserve(claimed, start, end)
+    return [_to_finding(source, c) for c in kept], claimed
 
 
 def detect(inventory: Inventory, detectors: Iterable[Detector] = DETECTORS) -> ScanResult:

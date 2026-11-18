@@ -79,6 +79,29 @@ Looking at the user's files must be harmless:
 
 Two changes outside safety were made for this: a `LocalWarning` type and a `local_warnings` field on `SkillResult` in `models.py`, and the new field in evaluate.md §2.1. Filling it in is the runner's job, which does not exist yet.
 
+## Score and local warning
+
+The two answer different questions, and only one is scored:
+
+- **The safety score** says how risky the skill is, from what is written in it. It is the same on every machine, so skills can be compared and ranked. A skill that names the user's personal files itself (`rm -rf ~/Documents`, `Path.home() / "Desktop"`) is CRITICAL everywhere ([checks.md](checks.md), delete targets).
+- **A local warning** says what the skill would do on this machine. It never changes the score, including on the machine it is about.
+
+So when the danger exists only because of a machine's setup, the score stays the same and only that user is warned. For example, `rm -rf "$OUTPUT_DIR"`:
+
+| | `OUTPUT_DIR` unset or harmless | `OUTPUT_DIR=~/Documents` on this machine |
+|---|---|---|
+| Safety score | 0.3 (HIGH: unknown target) | 0.3, the same |
+| Local warning | none | "Not safe to run on this machine: ... On this machine it is your Documents folder." |
+
+These cases usually score low anyway: a delete whose target cannot be known from the skill (a variable, a placeholder, an arbitrary folder) is HIGH on every machine. The exception is a rebuildable target such as `build/`, which scores MEDIUM (0.6) but can be a link to something important on one machine; there the warning is the only signal.
+
+**[OPEN]** Whether a local warning should do more than warn, without changing the shared score:
+
+1. **A per-machine verdict** next to the score, e.g. "safe to run here: no", which `rank` and the tool's recommendation take into account for this user only.
+2. **A blocking warning:** the tool does not run or recommend the skill on this machine until the user confirms they understand the warning.
+
+Both keep "same skill, same score on every machine". Today the warning is shown at the top of the tool's output and kept in the report.
+
 ## Tests
 
 All tests use a temporary folder as the home directory and a fake environment, so they never look at the real machine.

@@ -1,5 +1,6 @@
 from metaskill.evaluate.models import Dimension, Finding, Severity
-from metaskill.evaluate.safety.findings import merge, score_from_findings, worst_severity
+from metaskill.evaluate.safety.findings import (
+    SEVERITY_SCORE, merge, score_from_findings, worst_severity)
 
 
 def make(
@@ -18,6 +19,17 @@ def make(
 # --- score ------------------------------------------------------------------
 
 
+def test_severity_scores_follow_the_cvss_band_ceilings():
+    # Pins the exact values, so a typo in _CVSS_BAND_CEILING or a wrong formula fails here.
+    assert SEVERITY_SCORE == {
+        Severity.CRITICAL: 0.0,
+        Severity.HIGH: 0.11,
+        Severity.MEDIUM: 0.31,
+        Severity.LOW: 0.61,
+        Severity.INFO: 1.0,
+    }
+
+
 def test_no_findings_scores_one():
     assert score_from_findings([]) == 1.0
 
@@ -30,7 +42,7 @@ def test_score_is_set_by_worst_finding():
 def test_more_findings_of_the_same_severity_do_not_lower_the_score():
     one = [make(Severity.MEDIUM)]
     many = [make(Severity.MEDIUM, location=f"SKILL.md:{n}") for n in range(5)]
-    assert score_from_findings(one) == score_from_findings(many) == 0.6
+    assert score_from_findings(one) == score_from_findings(many) == SEVERITY_SCORE[Severity.MEDIUM]
 
 
 def test_findings_for_another_dimension_do_not_count():

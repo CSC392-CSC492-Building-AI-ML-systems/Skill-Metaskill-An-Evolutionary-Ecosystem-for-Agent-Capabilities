@@ -1,0 +1,6 @@
+{
+  "build_host": "build.acme.internal",
+  "contact_email": "jane.doe@acme-example.dev",
+  "repository_url": "https://github.com/acme-example/payments-service",
+  "workdir": "/Users/janedoe/work/payments"
+}
