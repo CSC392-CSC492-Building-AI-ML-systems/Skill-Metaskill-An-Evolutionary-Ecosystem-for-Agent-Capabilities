@@ -109,9 +109,19 @@ def assess(results: Iterable[TestResult], *, task_ids: Iterable[str],
     with_skill, baseline = rates[Variant.WITH_SKILL], rates[Variant.BASELINE]
     lift = with_skill - baseline
     denominator = len(planned) * runs_per_task
+    mean_scores = {
+        variant: math.fsum(record.score for record in records if Variant(record.variant) == variant)
+        / denominator
+        for variant in (Variant.WITH_SKILL, Variant.BASELINE)
+    }
     dimension = DimensionScore(
         dimension=Dimension.QUALITY, value=_provisional_score(with_skill, lift),
         status=Status.OK,
+        detail=(
+            f"{len(planned)} task(s), {runs_per_task} run(s) per task per condition. "
+            f"Mean task scores: with skill {mean_scores[Variant.WITH_SKILL]:.6f}; "
+            f"baseline {mean_scores[Variant.BASELINE]:.6f}."
+        ),
         reason=(
             f"With skill {counts[Variant.WITH_SKILL]}/{denominator} passed "
             f"(rate {with_skill:.6f}); baseline {counts[Variant.BASELINE]}/{denominator} "

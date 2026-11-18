@@ -10,7 +10,7 @@ Measure how understandable and necessary setup is, whether declarations match us
 
 ## Evidence and model integration
 
-Inputs are the skill bundle, configuration/schema where provided, declared transformation stage, detector findings, and relevant reviewed expectations. The current Skill object has no config-schema field; loading configuration and detector output needs an explicit adapter contract.
+Inputs are the skill bundle, configuration/schema where provided, declared transformation stage, detector findings, reviewed expectations, and declared values that must vary across users or profiles. The current Skill object has no config-schema field; loading configuration and detector output needs an explicit adapter contract.
 
 Use deterministic evidence for missing descriptions, schema fields, and known fixture occurrences. Contextual necessity and semantic usage may need judge.py; do not infer arbitrary script behaviour from a simple substring search. Findings should use the existing Finding/DimensionScore shape. Final category/rule identifiers and severity-to-score policy require review before implementation.
 
@@ -25,7 +25,7 @@ Never expose raw detected secrets in explanations. Pilot values are fictitious n
 | Configuration integrity | Do declared configuration and actual consumers agree for this stage? |
 | Separation | Are values that should vary between users appropriately configurable? |
 
-The draft proposes equal-weight ratings; this pilot stores properties and defects, not preassigned numeric skill scores. A missing schema alone is not universally a defect if a skill documents another valid interface.
+The draft proposes equal-weight ratings; this pilot stores properties and defects, not preassigned numeric skill scores. For schema-free skills, check setup instructions, examples, and documented environment variables. Weighting review should consider whether a confirmed separation failure should cap the score when hardcoding bypasses configuration entirely.
 
 ## Pilot variants
 
@@ -38,7 +38,7 @@ The shared [pilot annotations](../../metaskill/evaluate/golden/synthetic/ticket-
 | undocumented | Required schema field lacks a description. |
 | unused | legacy_region is declared and supplied but has no consumer in this instruction-only workflow. |
 
-All variants have the same core reporting task. A configuration defect does not guarantee lower live Quality under the Alpha profile. Beta exposes the hardcoded reuse limitation without treating all embedded organization names in all skills as forbidden.
+All variants have the same core reporting task. A configuration defect does not guarantee lower live Quality under the Alpha profile. Beta tests whether the hardcoded limitation affects runtime Quality. The public prompt gives supplied configuration precedence, so an agent can still pass by following the prompt. Static separation evidence comes from the declared profile variability.
 
 ## Stages and transformation handoff
 

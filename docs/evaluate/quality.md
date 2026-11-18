@@ -16,7 +16,7 @@ Task-level pass/fail is supplied by the existing judge and runner. The module do
 | Function | Result |
 | --- | --- |
 | `assess(results, *, task_ids, runs_per_task, runner_errors=())` | QualityAssessment containing a DimensionScore, with-skill pass rate, baseline pass rate, and lift. |
-| `score(skill, config, results, *, task_ids, runner_errors=())` | DimensionScore only, using config.runs_per_task. The skill parameter preserves the common scoring-module shape; it is not read or executed. |
+| `score(skill, config, results=(), *, task_ids=(), runner_errors=(), llm=None)` | DimensionScore only, using config.runs_per_task. The skill parameter preserves the common scoring-module shape; it is not read or executed. |
 
 The planned task IDs must come from loaded tasks, not the observed results. Otherwise an entirely absent task could disappear from the denominator. Supply only one skill's results from one compatible evaluation and pass the associated RunnerResult.errors.
 
@@ -36,9 +36,9 @@ quality_dimension = assessment.dimension_score
 # assessment.lift is the unrounded value intended for SkillResult.lift.
 ```
 
-QualityAssessment is an evaluator-side helper, not a new serialized report field. The DimensionScore uses existing value/status/reason/detail fields and round-trips through existing serialization. Its reason records pass counts, rates, lift, and the placeholder formula version.
+QualityAssessment is an evaluator-side helper, not a new serialized report field. The DimensionScore uses existing value/status/reason/detail fields and round-trips through existing serialization. Its reason records pass counts, rates, lift, and the placeholder formula version. Its detail records task and repetition counts and the mean judge score for each condition.
 
-This change does not connect the module to the plugin or report orchestrator. In particular, missing lift remains None in QualityAssessment; the current SkillResult requires a numeric lift. The integration owner must resolve how an unavailable comparison is represented without silently inventing zero lift.
+The standard evaluator skips Quality when no tasks are configured. Both QualityAssessment and SkillResult represent unavailable lift as None. Runtime integration is responsible for copying measured lift into SkillResult.
 
 ## Evidence validation
 
@@ -101,6 +101,6 @@ These checks verify arithmetic and evidence handling, not live skill performance
 ## Remaining integration decisions
 
 - Have the orchestration owner call assess and transfer a valid lift and DimensionScore into existing report structures.
-- Agree how reports represent unavailable lift without changing it into a measured zero.
+- Agree on shared coverage and retry rules with the Efficiency owner before accepting partial Quality evidence. Scores based on different surviving tasks can be incomparable.
 - Review the numeric Quality definition and replace the placeholder after discussion.
 - Independently review gold expectations, then run a small controlled live experiment when the Agent adapter is available.

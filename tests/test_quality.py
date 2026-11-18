@@ -123,7 +123,10 @@ def test_invalid_planned_task_ids_are_caller_error(ids):
 def test_partial_credit_does_not_replace_the_judges_pass_decision():
     runs = matrix([False], [False])
     runs[0] = replace(runs[0], score=.8)
-    assert assess(runs, task_ids=["task-a"], runs_per_task=1).dimension_score.value == 0
+    dimension = assess(runs, task_ids=["task-a"], runs_per_task=1).dimension_score
+    assert dimension.value == 0
+    assert "1 task(s), 1 run(s) per task per condition" in dimension.detail
+    assert "with skill 0.800000; baseline 0.000000" in dimension.detail
 
 
 def test_wrapper_and_existing_dimension_serialization(tmp_path):
