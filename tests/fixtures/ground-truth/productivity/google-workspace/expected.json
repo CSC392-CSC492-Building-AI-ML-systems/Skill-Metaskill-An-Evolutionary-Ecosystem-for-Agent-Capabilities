@@ -1,0 +1,67 @@
+{
+  "skill": "productivity/google-workspace",
+  "shape": "SKILL.md with scripts, environment variables and credential files",
+  "files": {
+    "SKILL.md": "4ab062fe5131d123a6c4f1297e58c7f75b8d517fd282b68547da7ebfabb2a0b9",
+    "references/daily-brief.md": "d4b78bad4121fea470dfe1aa92b2fc0ae2368af6ffbdd0b29ef40c7c8f99067c",
+    "references/gmail-search-syntax.md": "340b78000fba67b9c5373978185446eb549a474870decf8c439edb03b3883bc5",
+    "scripts/_hermes_home.py": "4d0f4393059688353bf8a3cca8118f08548edbae6f3c6ed477ff9f2d1205cff0",
+    "scripts/google_api.py": "a8f7f55db105155a8a5beda1558ede39e27c649150e2a412c31c78c203e832a6",
+    "scripts/gws_bridge.py": "6bba56ab6d49ddab3cd16c2e189950633cbf1a9f4907cb7db5225ebe28313aee",
+    "scripts/setup.py": "a5ba2941cca7e90d452ec08fb5ab8f5ed4bc5b50111f94acb7f56c6452c33f67"
+  },
+  "review": {
+    "annotator": "Jayant Arora (AI-assisted draft)",
+    "reviewer": null,
+    "status": "provisional"
+  },
+  "expected": [],
+  "retained": [
+    {
+      "file": "SKILL.md",
+      "lines": [186, 193, 194, 195, 199, 217, 248, 249, 251],
+      "category": "email",
+      "note": "Placeholder addresses and domains (example.com, company.com, co.com) in command examples."
+    },
+    {
+      "file": "SKILL.md",
+      "lines": [16, 95, 97, 101, 105, 138, 140, 144],
+      "note": "Public Hermes repository, Google Cloud Console pages and the documented localhost OAuth redirect."
+    },
+    {
+      "file": "SKILL.md",
+      "lines": [9, 11, 47, 110, 115, 120, 134, 168, 169, 170, 178, 234, 235, 240, 241],
+      "category": "file_path",
+      "note": "Credential file names and paths under ~/.hermes or ${HERMES_HOME}, plus /path/to/ and ~/ placeholders."
+    },
+    {
+      "file": "references/gmail-search-syntax.md",
+      "lines": [17, 18, 19, 53],
+      "category": "email",
+      "note": "Placeholder addresses in Gmail search examples."
+    },
+    {
+      "file": "scripts/google_api.py",
+      "lines": [11, 1172, 1180],
+      "category": "email",
+      "note": "Placeholder address in usage and help text."
+    },
+    {
+      "file": "scripts/google_api.py",
+      "lines": [46, 47, 48, 49, 50, 51, 52, 53, 1077],
+      "note": "Public Google OAuth scopes and the Docs URL template."
+    },
+    {
+      "file": "scripts/setup.py",
+      "lines": [51, 52, 53, 54, 55, 56, 57, 58, 64, 235, 402],
+      "note": "Public Google OAuth scopes, the localhost redirect, console and revocation endpoints."
+    },
+    {
+      "file": "scripts/_hermes_home.py",
+      "lines": [28, 35, 40],
+      "category": "file_path",
+      "note": "Default ~/.hermes home resolution."
+    }
+  ],
+  "limitations": "Credentials are read at runtime from token files and environment variables rather than hard-coded, so no positives were found; the skill tests that those configuration interfaces are kept."
+}

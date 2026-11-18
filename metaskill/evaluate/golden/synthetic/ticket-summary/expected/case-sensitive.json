@@ -1,0 +1,21 @@
+{
+  "organization": "Example Alpha",
+  "teams": [
+    {
+      "team": "A",
+      "ticket_count": 1,
+      "minutes": 3
+    },
+    {
+      "team": "a",
+      "ticket_count": 1,
+      "minutes": 0
+    },
+    {
+      "team": "a ",
+      "ticket_count": 1,
+      "minutes": 2
+    }
+  ],
+  "total_minutes": 5
+}

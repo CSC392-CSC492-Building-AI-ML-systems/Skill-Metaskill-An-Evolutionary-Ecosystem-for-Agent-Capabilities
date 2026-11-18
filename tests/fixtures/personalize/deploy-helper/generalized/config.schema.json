@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Metaskill configuration",
+  "type": "object",
+  "properties": {
+    "build_host": {
+      "name": "build_host",
+      "type": "string",
+      "required": true,
+      "description": "Organization-specific hostname required by the skill.",
+      "validation": {},
+      "sensitive": false
+    },
+    "contact_email": {
+      "name": "contact_email",
+      "type": "string",
+      "required": true,
+      "description": "Email address used by the generalized skill.",
+      "validation": {
+        "format": "email"
+      },
+      "sensitive": false,
+      "format": "email"
+    },
+    "repository_url": {
+      "name": "repository_url",
+      "type": "string",
+      "required": true,
+      "description": "Repository URL or identifier required by the skill.",
+      "validation": {
+        "format": "uri"
+      },
+      "sensitive": false,
+      "format": "uri"
+    },
+    "workdir": {
+      "name": "workdir",
+      "type": "string",
+      "required": true,
+      "description": "Machine-specific path required by the skill.",
+      "validation": {},
+      "sensitive": false
+    }
+  },
+  "required": [
+    "build_host",
+    "contact_email",
+    "repository_url",
+    "workdir"
+  ],
+  "additionalProperties": false
+}

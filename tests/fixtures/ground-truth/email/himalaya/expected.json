@@ -1,0 +1,78 @@
+{
+  "skill": "email/himalaya",
+  "shape": "SKILL.md with configuration references",
+  "files": {
+    "SKILL.md": "0f6c9bb4c0a5c4f4627e139b6beb2b1ba0addd7145895196528b8125929e3837",
+    "references/configuration.md": "ccd540fa964f843903b17400a5f45ef610a16f23fe1e0ca3e625f717fa951b89",
+    "references/message-composition.md": "84d889972f5f4243d891405b83e67bddc7e835b2c4e434efd77fdc6bca9fe307"
+  },
+  "review": {
+    "annotator": "Jayant Arora (AI-assisted draft)",
+    "reviewer": null,
+    "status": "provisional"
+  },
+  "expected": [],
+  "retained": [
+    {
+      "file": "SKILL.md",
+      "lines": [61, 69, 77, 140, 170, 171, 189, 198, 199, 209],
+      "category": "email",
+      "note": "Placeholder addresses on example.com in config and message examples."
+    },
+    {
+      "file": "SKILL.md",
+      "lines": [62, 63, 65, 66, 67, 68, 70, 71, 73, 74, 75, 76, 78, 79, 85, 86, 87, 88],
+      "category": "configuration",
+      "note": "Example config.toml: placeholder display name, example.com hosts, standard ports, a pass(1) lookup and canonical folder names."
+    },
+    {
+      "file": "SKILL.md",
+      "lines": [11, 40],
+      "category": "repository",
+      "note": "Public upstream repository and install script."
+    },
+    {
+      "file": "SKILL.md",
+      "lines": [33, 40, 57, 273],
+      "category": "file_path",
+      "note": "Portable paths under ~/.config, ~/.local and ~/Downloads."
+    },
+    {
+      "file": "references/configuration.md",
+      "lines": [9, 18, 27, 51, 66, 74, 82, 103, 110, 118, 167, 172, 186],
+      "category": "email",
+      "note": "Placeholder addresses on example.com, company.com and provider domains."
+    },
+    {
+      "file": "references/configuration.md",
+      "lines": [20, 29, 44, 196],
+      "category": "credential",
+      "note": "Literal placeholders for a password and an OAuth client ID."
+    },
+    {
+      "file": "references/configuration.md",
+      "lines": [15, 24, 71, 79, 107, 115, 200, 201],
+      "category": "configuration",
+      "note": "Example.com hosts, public Gmail and iCloud IMAP/SMTP hosts, and placeholder OAuth endpoints."
+    },
+    {
+      "file": "references/configuration.md",
+      "lines": [3, 189, 218],
+      "category": "file_path",
+      "note": "Portable paths under ~/.config, ~/.mail and ~/Downloads."
+    },
+    {
+      "file": "references/message-composition.md",
+      "lines": [10, 11, 32, 33, 34, 35, 43, 44, 61, 62, 77, 78, 104, 105, 121, 122, 189],
+      "category": "email",
+      "note": "Placeholder addresses on example.com and localhost in MML examples."
+    },
+    {
+      "file": "references/message-composition.md",
+      "lines": [83, 89, 95, 96, 114, 131, 132],
+      "category": "file_path",
+      "note": "Generic /path/to/ attachment placeholders."
+    }
+  ],
+  "limitations": "Every value is a documented placeholder or a public provider host, so this skill is a negative control for the email, credential and configuration rules."
+}
