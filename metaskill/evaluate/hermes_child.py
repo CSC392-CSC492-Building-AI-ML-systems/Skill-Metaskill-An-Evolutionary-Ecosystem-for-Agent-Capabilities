@@ -32,6 +32,17 @@ TOOLSETS = ("terminal", "file")
 # The in-container `timeout` gets this much more than Hermes' own command timeout, so
 # Hermes' timeout fires first and the container's only stops what Hermes could not.
 KILL_GRACE = 5
+# Hermes marks a session `failed` for two different kinds of reasons. Most say the environment
+# could not serve it (billing, auth, rate limits, a model the provider does not have, a
+# provider outage, Hermes' own runtime errors): the run tells nothing about the skill and is
+# not scored. These say how the task itself went, and the skill can drive them (a skill that
+# floods the context, or whose text the provider blocks): the run fails like any other.
+# Anything not named here stays an environment problem, so a new Hermes reason is never
+# scored against a skill by accident.
+TASK_FAILURES = frozenset({
+    "context_overflow", "truncated", "content_policy_blocked",
+    "context_compression_exhausted", "context_compression_timeout",
+})
 MAX_TRANSCRIPT_CHARS = 200_000
 MAX_TOOL_TEXT_CHARS = 2_000
 
@@ -50,6 +61,13 @@ def docker_argv(docker: str, container: str, workdir: str, command: str, *,
     return [docker, "exec", *(["-i"] if stdin else []), "--workdir", workdir, container,
             "timeout", "-s", "KILL", str(int(timeout) + KILL_GRACE),
             "bash", *(["-l"] if login else []), "-c", command]
+
+
+def failure_status(result: dict[str, Any]) -> str:
+    """`agent_error` (a failed run) when Hermes' failure_reason or turn_exit_reason is one of
+    TASK_FAILURES, else `provider_error` (the environment failed; the run is not scored)."""
+    reasons = {result.get("failure_reason"), result.get("turn_exit_reason")}
+    return "agent_error" if reasons & TASK_FAILURES else "provider_error"
 
 
 def count_tool_calls(messages: list[dict[str, Any]]) -> int:
@@ -183,14 +201,83 @@ def _setup(request: dict[str, Any]) -> None:
         raise SetupError(f"Hermes setup failed: {type(e).__name__}: {e}") from e
 
 
+class _ModelChoice:
+    """The model and provider to use, and an alias's own base URL and key if it has them."""
+
+    def __init__(self, model: str, provider: str | None):
+        self.model, self.provider = model, provider
+        self.base_url: str | None = None
+        self.api_key: str | None = None
+
+
+def _configured_model(model_cfg: object) -> str:
+    if isinstance(model_cfg, str):
+        return model_cfg
+    raw = model_cfg.get("default") or model_cfg.get("model") or ""
+    if isinstance(raw, dict):
+        from hermes_cli.config import split_model_config_default
+
+        return split_model_config_default(raw)[0]
+    return str(raw or "")
+
+
+def _resolve_model_and_provider(cfg: dict, model: str | None, provider: str | None) -> _ModelChoice:
+    """The model and provider a session uses: the request's, else the user's configured ones.
+
+    Hermes 0.21 kept this in hermes_cli/oneshot.py for `hermes -z`; 0.22 moved that run behind
+    the gateway and removed it, so it is kept here, on the helpers that are still in
+    hermes_cli.model_switch and hermes_cli.models. Auto-detection of the provider only runs when
+    a model was named (as `/model <name>` does), because the configured provider may not host it.
+    """
+    model_cfg = cfg.get("model") or {}
+    explicit_model = (model or "").strip() or os.getenv("HERMES_INFERENCE_MODEL", "").strip()
+    choice = _ModelChoice(explicit_model or _configured_model(model_cfg),
+                          (provider or "").strip() or None)
+    if choice.provider is not None or not explicit_model:
+        return choice
+
+    from hermes_cli import model_switch as ms
+    from hermes_cli.models import detect_provider_for_model
+    try:
+        ms._ensure_direct_aliases()
+        direct = ms.DIRECT_ALIASES.get(explicit_model.strip().lower())
+    except Exception:
+        direct = None
+    if direct is None:
+        cfg_provider = ""
+        if isinstance(model_cfg, dict):
+            cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
+        current = cfg_provider or os.getenv("HERMES_INFERENCE_PROVIDER", "").strip().lower() or "auto"
+        route = ms.resolve_startup_model_route(
+            explicit_model, current_provider=current,
+            user_providers=cfg.get("providers"), custom_providers=cfg.get("custom_providers"))
+        if route is not None:
+            choice.provider, choice.model = route.provider, route.model
+            return choice
+        detected = detect_provider_for_model(explicit_model, current)
+        if detected:
+            choice.provider, choice.model = detected
+        return choice
+
+    choice.model, choice.provider = direct.model, direct.provider
+    # The alias's own resolver, so a URL-bearing alias never carries another provider's key.
+    try:
+        choice.provider, choice.api_key = ms.direct_alias_runtime_request(direct)
+    except Exception:
+        choice.api_key = None
+    if direct.base_url:
+        choice.base_url = direct.base_url.rstrip("/")
+    return choice
+
+
 def _build_agent(request: dict[str, Any]):
-    """An AIAgent built as `hermes -z` builds one (hermes_cli/oneshot._run_agent), with
-    only the terminal and file tools, no context files, no memory and no saved session."""
+    """An AIAgent built as Hermes builds one for a single turn, with only the terminal and
+    file tools, no context files, no memory and no saved session."""
     from hermes_cli.config import load_config
-    from hermes_cli.oneshot import _resolve_model_and_provider
     from hermes_cli.runtime_provider import resolve_runtime_with_fallback
     from run_agent import AIAgent
 
+    _turn_off_tool_search()
     cfg = load_config()
     choice = _resolve_model_and_provider(cfg, request.get("model"), request.get("provider"))
     runtime, _ = resolve_runtime_with_fallback(
@@ -199,7 +286,7 @@ def _build_agent(request: dict[str, Any]):
     agent = AIAgent(
         api_key=runtime.get("api_key"), base_url=runtime.get("base_url"),
         provider=runtime.get("provider"), requested_provider=runtime.get("requested_provider"),
-        api_mode=runtime.get("api_mode") or choice.api_mode, model=choice.model,
+        api_mode=runtime.get("api_mode"), model=choice.model,
         credential_pool=runtime.get("credential_pool"),
         request_overrides=runtime.get("request_overrides"),
         enabled_toolsets=list(TOOLSETS), quiet_mode=True, platform="batch",
@@ -207,10 +294,58 @@ def _build_agent(request: dict[str, Any]):
         max_iterations=int(request["max_iterations"]),
         ephemeral_system_prompt=request.get("skill_message") or None)
     agent.suppress_status_output = True
+    _check_tools(agent)
     return agent, choice.model, runtime.get("provider")
 
 
+def _turn_off_tool_search() -> None:
+    """Hermes puts a tool-search bridge (tool_search, tool_describe, tool_call) in front of the
+    tools. It also reaches the user's connected apps (mail, calendars, issue trackers) and can
+    install MCP servers, none of which runs in the sandbox. Turn it off for this process, so the
+    agent gets its tools directly. A Hermes without the module has nothing to turn off, and
+    _check_tools refuses any tool this does not account for."""
+    try:
+        from tools import tool_search
+    except ImportError:
+        return
+    off = tool_search.ToolSearchConfig.from_raw({"enabled": "off"})
+    tool_search.load_config = lambda: off
+    tool_search.load_config_readonly = lambda: off
+
+
+def _check_tools(agent) -> None:
+    """The agent has exactly the tools of the terminal and file toolsets, so everything it can
+    do goes through the sandbox backend. Anything else (a connector, an MCP or plugin tool, a
+    bridge) means Hermes added a way out that this does not know about: nothing runs."""
+    from toolsets import resolve_toolset
+
+    allowed = {name for toolset in TOOLSETS for name in resolve_toolset(toolset)}
+    extra = unexpected_tools(agent.tools, allowed)
+    if extra:
+        raise SetupError("the Hermes agent has tools beyond terminal and file, which could "
+                         f"reach outside the sandbox: {', '.join(extra)[:300]}")
+
+
+def unexpected_tools(tool_defs: Any, allowed: set[str]) -> list[str]:
+    """Names in an agent's tool definitions that are not in `allowed`, sorted. A definition
+    whose name cannot be read counts as unexpected, so a changed shape fails closed."""
+    extra = set()
+    for definition in tool_defs or []:
+        function = definition.get("function") if isinstance(definition, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if not isinstance(name, str) or name not in allowed:
+            extra.add(str(name))
+    return sorted(extra)
+
+
 def _hermes_version() -> str:
+    # 0.22 and later keep the version in version_info; their __version__ is an install stamp
+    # that reads "0.0.0" without one.
+    try:
+        from hermes_cli.version_info import get_version_info
+        return str(get_version_info().derived_version)
+    except Exception:
+        pass
     try:
         from hermes_cli import __version__
         return str(__version__)
@@ -281,13 +416,13 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
             pass
     messages = result.get("messages") or []
     if result.get("failed"):
-        # Hermes marks a session the model provider could not serve (model unavailable,
-        # billing, retries exhausted, a content-policy block) as failed, and puts its own
-        # error text in final_response. That text is not the agent's answer and must not
-        # be judged as one: the run tells nothing about the skill.
-        out.update(status="provider_error",
-                   error=str(result.get("error") or "the model provider failed"),
-                   failure_reason=result.get("failure_reason"))
+        # Hermes puts its own error text in final_response for a failed session. That text is
+        # not the agent's answer and must not be judged as one. Whether the failure counts
+        # against the skill depends on why it failed (failure_status).
+        status = failure_status(result)
+        out.update(status=status,
+                   error=str(result.get("error") or "the session failed"),
+                   failure_reason=result.get("failure_reason") or result.get("turn_exit_reason"))
         return out
     out.update(
         status="ok", seconds=round(time.monotonic() - start, 3),

@@ -61,8 +61,13 @@ Links are left out of the file list, as the runner leaves them out of the copy. 
 | The session ended (finished, or ran out of turns) | `AgentRun` | A judged run |
 | The agent raised during the session | `RuntimeError` | A failed run: the agent failing is an outcome of the task |
 | The session ran past `timeout` | `TimeoutError` | A failed run |
-| Hermes not found, unsupported Hermes, a guard refused, the agent could not be built (no provider), or the child died or wrote an unreadable result | `HermesAgentUnavailable` (a `JudgeError`) | An error in `RunnerResult.errors`, not a failed run: nothing ran, so the skill must not be scored for it |
-| The model provider could not serve the session: Hermes marks it `failed` (model unavailable, billing or entitlement, retries exhausted, a content-policy block) | `HermesAgentUnavailable`, with Hermes' error and `failure_reason` | An error, not a failed run. Hermes puts its own error text in the final response; judging that as the agent's answer would score the skill on this machine's provider |
+| Hermes not found, Windows, unsupported Hermes, a guard refused, the agent could not be built (no provider), or the child died or wrote an unreadable result | `HermesAgentUnavailable` (a `JudgeError`) | An error in `RunnerResult.errors`, not a failed run: nothing ran, so the skill must not be scored for it |
+| The environment could not serve the session: Hermes marks it `failed` with a reason such as `model_not_found`, `billing`, `auth`, `rate_limit`, `server_error`, `empty_response` or `loop_error`, or a reason Hermes adds later | `HermesAgentUnavailable`, with Hermes' error and `failure_reason` | An error, not a failed run. Hermes puts its own error text in the final response; judging that as the agent's answer would score the skill on this machine's provider |
+| The session failed for a reason the task caused: `failure_reason` or `turn_exit_reason` is one of `TASK_FAILURES` (`context_overflow`, `truncated`, `content_policy_blocked`, `context_compression_exhausted`, `context_compression_timeout`) | `RuntimeError`, with the reason | A failed run. A skill can drive these, so they count against it |
+
+Which side a `failed` session falls on is decided by `hermes_child.failure_status` from Hermes' own reason, and only the reasons in `TASK_FAILURES` count against the skill; any other reason, including one added by a later Hermes, stays an environment error, so the run is not scored. `content_policy_blocked` is in the set because the skill's text can cause it and the baseline run gets the same prompt; it is a team decision and moving it is a one-line change. `loop_error` stays out: it is an exception inside Hermes' own loop, not evidence about the skill.
+
+**The pre-flight check.** `HermesAgent.check(workspace)` sets Hermes up and drives its terminal and file tools once each, with no model. Setup being accepted is not enough, because with Docker stopped or on a Hermes whose tools run in another folder every tool call fails and setup still succeeds. So `check_problems` reads each tool's answer: the file tool wrote `check.txt` into the workspace root, the terminal ran there and exited 0, the file tool read back what the terminal wrote, and every guard refused. Anything else raises `HermesAgentUnavailable` with a short reason for each failure (no tool output or stderr in the message). Checked on 0.21.5, 0.22.2 and 0.23.2 against a real container, and against a container that does not exist.
 
 A timeout stops the child's whole process group, so the `docker exec` processes it started stop too; commands inside the container stop with it when the runner removes it.
 
@@ -70,16 +75,25 @@ A timeout stops the child's whole process group, so the `docker exec` processes 
 
 `tests/test_hermes_agent.py`. The unit tests need neither Hermes nor Docker: a fake child process stands in for the session.
 
-- The skill message points at `/tmp/skill`, never at a host path, never at `skill_view`, and leaves out links.
+- The skill message points at `/tmp/skill`, never at a host path, never at `skill_view`, and lists exactly the files the runner copies (`runner.copied`: no links, hard links or paths outside the skill).
 - Hermes' launch command keeps its bootstrap and runs the child; any other shape, or no Hermes, is unavailable.
 - A finished session maps every usage field and the tool calls; the request names the container, the Docker executable and `/work`, and carries a skill message only with the skill.
 - A setup error is a `JudgeError`; an agent error is not; a child that dies without a result is unavailable with its error; a timeout stops the child and what it started; a workspace that is not Docker is unavailable; through the runner, unavailability is an error, not a failed run.
 - The child imports only the standard library at the top (it runs on Hermes' interpreter); its `docker exec` command, tool-call count and transcript are tested directly; a request from another protocol version is refused before Hermes is touched.
 
+Opt-in integration tests need, besides Hermes and Docker:
+
+- **Python 3.12.11, 3.13.4 or later** for the test process. The sandbox refuses older ones because of CVE-2025-4517 (tarfile), and the tests then skip with that reason. Hermes' own bundled Python (3.14) works for a test virtual environment.
+- **The sandbox image pulled first** (`docker pull` of the pinned image in `sandbox.DEFAULT_IMAGE`; [dependencies.md](dependencies.md) lists the command). Without it the tests skip.
+
+Hermes 0.21.5, 0.22.2 and 0.23.2 all pass them; the tests use whichever `hermes` is first on `PATH`.
+
 Opt-in integration tests:
 
 - `METASKILL_HERMES_IT=1` (Hermes and Docker, no model): Hermes' real `write_file`, `terminal` and `read_file` tools reach the container (`/work`, user `nobody`, files written by one read by another), and creating Hermes' local backend, its Docker backend, or `LocalEnvironment` directly is refused. A session on a model the provider does not have is an error, not a judged run (the provider rejects it, so it costs nothing).
 - `METASKILL_HERMES_LIVE=1` (also the configured model): one real session per variant through `run_skill`, with no errors and every metric measured.
+
+`seconds` in a run's metrics is the session's own time as the child measured it (`AgentRun.seconds`), which leaves out the one to two seconds Hermes takes to start; an agent that does not measure it gets the runner's clock.
 
 ## 6. Hermes internals this relies on
 
@@ -93,13 +107,16 @@ None of these is a stable public API. A change breaks loudly, as a setup error o
 | `_create_environment`, `LocalEnvironment` (guard 2) | `tools/terminal_tool_backends.py`, `tools/environments/local.py` |
 | `build_profile_terminal_scope`, `set_terminal_scope` | `tools/terminal_scope.py` |
 | `_get_env_config` (guard 1) | `tools/terminal_tool.py` |
-| `load_config`, `_resolve_model_and_provider`, `resolve_runtime_with_fallback`, `AIAgent`, `run_conversation` | `hermes_cli/`, `run_agent.py` |
+| `load_config`, `resolve_runtime_with_fallback`, `AIAgent`, `run_conversation` | `hermes_cli/`, `run_agent.py` |
+| `model_switch.resolve_startup_model_route`, `direct_alias_runtime_request`, `DIRECT_ALIASES`; `models.detect_provider_for_model` (model and provider choice) | `hermes_cli/` |
+| `toolsets.resolve_toolset`, `tools.tool_search` (`ToolSearchConfig`, `load_config`), and the `version_info` module (the version in the transcript) | `toolsets.py`, `tools/`, `hermes_cli/` |
 
-Built and tested against Hermes 0.21.5; the version is recorded in each run's transcript.
+Built and tested against Hermes 0.21.5 and 0.23.2; the version is recorded in each run's transcript. Hermes 0.22 moved `hermes -z` behind its gateway and removed `hermes_cli.oneshot._resolve_model_and_provider`, so `hermes_child.py` has its own copy of that choice (the request's model and provider, else the configured ones), built on the helpers above. Hermes 0.22.2 itself was not tested here.
 
 ## 7. Limits and open questions
 
-- **The tool-search bridge.** Hermes may replace deferrable tools with `tool_search`/`tool_describe`/`tool_call`. It only searches the enabled tools (here `process_manage`, part of the terminal toolset), so it adds nothing outside `terminal` and `file`, but the model sees those three names.
+- **The tool-search bridge (Hermes 0.21.5 and 0.23.2 both have it).** Hermes puts `tool_search`/`tool_describe`/`tool_call` in front of the tools, and the bridge also reaches the user's connected apps (mail, calendars, issue trackers) and can install MCP servers, none of which runs in the sandbox. The child turns the bridge off for its process (`_turn_off_tool_search`), and `_check_tools` then compares the agent's tools with the terminal and file toolsets (`terminal`, `process_manage`, `read_file`, `write_file`, `patch`, `search_files` on 0.23.2). Any other tool is a setup error and nothing runs. An earlier version of this section said the bridge only searched the enabled tools; the connector and MCP paths show that was wrong.
+- **Windows is not supported yet.** A timeout stops the child with `os.killpg` and a process group of its own, and Windows has neither, so the stop would fail and the Hermes child would keep calling the model until `max_iterations`. `run` and `check` raise `HermesAgentUnavailable` on Windows before anything starts (an error in the report, not a failed run). Supporting it is a separate piece of work: killing the child's process tree with `taskkill /F /T`, checking the `/root` working folder a reviewer saw on Windows, portable tests, and a Windows CI job.
 - **The user's own hooks and plugins** load in the child as in any Hermes session, and run on this machine. They are the user's configuration, as trusted as their Hermes; the skill's commands never reach them.
 - **Start-up cost.** Each run starts a Hermes process, about one to two seconds.
 - **Cost.** Every run is real model calls on the user's provider ([evaluate.md](../evaluate.md) 9).

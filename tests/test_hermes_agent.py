@@ -32,6 +32,13 @@ OK_RESULT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _not_windows(monkeypatch):
+    # HermesAgent refuses Windows outright. These tests drive the adapter itself (with a fake
+    # child, or the integration tests), so they run as on Linux; the refusal has its own test.
+    monkeypatch.setattr(hermes_agent, "_windows", lambda: False)
+
+
 def make_skill(tmp_path, files=None):
     folder = tmp_path / "csv-total"
     folder.mkdir()
@@ -88,6 +95,31 @@ def test_skill_message_leaves_out_links_the_runner_does_not_copy(tmp_path):
     skill.files.append(Path("link.txt"))
     message = skill_message(skill)
     assert "- scripts/total.sh" in message and "link.txt" not in message
+
+
+def test_skill_message_lists_exactly_the_files_the_runner_copies(tmp_path):
+    # One rule (runner.copied) for the copy and the list, so the agent is never pointed at a
+    # file that is not in the sandbox: hard links and paths outside the skill too.
+    skill = make_skill(tmp_path, {"scripts/total.sh": "echo 60\n"})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.env").write_text("KEY=x", encoding="utf-8")
+    try:
+        (skill.path / "linked-dir").symlink_to(outside, target_is_directory=True)
+        os.link(outside / "secret.env", skill.path / "hard.md")
+    except OSError:
+        pytest.skip("cannot create links here")
+    skill.files += [Path("linked-dir/secret.env"), Path("hard.md")]
+    message = skill_message(skill)
+    assert "- scripts/total.sh" in message
+    assert "secret.env" not in message and "hard.md" not in message
+
+
+def test_the_sessions_own_seconds_reach_the_run(tmp_path):
+    run = fake_agent(tmp_path, writes({**OK_RESULT, "seconds": 4.5})).run("p", None, docker_workspace())
+    assert run.seconds == 4.5
+    assert fake_agent(tmp_path, writes(OK_RESULT)).run("p", None, docker_workspace()).seconds is None
+    assert fake_agent(tmp_path, writes({**OK_RESULT, "seconds": "soon"})).run("p", None, docker_workspace()).seconds is None
 
 
 def test_a_skill_without_bundled_files_has_no_file_list(tmp_path):
@@ -183,6 +215,103 @@ def test_an_agent_error_is_an_ordinary_failure(tmp_path):
     with pytest.raises(RuntimeError, match="APIError") as e:
         agent.run("p", None, docker_workspace())
     assert not isinstance(e.value, JudgeError)
+
+
+def test_an_agent_error_names_why_the_session_failed(tmp_path):
+    agent = fake_agent(tmp_path, writes({"status": "agent_error", "failure_reason": "context_overflow",
+                                         "error": "context window exceeded"}))
+    with pytest.raises(RuntimeError, match=r"session failed \(context_overflow\): context window"):
+        agent.run("p", None, docker_workspace())
+
+
+@pytest.mark.parametrize("reason", sorted(hermes_child.TASK_FAILURES))
+def test_a_failure_the_task_caused_is_a_failed_run(reason):
+    # A skill can drive these (it floods the context, or its text is blocked), so dropping
+    # the run as an environment error would let such a skill go unscored.
+    assert hermes_child.failure_status({"failed": True, "failure_reason": reason}) == "agent_error"
+    assert hermes_child.failure_status({"failed": True, "turn_exit_reason": reason}) == "agent_error"
+
+
+@pytest.mark.parametrize("reason", [
+    "rate_limit", "billing", "billing_unverified", "auth", "model_not_found", "model_entitlement",
+    "server_error", "empty_response", "loop_error", "session_busy", "interpreter_shutdown",
+    "a-reason-hermes-adds-later", None])
+def test_any_other_failure_is_the_environment_not_the_skill(reason):
+    # Unnamed reasons stay unscored: a new Hermes reason must not count against a skill by accident.
+    assert hermes_child.failure_status({"failed": True, "failure_reason": reason}) == "provider_error"
+
+
+def test_the_two_reason_fields_are_both_read():
+    result = {"failed": True, "failure_reason": "server_error", "turn_exit_reason": "context_compression_timeout"}
+    assert hermes_child.failure_status(result) == "agent_error"
+
+
+# --- The pre-flight check ------------------------------------------------------------------
+
+GOOD_CHECK = {
+    "write_file": json.dumps({"bytes_written": 24, "resolved_path": "/work/check.txt"}),
+    "terminal": json.dumps({"output": "/work\nnobody\nwritten by the file tool", "exit_code": 0, "error": None}),
+    "read_file": json.dumps({"content": "1|from-terminal", "not_found": False}),
+    "guards": {"local backend": "refused: no", "docker backend": "refused: no"},
+}
+
+
+def broken(**changes):
+    return {**GOOD_CHECK, **changes}
+
+
+def test_a_working_check_has_no_problems():
+    assert hermes_agent.check_problems(GOOD_CHECK, "/work") == []
+
+
+@pytest.mark.parametrize("check, expected", [
+    # Docker stopped: every tool fails and Hermes' setup still succeeded.
+    (broken(terminal=json.dumps({"output": "", "exit_code": 126, "error": "failed to connect to the docker API"}),
+            write_file=json.dumps({"error": "failed to connect to the docker API"}),
+            read_file=json.dumps({"error": "failed to connect", "not_found": True})),
+     ["write_file reported an error", "terminal reported an error", "read_file reported an error"]),
+    # A Hermes whose tools work in another folder (/root, not /work).
+    (broken(write_file=json.dumps({"resolved_path": "/root/check.txt"})), ["write_file did not write into /work"]),
+    (broken(terminal=json.dumps({"output": "/root\nnobody", "exit_code": 0})), ["terminal did not run in /work"]),
+    (broken(terminal=json.dumps({"output": "/work\n", "exit_code": 1})), ["terminal did not run in /work"]),
+    (broken(read_file=json.dumps({"content": "", "not_found": True})), ["read_file did not find"]),
+    (broken(guards={"local backend": "created a local backend"}), ["a guard did not refuse"]),
+    (broken(guards={}), ["a guard did not refuse"]),
+    (broken(terminal="not json"), ["terminal gave no readable answer"]),
+    (broken(read_file=None), ["read_file gave no readable answer"]),
+    (broken(write_file="[1, 2]"), ["write_file gave no readable answer"]),
+    ("nothing", ["no check result"]),
+])
+def test_each_way_the_tools_can_fail_is_reported(check, expected):
+    problems = hermes_agent.check_problems(check, "/work")
+    assert len(problems) >= len(expected)
+    for reason in expected:
+        assert any(reason in p for p in problems), (reason, problems)
+
+
+def test_check_is_unavailable_when_the_tools_failed_even_though_setup_succeeded(tmp_path):
+    result = {"status": "ok", "check": broken(terminal=json.dumps({"output": "", "exit_code": 126}))}
+    with pytest.raises(HermesAgentUnavailable, match="tools did not work in the sandbox.*terminal did not run"):
+        fake_agent(tmp_path, writes(result)).check(docker_workspace())
+
+
+def test_check_returns_the_result_when_the_tools_worked(tmp_path):
+    result = {"status": "ok", "check": GOOD_CHECK, "hermes_version": "9.9"}
+    assert fake_agent(tmp_path, writes(result)).check(docker_workspace())["hermes_version"] == "9.9"
+
+
+def test_windows_is_refused_before_anything_starts(tmp_path, monkeypatch):
+    # No process group to kill on a timeout there, so the child could outlive it and keep calling
+    # the model. Refused up front: no child is started, no model is called.
+    monkeypatch.setattr(hermes_agent, "_windows", lambda: True)
+    marker = tmp_path / "started"
+    agent = fake_agent(tmp_path, f"open({str(marker)!r}, 'w').close()\n")
+    with pytest.raises(HermesAgentUnavailable, match="does not support Windows yet") as e:
+        agent.run("p", None, docker_workspace())
+    assert isinstance(e.value, JudgeError)  # the runner records it as an error, not a failed run
+    with pytest.raises(HermesAgentUnavailable, match="does not support Windows yet"):
+        agent.check(docker_workspace())
+    assert not marker.exists()
 
 
 def test_a_child_that_dies_without_a_result_is_unavailable(tmp_path):
@@ -290,6 +419,49 @@ def test_the_transcript_shows_calls_and_clips_long_results():
     assert text.rstrip().endswith("[assistant] 60")
     huge = [{"role": "tool", "content": "z" * 5_000}] * 200
     assert len(hermes_child.transcript(huge)) <= hermes_child.MAX_TRANSCRIPT_CHARS + 50
+
+
+def test_tools_beyond_the_allowed_set_are_reported_by_name():
+    allowed = {"terminal", "read_file"}
+    defs = [{"function": {"name": "terminal"}}, {"function": {"name": "read_file"}}]
+    assert hermes_child.unexpected_tools(defs, allowed) == []
+    bridge = [{"function": {"name": n}} for n in ("tool_call", "tool_search", "terminal")]
+    assert hermes_child.unexpected_tools(bridge, allowed) == ["tool_call", "tool_search"]
+
+
+@pytest.mark.parametrize("shape", [{"name": "terminal"}, {"function": "terminal"}, {"function": {}}, "terminal"])
+def test_a_tool_definition_that_cannot_be_read_counts_as_unexpected(shape):
+    # A changed Hermes shape must fail closed, not pass as "nothing unexpected".
+    assert hermes_child.unexpected_tools([shape], {"terminal"}) != []
+
+
+def test_tool_search_is_turned_off_for_the_session(monkeypatch):
+    # Hermes puts a bridge in front of the tools that reaches connected apps
+    # and MCP installs; the session must not have it.
+    module = SimpleNamespace(
+        ToolSearchConfig=SimpleNamespace(from_raw=lambda raw: SimpleNamespace(enabled=raw["enabled"])),
+        load_config=lambda: SimpleNamespace(enabled="auto"),
+        load_config_readonly=lambda: SimpleNamespace(enabled="auto"))
+    monkeypatch.setitem(sys.modules, "tools", SimpleNamespace(tool_search=module))
+    hermes_child._turn_off_tool_search()
+    assert module.load_config().enabled == module.load_config_readonly().enabled == "off"
+
+
+def test_older_hermes_without_tool_search_needs_nothing_turned_off(monkeypatch):
+    monkeypatch.setitem(sys.modules, "tools", None)  # `from tools import ...` raises ImportError
+    hermes_child._turn_off_tool_search()
+
+
+def test_the_configured_model_is_used_when_none_is_named():
+    cfg = {"model": {"default": "cfg-model", "provider": "cfg-provider"}}
+    choice = hermes_child._resolve_model_and_provider(cfg, None, None)
+    assert (choice.model, choice.provider) == ("cfg-model", None)  # provider stays the configured one
+    assert hermes_child._resolve_model_and_provider({"model": "plain"}, "", "").model == "plain"
+
+
+def test_a_named_model_and_provider_are_used_as_given():
+    choice = hermes_child._resolve_model_and_provider({"model": {"default": "cfg"}}, " m1 ", " p1 ")
+    assert (choice.model, choice.provider) == ("m1", "p1")
 
 
 def test_a_request_from_another_version_is_refused_before_hermes_is_touched(tmp_path):
