@@ -22,6 +22,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,7 +30,7 @@ from typing import Any
 
 from .judge import JudgeError, clean
 from .models import Skill
-from .runner import AgentRun, Workspace, agent_run_from_hermes_usage
+from .runner import AgentRun, Workspace, agent_run_from_hermes_usage, copied
 from .sandbox import SKILL_DIR
 
 CHILD = Path(__file__).with_name("hermes_child.py")
@@ -66,6 +67,7 @@ class HermesAgent:
     _argv: list[str] | None = field(default=None, init=False, repr=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
+        _require_supported_os()
         container, docker = _container(workspace)
         argv = self._runtime_argv()
         with tempfile.TemporaryDirectory(prefix="metaskill-agent-") as tmp:
@@ -92,6 +94,7 @@ class HermesAgent:
         """Without a model: set Hermes up for `workspace` and drive its real terminal and
         file tools once each. Returns what they returned; raises HermesAgentUnavailable
         if the setup refuses. For integration tests and a pre-flight check."""
+        _require_supported_os()
         container, docker = _container(workspace)
         with tempfile.TemporaryDirectory(prefix="metaskill-agent-") as tmp:
             result_path = Path(tmp) / "result.json"
@@ -106,6 +109,12 @@ class HermesAgent:
             result = _read_result(result_path)
             if result.get("status") != "ok":
                 raise HermesAgentUnavailable(str(result.get("error")))
+            # Setup being accepted is not enough: with Docker stopped, or on a Hermes whose
+            # tools run in another folder, every tool call fails and setup still succeeds.
+            problems = check_problems(result.get("check"), workspace.root)
+            if problems:
+                raise HermesAgentUnavailable(
+                    "the Hermes tools did not work in the sandbox: " + "; ".join(problems))
             return result
 
     def _runtime_argv(self) -> list[str]:
@@ -135,7 +144,8 @@ def skill_message(skill: Skill, workspace: Workspace | None = None) -> str:
     """How Hermes preloads a skill (`hermes -s`, agent/skill_commands._build_skill_message),
     pointing at the sandbox copy instead of the host's skills folder: Hermes' own message
     names a host path the sandbox does not have, and its skill_view tool reads the host.
-    Bundled files are listed as the runner copied them; links are left out (runner.md 2.2)."""
+    Bundled files are listed as the runner copied them (runner.copied: links, hard links and
+    paths outside the skill are left out, runner.md 2.2)."""
     skill_dir = workspace.skill_dir if workspace is not None else SKILL_DIR
     parts = [
         f'[IMPORTANT: The user launched this CLI session with the "{skill.name}" skill '
@@ -146,13 +156,66 @@ def skill_message(skill: Skill, workspace: Workspace | None = None) -> str:
         "`templates/config.yaml`) against that directory, then run them with the terminal "
         "tool using the absolute path.",
     ]
-    files = [f.as_posix() for f in skill.files if not (Path(skill.path) / f).is_symlink()]
+    files = [f.as_posix() for f in skill.files if copied(skill, f)]
     if files:
         parts += ["", "[This skill has supporting files (paths relative to the skill directory above):]"]
         parts += [f"- {f}" for f in files]
         parts.append(f"\nRead any of these with the file tools, or run scripts directly by "
                      f"absolute path (e.g. `{skill_dir}/scripts/foo.sh`).")
     return "\n".join(parts)
+
+
+def _windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _require_supported_os() -> None:
+    """Windows is not supported yet: a timeout stops the child with os.killpg and a process
+    group of its own, which Windows does not have. The timeout would raise, and the Hermes
+    child would go on calling the model until max_iterations. Refuse before anything starts,
+    with no model call and no child left behind."""
+    if _windows():
+        raise HermesAgentUnavailable(
+            "HermesAgent does not support Windows yet: a session that times out could not be "
+            "stopped (docs/evaluate/hermes_agent.md, section 7)")
+
+
+def check_problems(check: Any, workdir: str) -> list[str]:
+    """What is wrong in the result of the child's check mode, one short reason each; an empty
+    list means the file tool wrote into `workdir`, the terminal ran there as exit 0, the file
+    tool read back what the terminal wrote, and every guard refused. Each tool's answer is
+    JSON; one that cannot be read counts as failed."""
+    if not isinstance(check, dict):
+        return ["no check result"]
+    problems = []
+
+    def answer(tool: str) -> dict[str, Any]:
+        try:
+            value = json.loads(check.get(tool))
+        except (TypeError, ValueError):
+            problems.append(f"{tool} gave no readable answer")
+            return {}
+        if not isinstance(value, dict):
+            problems.append(f"{tool} gave no readable answer")
+            return {}
+        if value.get("error"):
+            problems.append(f"{tool} reported an error")
+        return value
+
+    written = answer("write_file")
+    if written and written.get("resolved_path") != f"{workdir}/check.txt":
+        problems.append(f"write_file did not write into {workdir}")
+    ran = answer("terminal")
+    if ran and (ran.get("exit_code") != 0 or not str(ran.get("output")).startswith(f"{workdir}\n")):
+        problems.append(f"terminal did not run in {workdir} and exit 0")
+    read = answer("read_file")
+    if read and (read.get("not_found") or "from-terminal" not in str(read.get("content"))):
+        problems.append("read_file did not find what the terminal wrote")
+    guards = check.get("guards")
+    if (not isinstance(guards, dict) or not guards
+            or not all(isinstance(v, str) and v.startswith("refused") for v in guards.values())):
+        problems.append("a guard did not refuse")
+    return problems
 
 
 def _container(workspace: Workspace) -> tuple[str, str]:
@@ -204,10 +267,14 @@ def _agent_run(result: dict[str, Any]) -> AgentRun:
             f"the model provider could not serve the session"
             f"{f' ({reason})' if reason else ''}: {result.get('error') or 'no detail'}")
     if status == "agent_error":
-        raise RuntimeError(str(result.get("error") or "the agent failed"))
+        reason = result.get("failure_reason")
+        raise RuntimeError(f"the agent's session failed{f' ({reason})' if reason else ''}: "
+                           f"{result.get('error') or 'the agent failed'}")
     if status != "ok":
         raise HermesAgentUnavailable(f"unexpected result status {status!r} from the Hermes session")
     run = agent_run_from_hermes_usage(result.get("final_response") or "", result.get("usage") or {},
                                       transcript=result.get("transcript") or "")
-    tool_calls = result.get("tool_calls")
-    return dataclasses.replace(run, tool_calls=tool_calls if isinstance(tool_calls, int) else None)
+    tool_calls, seconds = result.get("tool_calls"), result.get("seconds")
+    return dataclasses.replace(
+        run, tool_calls=tool_calls if isinstance(tool_calls, int) else None,
+        seconds=float(seconds) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else None)
