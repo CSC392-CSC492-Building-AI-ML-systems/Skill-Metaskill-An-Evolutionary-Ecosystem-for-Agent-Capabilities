@@ -113,7 +113,7 @@ Hermes never gives plugins API keys: a plugin asks Hermes for a completion throu
 1. It registers a LiteLLM custom provider, `metaskill_hermes`, added to LiteLLM's provider list rather than replacing it.
 2. For each scan, it gives Cisco a model name `metaskill_hermes/<scan id>` and a placeholder key (`not-a-key`). Cisco requires some key value; this one is never used or sent anywhere. Nothing is read from the environment.
 3. Each request Cisco makes is translated for `ctx.llm.complete_structured`: Cisco's system message becomes `instructions`, its user message `input`, and temperature and max tokens pass through. Requests `ctx.llm` cannot express (tools, streaming, multi-turn history) are refused with a clear error, never silently changed.
-4. The reply and its token usage go back to Cisco, which parses them as usual.
+4. The reply and its token usage go back to Cisco, which parses them as usual. The backend's `LlmUsage` also records each call (the `provider/model` that answered, tokens, a retry included), so the report header can say what Cisco's LLM analyzer used ([score.md](score.md), "Judge model and usage").
 
 So Cisco's LLM layer runs on whichever model the user has configured in Hermes, with Hermes's auth and permission settings. Without `ctx.llm`, Cisco runs static only.
 

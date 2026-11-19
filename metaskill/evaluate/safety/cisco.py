@@ -19,7 +19,7 @@ from typing import Any
 from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .checks import MAX_FRONTMATTER_VALUES, frontmatter_too_large
 from .findings import BackendResult, BackendStatus
-from .hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
+from .hermes_bridge import PLACEHOLDER_KEY, LlmUsage, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
 TESTED_VERSION = "2.2.1"
@@ -61,6 +61,8 @@ class CiscoBackend:
         self.task = task
         self.provider = provider
         self.model = model
+        # What the LLM analyzer's calls used, for the report header; empty at the static tier.
+        self.llm_usage = LlmUsage()
 
     def available(self) -> bool:
         return importlib.util.find_spec("skill_scanner") is not None
@@ -109,7 +111,7 @@ class CiscoBackend:
 
     def _route(self) -> AbstractContextManager[str]:
         """Make self.llm reachable by Cisco; yields the model name to give it."""
-        return routed(self.llm, self.task, self.provider, self.model)
+        return routed(self.llm, self.task, self.provider, self.model, usage=self.llm_usage)
 
     def _build_deep_analyzers(self, model: str) -> list[Any]:
         from skill_scanner.core.analyzer_factory import (

@@ -28,10 +28,10 @@ METASKILL = {
                 "type": "string",
                 "description": "JSON config file. Required for personalize.",
             },
-            "output_path": {
-                "type": "string",
-                "description": "Output directory. Optional.",
-            },
+            # Self-explanatory names, and the schema is sent every turn: their guidance,
+            # including that tasks_path costs model calls, is in skills/guide/SKILL.md.
+            "output_path": {"type": "string"},
+            "tasks_path": {"type": "string"},
         },
         "required": ["operation", "skill_path"],
     },

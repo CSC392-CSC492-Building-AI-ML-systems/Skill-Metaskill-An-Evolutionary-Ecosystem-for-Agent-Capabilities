@@ -60,8 +60,9 @@ def out(tmp_path):
     return tmp_path / "reports"
 
 
-# Any dimension works with the placeholder fixture, built or not.
-PLACEHOLDER = Dimension.QUALITY
+# A dimension scored by plain score(), built or not. The task-based ones (TASK_DIMENSIONS) are
+# scored by score_runs, and only when a task file is given: tests/test_evaluate_tasks.py.
+PLACEHOLDER = Dimension.CONFIG_CLEANLINESS
 
 
 @pytest.fixture
@@ -107,7 +108,32 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
     assert "task runs" in efficiency.detail
     quality = skill.dimensions[Dimension.QUALITY]
     assert skill.scores.clarity is None and quality.status is Status.SKIPPED
-    assert "task" in quality.reason.lower()
+    assert "task" in (quality.reason + quality.detail).lower()  # evaluate skips it: detail
+
+
+@pytest.mark.parametrize("schema, expected_rule", [
+    (None, None),
+    ("{broken", None),
+    ('{"required":["org"],"properties":{"org":{"description":"Organization"}}}', None),
+    ('{"required":["org"],"properties":{"org":{}}}', "missing-required-description"),
+])
+def test_config_cleanliness_reports_findings_without_a_score(tmp_path, out, schema, expected_rule):
+    folder = make_skill(tmp_path, "config-example")
+    if schema is not None:
+        (folder / "config.schema.json").write_text(schema, encoding="utf-8")
+
+    result = evaluate_skill(folder, output_path=out)
+    [skill] = load(result).skills
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    assert skill.scores.config_cleanliness is None
+    assert status.status is Status.SKIPPED
+    assert "incomplete coverage" in status.reason
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
+    assert [f.rule for f in findings] == ([expected_rule] if expected_rule else [])
+    if expected_rule:
+        report = next(p for p in result["artifacts"] if p.endswith(".md"))
+        assert "config.schema.json#/properties/org" in Path(report).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("schema, expected_rule", [
@@ -183,7 +209,8 @@ def test_no_judge_is_a_skipped_dimension(tmp_path, out, placeholder):
     assert status.status is Status.SKIPPED and status.detail == "no judge model is available"
 
 
-@pytest.mark.parametrize("dimension", list(Dimension), ids=lambda d: d.value)
+@pytest.mark.parametrize("dimension", [d for d in Dimension if d not in evaluate.TASK_DIMENSIONS],
+                         ids=lambda d: d.value)
 def test_the_placeholder_replaces_built_modules_too(tmp_path, out, placeholder, dimension):
     placeholder(dimension, "from metaskill.evaluate.models import *\n"
                            "def score(skill, config, llm=None, **_):\n"

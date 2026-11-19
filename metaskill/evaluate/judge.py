@@ -453,6 +453,9 @@ class Judge:
         self.retries = retries  # extra calls when a reply does not fit its schema
         self.max_chars = max_chars  # characters of a skill sent to the judge
         self.used: set[tuple[str, str]] = set()  # (provider, model) of every reply
+        # Replies by "provider/model", so a caller can tell which models answered between
+        # two points in time (a set cannot: a model used before and again looks unchanged).
+        self.model_calls: dict[str, int] = {}
         self.usage: dict[str, TokenUsage] = {}  # by purpose: rate, review, check, ...
 
     @classmethod
@@ -516,6 +519,8 @@ class Judge:
                 result = self._complete(text, material, system, purpose,
                                         temperature, max_tokens, timeout)
                 self.used.add((result.provider, result.model))
+                name = f"{result.provider}/{result.model}"
+                self.model_calls[name] = self.model_calls.get(name, 0) + 1
                 reply_usage = getattr(result, "usage", None)
                 usage.input_tokens += int(getattr(reply_usage, "input_tokens", 0) or 0)
                 usage.output_tokens += int(getattr(reply_usage, "output_tokens", 0) or 0)

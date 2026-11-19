@@ -45,6 +45,6 @@ The runner still checks the sandbox itself once before running anything (runner.
 
 ## In the tool
 
-No built dimension runs tasks yet, so `evaluate` and `rank` need no sandbox and do not call this module: Docker would be asked for with nothing to run in it. They call `safety.missing_dependencies()` and return the list as `dependencies` in the tool's response, for the agent to show the user. Nothing there is required, so the evaluation goes ahead.
+Without a task file (`tasks_path`), no task runs, so `evaluate` and `rank` need no sandbox and do not call this module: Docker would be asked for with nothing to run in it. They call `safety.missing_dependencies()` and return the list as `dependencies` in the tool's response, for the agent to show the user. Nothing there is required, so the evaluation goes ahead.
 
-Once a dimension runs tasks, `metaskill/evaluate/__init__.py` calls `missing_dependencies()` before evaluating and `require_dependencies()` before starting, as above.
+With a task file, `metaskill/evaluate/__init__.py` calls `missing_dependencies()` with the sandbox the runs will use. If anything required is missing, it returns an error with the whole list as `dependencies` and runs nothing (the check `require_dependencies()` makes); the user installs or starts what is listed and calls again.

@@ -63,6 +63,9 @@ class AgentRun:
     llm_calls: int = 0  # model round-trips the session made
     tool_calls: int | None = 0  # None when the agent could not measure its tool calls
     transcript: str = ""  # the full session for the log, if the agent provides one
+    # The session's own time, when the agent measured it. The runner's clock also counts the
+    # agent's start-up (Hermes takes a second or two); this leaves that out. None: the runner's.
+    seconds: float | None = None
 
 
 def agent_run_from_hermes_usage(output: str, usage: dict[str, Any],
@@ -110,6 +113,9 @@ class RunnerResult:
     """Everything the runner produced for one skill."""
 
     tests: list[TestResult]  # the report's `tests` (evaluate.md 2.1)
+    # The planned tasks' ids, in order, whether or not any of their runs made it into
+    # `tests`, so a scorer can count a task that never ran (Quality's assess needs them).
+    task_ids: list[str] = field(default_factory=list)
     # Runs that could not be judged (judge unavailable or failed, or a broken check).
     # They are not in `tests`, so a missing judge does not count as a failed task.
     errors: list[str] = field(default_factory=list)
@@ -153,7 +159,7 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
         raise ValueError(f"skill name {skill.name!r} may only contain letters, digits, "
                          "'_', '.' and '-'")
     pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
-    result = RunnerResult(tests=[])
+    result = RunnerResult(tests=[], task_ids=[task.task_id for task in tasks])
     log_dir = run_dir / skill.name / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -219,7 +225,8 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         input_tokens=run.input_tokens, output_tokens=run.output_tokens,
         reasoning_tokens=run.reasoning_tokens,
         cache_read_tokens=run.cache_read_tokens, cache_write_tokens=run.cache_write_tokens,
-        llm_calls=run.llm_calls, tool_calls=run.tool_calls, seconds=round(seconds, 3))
+        llm_calls=run.llm_calls, tool_calls=run.tool_calls,
+        seconds=round(_own_seconds(run) if _own_seconds(run) is not None else seconds, 3))
     _write_log(run_dir / log, task, variant, n, run, metrics, verdict, left_out)
     return TestResult(
         task_id=task.task_id,
@@ -237,6 +244,25 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
     )
 
 
+def _own_seconds(run: AgentRun) -> float | None:
+    """The agent's own measure of its session, if it gave a usable one."""
+    value = run.seconds
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else None
+
+
+def copied(skill: Skill, rel: Path) -> bool:
+    """Whether the runner copies this bundled file into the sandbox: not a link, not a hard
+    link, and inside the skill (any of those could be a file outside it, e.g.
+    ~/.hermes/.env). One rule for the copy and for any list of files shown to the agent, so
+    the agent is never pointed at a file that is not there."""
+    path = Path(skill.path) / rel
+    try:
+        return (not path.is_symlink() and path.resolve().is_relative_to(Path(skill.path).resolve())
+                and path.stat().st_nlink <= 1)
+    except OSError:
+        return False
+
+
 def _put_skill(skill: Skill, workspace: Workspace) -> list[str]:
     """Copy the skill into workspace.skill_dir, laid out as on disk, and return the
     files left out, for the log. The runner does this rather than the agent, so every
@@ -246,13 +272,11 @@ def _put_skill(skill: Skill, workspace: Workspace) -> list[str]:
     could be a file outside the skill, e.g. ~/.hermes/.env. If SKILL.md itself is one,
     the run is an error rather than a run without the skill.
     """
-    root = Path(skill.path).resolve()
     folders: dict[PurePosixPath, list[Path]] = {}
     left_out: list[str] = []
     for rel in [Path("SKILL.md"), *skill.files]:
         path = Path(skill.path) / rel
-        if (path.is_symlink() or not path.resolve().is_relative_to(root)
-                or path.stat().st_nlink > 1):
+        if not copied(skill, rel):
             if rel == Path("SKILL.md"):
                 raise JudgeError("SKILL.md is a link or hard link, so it may be a file "
                                  "outside the skill; it was not copied into the sandbox")

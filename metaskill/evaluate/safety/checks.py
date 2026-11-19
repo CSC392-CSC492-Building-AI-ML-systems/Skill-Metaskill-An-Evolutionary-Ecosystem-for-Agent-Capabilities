@@ -11,7 +11,10 @@ import json
 import os
 import re
 import shlex
+from bisect import bisect_left, bisect_right
+from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +23,10 @@ from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "4"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
-                      # CRITICAL; stricter warning and confirmation checks
+CHECKS_VERSION = "5"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
+                      # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
+                      # and bounded clearing, so a hostile skill cannot stall the scan
+                      # (MET-42)
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -29,6 +34,28 @@ SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", 
 MAX_FILE_BYTES = 1_000_000
 CONFIRM_LOOKBACK = 5  # script lines before a command searched for a confirmation
 MAX_LISTED_SKIPS = 10
+# Clearing a prose match (as a warning, an example or a confirmed command) reads its whole
+# sentence, so a paragraph packed with commands would cost commands x sentence length
+# (MET-42). Past these bounds a match is reported, never cleared: an attacker who floods a
+# paragraph gets more findings, not fewer. Real skills stay far below both: the longest
+# sentence in the bundled and Hermes skills is about 2,800 characters (p99 about 400).
+MAX_CLEARED_PER_UNIT = 200  # prose matches per paragraph that can be cleared
+MAX_CLEARED_SENTENCE = 10_000  # characters in a sentence whose matches can be cleared
+# Sentence characters weighed for clearing per skill. The two bounds above cap one
+# paragraph, but a skill can repeat such paragraphs; this caps the whole skill. The most
+# any real skill weighs is about 8,300.
+MAX_CLEARING_CHARS = 500_000
+# Some matchers' regexes read ahead along the line from where a command starts
+# (_COMMAND_START), so a line costs such starts x line length. A line with more than this
+# is not checked at all: it becomes one CRITICAL scan-limit finding, since what it hides is
+# unknown. The most on one line in any real skill is 16. The count is of words, so
+# ordinary English (more, head, tail, cat) adds to it; a line only reaches the limit
+# with hundreds of them, which a natural paragraph does not have (MET-42 review).
+MAX_COMMANDS_PER_LINE = 200
+# Characters the Python-level parsers (shell arguments, call arguments, print arguments)
+# may read per skill. Real skills read a few hundred; past this, the rest is not parsed
+# and the skill gets a CRITICAL scan-limit finding.
+MAX_PARSED_CHARS = 1_000_000
 
 DESTRUCTIVE = "destructive-unconfirmed"
 CREDENTIALS = "credential-logging"
@@ -58,6 +85,8 @@ MESSAGES = {
     "zero-width": "Zero-width characters that render as nothing",
     "frontmatter-aliases": "The frontmatter expands to more than 100000 values through YAML "
                            "aliases. That stalls scanners, so Cisco's scanner was not run on it",
+    "scan-limit": "Too many commands packed together to check in reasonable time, so part of "
+                  "the skill was not checked; it is treated as the worst case",
 }
 
 # How many values the frontmatter may hold once its YAML aliases are expanded. Real skills
@@ -205,6 +234,46 @@ class _Unit:
     kind: str  # "code", "prose" or "script"
     lines: list[tuple[int, str]]
     warning_block: bool = False
+    # Computed once per unit and reused for every match in it (MET-42): see _text.
+    cache: dict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass
+class _Text:
+    """A prose unit joined into one string, with its sentence boundaries, so each match
+    finds its sentence by bisection instead of rescanning the unit."""
+
+    joined: str
+    offsets: list[int]  # where each line starts in joined
+    starts: list[int]  # just after each sentence end that is followed by whitespace
+    ends: list[int]  # just after each sentence end, including one at the very end
+    paragraph: str  # the lines stripped and joined, as the deep re-check shows them
+    stripped_offsets: list[int]  # where each stripped line starts in paragraph
+
+
+def _text(unit: _Unit) -> _Text:
+    if "text" not in unit.cache:
+        texts = [text for _, text in unit.lines]
+        joined = " ".join(texts)
+        offsets, at = [], 0
+        for t in texts:
+            offsets.append(at)
+            at += len(t) + 1
+        masked = re.sub(r"`[^`]*`", lambda m: "x" * len(m.group(0)), joined)
+        # Abbreviations are not sentence ends: "(e.g. `x`)" stays one sentence.
+        masked = re.sub(r"\b(?:e\.g|i\.e|etc|vs|cf)\.", lambda m: "x" * len(m.group(0)),
+                        masked, flags=re.I)
+        stripped = [t.strip() for t in texts]
+        stripped_offsets, at = [], 0
+        for t in stripped:
+            stripped_offsets.append(at)
+            at += len(t) + 1
+        unit.cache["text"] = _Text(
+            joined, offsets,
+            [m.end() for m in re.finditer(r"[.!?](?=\s)", masked)],
+            [m.end() for m in re.finditer(r"[.!?](?=\s|$)", masked)],
+            " ".join(stripped), stripped_offsets)
+    return unit.cache["text"]
 
 
 @dataclass
@@ -227,20 +296,125 @@ def _skipped_warning(hit: _Hit, unit: _Unit, line_index: int, location: str,
     sentence_raw = joined[start:end]
     sentence = sentence_raw.strip()
     sentence_offset = (position - start) - (len(sentence_raw) - len(sentence_raw.lstrip()))
-    stripped = [t.strip() for _, t in unit.lines]
-    paragraph = " ".join(stripped)
+    text = _text(unit)
+    paragraph = text.paragraph
     lineno, line_text = unit.lines[line_index]
     lead = len(line_text) - len(line_text.lstrip())
-    paragraph_offset = sum(len(stripped[i]) + 1 for i in range(line_index)) + max(0, hit.start - lead)
+    paragraph_offset = text.stripped_offsets[line_index] + max(0, hit.start - lead)
     return SkippedWarning(
         location, hit.rule, hit.snippet, sentence, paragraph,
         _finding(hit, unit, lineno, line_text, ctx, []),
         max(0, sentence_offset), max(0, paragraph_offset), kind)
 
 
+@dataclass
+class _Budget:
+    """MAX_PARSED_CHARS for one scan (MET-42). Deterministic, unlike a timeout, so the
+    same skill still always gives the same findings, and running out is a finding rather
+    than an error: an error would drop this backend and leave the skill scored by the
+    others alone."""
+
+    left: int = MAX_PARSED_CHARS
+    where: tuple[str, int] = ("SKILL.md", 0)  # the line being parsed
+    ran_out_at: tuple[str, int] | None = None
+    # Sentence characters left to weigh for clearing (MAX_CLEARING_CHARS). Running out is
+    # not a scan-limit: later prose matches are just reported, as past MAX_CLEARED_PER_UNIT.
+    clearing_left: int = MAX_CLEARING_CHARS
+
+    def take(self, chars: int) -> bool:
+        """Spend chars; False (and nothing more is parsed) once the budget is gone."""
+        if self.ran_out_at is not None:
+            return False
+        if chars > self.left:
+            self.ran_out_at, self.left = self.where, 0
+            return False
+        self.left -= chars
+        return True
+
+
+# Set for the length of one scan; None outside one, so helpers called on their own
+# (in tests) parse without a limit.
+_BUDGET: ContextVar[_Budget | None] = ContextVar("_BUDGET", default=None)
+
+
+def _parse(chars: int) -> bool:
+    budget = _BUDGET.get()
+    return budget is None or budget.take(chars)
+
+
+def _parsing_stopped() -> bool:
+    budget = _BUDGET.get()
+    return budget is not None and budget.ran_out_at is not None
+
+
+def _parsing_at(path: str, lineno: int) -> None:
+    budget = _BUDGET.get()
+    if budget is not None:
+        budget.where = (path, lineno)
+
+
+# Where a matcher's regex reads ahead along the line from a command: git push/reset/clean,
+# dd, curl/wget (piped or insecure), sh/bash/zsh <(...), pip install over http, echo,
+# cat-like commands and input(. These are the only per-command costs not otherwise bounded:
+# argument parsing (rm, find, ln, shutil.rmtree, pip/npm install) is charged to
+# MAX_PARSED_CHARS, and print( calls are read once per line (_SecretView). Matched with a
+# bare \b and case-insensitively, so it counts every start the matchers can see (they
+# exclude more before a word, e.g. `-` or `.`), never fewer.
+_COMMAND_START = re.compile(
+    r"\b(?:git|dd|curl|wget|sh|bash|zsh|pip3?|Invoke-WebRequest|iwr|echo|printf"
+    r"|cat|less|more|head|tail|bat)\b|\binput\s*\(", re.I)
+
+
+def _limit_lines(files: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], list[Finding]]:
+    """Blank every line with more than MAX_COMMANDS_PER_LINE command starts, and return a
+    CRITICAL scan-limit finding for each (MET-42). The line keeps its line ending, so line
+    numbers do not move, and a code fence keeps its marker, so a code block does not turn
+    into prose (where commands can be cleared as warnings)."""
+    out, findings = [], []
+    for path, text in files:
+        lines = text.splitlines(keepends=True)
+        changed = False
+        for i, line in enumerate(lines):
+            # Every start is at least two characters, so a shorter line cannot be over.
+            if len(line) <= 2 * MAX_COMMANDS_PER_LINE:
+                continue
+            count = sum(1 for _ in zip(range(MAX_COMMANDS_PER_LINE + 1), _COMMAND_START.finditer(line)))
+            if count <= MAX_COMMANDS_PER_LINE:
+                continue
+            body = line.rstrip("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+            fence = _FENCE.match(body)
+            # A fence keeps its marker plus text, so it still opens a block where it did,
+            # and still cannot close one: a bare marker inside a block would close it and
+            # turn the code after it into prose (MET-42 review).
+            lines[i] = (fence.group(0) + " not-checked" if fence else "") + line[len(body):]
+            changed = True
+            findings.append(_scan_limit(path, i + 1,
+                                        f"more than {MAX_COMMANDS_PER_LINE} commands on one line"))
+        out.append((path, "".join(lines) if changed else text))
+    return out, findings
+
+
+def _scan_limit(path: str, lineno: int, quote: str) -> Finding:
+    return Finding(Dimension.SAFETY, EXCESS_SCOPE, Severity.CRITICAL, ChecksBackend.name,
+                   "scan-limit", quote, f"{path}:{lineno}", MESSAGES["scan-limit"])
+
+
 def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
+    budget = _Budget(left=MAX_PARSED_CHARS, clearing_left=MAX_CLEARING_CHARS)  # read now, so tests can lower them
+    token = _BUDGET.set(budget)
+    try:
+        return _scan(skill, budget)
+    finally:
+        _BUDGET.reset(token)
+        _backticks.cache_clear()  # do not keep a long line alive after the scan
+        _stripped.cache_clear()
+        _content_end.cache_clear()
+
+
+def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
     notes: list[str] = []
-    files = _read_files(skill, notes)
+    raw_files = _read_files(skill, notes)
+    files, limited = _limit_lines(raw_files)
     units = [u for path, text in files for u in _units(path, text)]
 
     ctx = _Context()
@@ -249,10 +423,10 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
         if Path(path).suffix.lower() in (".bat", ".cmd"):
             ctx.shell_vars[path] = _assignments(_CMD_ASSIGN, _CMD_LITERAL, text)
         elif Path(path).suffix.lower() in (".ps1", ".psm1"):
-            ctx.shell_vars[path] = _assignments(_PS_ASSIGN, _PY_LITERAL, text)
+            ctx.shell_vars[path] = _assignments(_PS_ASSIGN, _PY_LITERAL, text, comments=True)
         ctx.py_vars[path] = {
             name: [_python_path(v) if v is not None else None for v in values]
-            for name, values in _assignments(_PY_ASSIGN, _PY_ANY, text).items()}
+            for name, values in _assignments(_PY_ASSIGN, _PY_ANY, text, comments=True).items()}
     bundle_links = _bundle_symlinks(skill)
     ctx.links = {_normalize(name) for name, _ in bundle_links} | _created_links(units)
 
@@ -261,11 +435,27 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
     skipped: list[str] = []
     rechecks: list[SkippedWarning] = []
 
+    def report(finding: Finding, path: str, lineno: int) -> None:
+        """Keep the most severe finding per rule and line."""
+        key = (path, lineno, finding.rule)
+        if key not in found or SEVERITY_RANK[finding.severity] > SEVERITY_RANK[found[key].severity]:
+            found[key] = finding
+
     for u_index, unit in enumerate(units):
         previous = units[u_index - 1] if u_index and units[u_index - 1].path == unit.path else None
+        considered = 0  # prose matches in this unit weighed for clearing (MET-42)
+        unbounded = False
         for l_index, (lineno, text) in enumerate(unit.lines):
+            _parsing_at(unit.path, lineno)
             for hit in _hits(text, unit):
                 location = f"{unit.path}:{lineno}"
+                if unit.kind == "prose" and not _clearable(unit, l_index, hit.start, considered, budget):
+                    # Over the bounds: report the match without weighing it, so flooding a
+                    # paragraph cannot hide a command or stall the scan.
+                    unbounded = True
+                    report(_finding(hit, unit, lineno, text, ctx, targets), unit.path, lineno)
+                    continue
+                considered += unit.kind == "prose"
                 confirmed = hit.category == DESTRUCTIVE and (
                     hit.confirmed or _confirmed(unit, l_index, previous))
                 if unit.kind == "prose" and (_is_warning(unit, l_index, hit.start)
@@ -287,17 +477,27 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
                         rechecks.append(
                             _skipped_warning(hit, unit, l_index, location, ctx, "confirmation"))
                     continue
-                finding = _finding(hit, unit, lineno, text, ctx, targets)
-                key = (unit.path, lineno, finding.rule)
-                if key not in found or SEVERITY_RANK[finding.severity] > SEVERITY_RANK[found[key].severity]:
-                    found[key] = finding
+                report(_finding(hit, unit, lineno, text, ctx, targets), unit.path, lineno)
+        if unbounded:
+            notes.append(f"{unit.path}:{unit.lines[0][0]}: commands not checked for warnings "
+                         "(too many in the paragraph or the skill, or in an overlong sentence); "
+                         "reported as found")
         if unit.kind in ("code", "script"):
             for f in _shell_trace(unit):
                 found.setdefault((unit.path, int(f.location.rsplit(":", 1)[1]), f.rule), f)
 
-    for path, text in files:
+    # The original text: hidden characters are matched in one linear pass, and a limited
+    # line must not hide them.
+    for path, text in raw_files:
         for f in _hidden_characters(path, text):
             found.setdefault((path, int(f.location.rsplit(":", 1)[1]), f.rule), f)
+
+    for f in limited:
+        found[(f.location.rsplit(":", 1)[0], int(f.location.rsplit(":", 1)[1]), f.rule)] = f
+    if budget.ran_out_at is not None:
+        path, lineno = budget.ran_out_at
+        found.setdefault((path, lineno, "scan-limit"), _scan_limit(
+            path, lineno, f"more than {MAX_PARSED_CHARS} characters of commands to parse"))
 
     if frontmatter_too_large(skill.frontmatter):
         # Never quote the frontmatter: printing it is what takes minutes.
@@ -454,23 +654,31 @@ class _Hit:
     py_var: bool = False  # shutil.rmtree(variable): resolve as a Python variable
 
 
-def _command_end(rest: str) -> int:
-    """Where a command ends: ; & | ` ) a newline or a comment, outside quotes."""
+def _command_end(text: str, start: int = 0) -> int:
+    """Where a command that starts at `start` ends: ; & | ` ) a newline or a comment,
+    outside quotes. Scans in place rather than on a copy of the rest of the line, so many
+    commands on one long line stay linear (MET-42)."""
     quote = ""
-    for i, c in enumerate(rest):
+    for i in range(start, len(text)):
+        c = text[i]
         if quote:
             quote = "" if c == quote else quote
         elif c in "'\"":
             quote = c
-        elif c in ";&|`)\n" or (c == "#" and i > 0 and rest[i - 1].isspace()):
+        elif c in ";&|`)\n" or (c == "#" and i > start and text[i - 1].isspace()):
             return i
-    return len(rest)
+    return len(text)
 
 
 def _args(text: str, end: int) -> list[str]:
-    """Shell-like arguments after position end, up to the end of the command."""
-    rest = text[end:]
-    segment = rest[:_command_end(rest)]
+    """Shell-like arguments after position end, up to the end of the command. Charged
+    to the scan's parse budget; nothing once it has run out (MET-42)."""
+    if _parsing_stopped():
+        return []
+    stop = _command_end(text, end)
+    if not _parse(stop - end):
+        return []
+    segment = text[end:stop]
     try:
         # Backslashes are path separators on Windows, not escapes: split without
         # POSIX rules there, and quotes are stripped when a target is judged.
@@ -480,8 +688,33 @@ def _args(text: str, end: int) -> list[str]:
     return [t for t in tokens if "<" not in t and ">" not in t]
 
 
+# Per-line memos for the line being scanned, so each match on a long line does not redo
+# them (MET-42). Small, since a line can be 1 MB; cleared after every scan.
+@lru_cache(maxsize=4)
+def _backticks(text: str) -> list[int]:
+    return [m.start() for m in re.finditer("`", text)]
+
+
+@lru_cache(maxsize=4)
+def _stripped(text: str) -> str:
+    return text.strip()
+
+
+@lru_cache(maxsize=4)
+def _content_end(text: str) -> int:
+    return len(text.rstrip())
+
+
+def _head(text: str, start: int) -> str:
+    """text[start:].strip()[:60] for a match starting on a non-space, without copying
+    the rest of the line (or, on an indented line, the whole line) for every match."""
+    return text[start:min(start + 60, _content_end(text))]
+
+
 def _in_inline_code(text: str, col: int) -> bool:
-    return text[:col].count("`") % 2 == 1
+    """An odd number of backticks before col. Looked up rather than counted, so many
+    matches on one long line do not each recount it (MET-42)."""
+    return bisect_left(_backticks(text), col) % 2 == 1
 
 
 def _hits(text: str, unit: _Unit) -> list[_Hit]:
@@ -510,7 +743,15 @@ _CMD_DELETE = re.compile(r"(?<![\w.%$-])(?:rmdir|rd|del|erase)(?=\s)", re.I)
 
 
 def _first_argument(text: str, start: int) -> str:
-    """The first argument of a call whose "(" ends at start, up to a top-level comma or ")"."""
+    """The first argument of a call whose "(" ends at start, up to a top-level comma or ")".
+    Charged to the parse budget like _args (MET-42)."""
+    if _parsing_stopped():
+        return ""
+    argument = _first_argument_unbudgeted(text, start)
+    return argument if _parse(len(argument)) else ""
+
+
+def _first_argument_unbudgeted(text: str, start: int) -> str:
     depth, quote = 0, ""
     for i in range(start, len(text)):
         c = text[i]
@@ -716,6 +957,61 @@ _CAT_CREDENTIALS = re.compile(
     r"|\.pgpass\b|\.pem\b|id_(?:rsa|ed25519|ecdsa)(?!\.pub)\b)")
 
 
+_BRACES = re.compile(r"\{([^{}]*)\}")  # f-strings and template literals
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+
+
+def _names_secret(args: str) -> bool:
+    """Whether the arguments of a print call name a secret: an environment read, a name
+    inside {...}, or a name outside string literals."""
+    names = [a or b for a, b in _ENV_NAMES.findall(args)]
+    for inner in _BRACES.findall(args):
+        names += _IDENTIFIER.findall(inner)
+    names += _IDENTIFIER.findall(_STRING.sub(" ", args))
+    return any(is_secret_name(n) for n in names)
+
+
+class _SecretView:
+    """_names_secret for every print call on a line in one pass (MET-42).
+
+    Each call's arguments run to the end of the line, so reading them per call cost
+    calls x line length: a minified script with a few dozen console.log( calls on one
+    long line took seconds. Here the line is read once, from the first call's arguments,
+    and secret_from(position) answers for any later call.
+
+    That is exact when the call's arguments do not start inside a string literal, an
+    environment read or a {...} group of this view: the patterns have no lookbehind, so
+    scanning from such a position finds exactly the view's matches from there on.
+    Otherwise secret_from returns None and the caller reads the arguments on their own.
+    """
+
+    def __init__(self, text: str, start: int):
+        secret_at = [-1]
+        strings = [(m.start(), m.end()) for m in _STRING.finditer(text, start)]
+        envs = list(_ENV_NAMES.finditer(text, start))
+        braces = list(_BRACES.finditer(text, start))
+        self.spans = [strings, [(m.start(), m.end()) for m in envs],
+                      [(m.start(), m.end()) for m in braces]]
+        secret_at += [m.start() for m in envs if is_secret_name(m.group(1) or m.group(2))]
+        secret_at += [m.start() for m in braces
+                      if any(is_secret_name(n) for n in _IDENTIFIER.findall(m.group(1)))]
+        # Names outside string literals, as _STRING.sub(" ", ...) leaves them.
+        at = start
+        for s, e in strings + [(len(text), len(text))]:
+            secret_at += [n.start() for n in _IDENTIFIER.finditer(text, at, s)
+                          if is_secret_name(n.group(0))]
+            at = e
+        self.last_secret = max(secret_at)
+        self.starts = [[s for s, _ in spans] for spans in self.spans]
+
+    def secret_from(self, position: int) -> bool | None:
+        for spans, starts in zip(self.spans, self.starts):
+            i = bisect_left(starts, position)
+            if i and spans[i - 1][1] > position:
+                return None  # inside one of this view's matches
+        return self.last_secret >= position
+
+
 def _credential_hits(text: str, prose: bool) -> list[_Hit]:
     hits = []
     for m in _ECHO.finditer(text):
@@ -730,16 +1026,22 @@ def _credential_hits(text: str, prose: bool) -> list[_Hit]:
                 continue  # written to a file such as a config, not a log
             rest = rest[:redirect.start()]
         if any(is_secret_name(v) for v in _SHELL_VAR.findall(rest)):
-            hits.append(_Hit("echo-secret", CREDENTIALS, Severity.HIGH, m.start(), text[m.start():].strip()[:60]))
+            hits.append(_Hit("echo-secret", CREDENTIALS, Severity.HIGH, m.start(), _head(text, m.start())))
 
-    for m in _PRINT.finditer(text):
-        args = text[m.end():]
-        names = [a or b for a, b in _ENV_NAMES.findall(args)]
-        for inner in re.findall(r"\{([^{}]*)\}", args):  # f-strings and template literals
-            names += re.findall(r"[A-Za-z_]\w*", inner)
-        names += re.findall(r"[A-Za-z_]\w*", _STRING.sub(" ", args))
-        if any(is_secret_name(n) for n in names):
-            hits.append(_Hit("print-secret", CREDENTIALS, Severity.HIGH, m.start(), text[m.start():].strip()[:60]))
+    prints = list(_PRINT.finditer(text))
+    view = _SecretView(text, prints[0].end()) if prints else None
+    for m in prints:
+        secret = view.secret_from(m.end())
+        if secret is None:
+            # The arguments start inside a string, an environment read or a {...} group of
+            # the line-wide view, where reading from here could pair things differently:
+            # read them on their own, as before, charged to the parse budget.
+            args = text[m.end():]
+            if not _parse(len(args)):
+                break
+            secret = _names_secret(args)
+        if secret:
+            hits.append(_Hit("print-secret", CREDENTIALS, Severity.HIGH, m.start(), _head(text, m.start())))
 
     # Only in code: in prose, `env` is usually a word or a config key, not a command.
     if not prose and (_ENV_DUMP_LINE.match(text) or _ENV_DUMP_CODE.search(text)):
@@ -875,16 +1177,32 @@ _SQUISH = re.compile(r"\s+")
 
 def _sentence_span(unit: _Unit, line_index: int, col: int) -> tuple[str, int, int, int]:
     """The prose unit as one string, and the start, match position and end of the
-    sentence containing column col of line line_index. Inline code is not split."""
-    texts = [text for _, text in unit.lines]
-    joined = " ".join(texts)
-    position = sum(len(t) + 1 for t in texts[:line_index]) + col
-    masked = re.sub(r"`[^`]*`", lambda m: "x" * len(m.group(0)), joined)
-    # Abbreviations are not sentence ends: "(e.g. `x`)" stays one sentence.
-    masked = re.sub(r"\b(?:e\.g|i\.e|etc|vs|cf)\.", lambda m: "x" * len(m.group(0)), masked, flags=re.I)
-    starts = [m.end() for m in re.finditer(r"[.!?](?=\s)", masked[:position])]
-    end = re.compile(r"[.!?](?=\s|$)").search(masked, position)
-    return joined, starts[-1] if starts else 0, position, end.end() if end else len(joined)
+    sentence containing column col of line line_index. Inline code is not split.
+
+    The boundaries are found once per unit (_text) and looked up here, so a paragraph
+    with many matches is not rescanned for each one (MET-42)."""
+    text = _text(unit)
+    position = text.offsets[line_index] + col
+    # The last sentence end strictly before the match, and the first one after it.
+    before = bisect_left(text.starts, position)
+    after = bisect_right(text.ends, position)
+    start = text.starts[before - 1] if before else 0
+    end = text.ends[after] if after < len(text.ends) else len(text.joined)
+    return text.joined, start, position, end
+
+
+def _clearable(unit: _Unit, line_index: int, col: int, considered: int, budget: _Budget) -> bool:
+    """Whether a prose match may still be weighed for clearing: fewer than
+    MAX_CLEARED_PER_UNIT already weighed in this unit, a sentence no longer than
+    MAX_CLEARED_SENTENCE, and the skill's MAX_CLEARING_CHARS not spent. Weighing reads the
+    whole sentence, so these bound the scan; a match that is not weighed is reported."""
+    if considered >= MAX_CLEARED_PER_UNIT:
+        return False
+    _, start, _, end = _sentence_span(unit, line_index, col)
+    if end - start > MAX_CLEARED_SENTENCE or end - start > budget.clearing_left:
+        return False
+    budget.clearing_left -= end - start
+    return True
 
 
 def _sentence(unit: _Unit, line_index: int, col: int) -> str:
@@ -981,43 +1299,67 @@ _CONFIRM = re.compile(
     r"|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b|\bset\s+/p\b|\bchoice\s+/[a-z]",
     re.I)
 # A confirmation phrase is ignored when the words just before it negate it.
+_NEGATION_REACH = 64  # > longest negation word (8) + the 30 characters after it
 _NEGATED_BEFORE = re.compile(
     r"\b(?:no|not|without|skip(?:ping)?|don['’]?t|never|needn['’]?t)\b[^.\n]{0,30}$", re.I)
 
 
 def _confirmed(unit: _Unit, line_index: int, previous: _Unit | None) -> bool:
-    """A confirmation step near a destructive command (checks.md, confirmation check)."""
-    if unit.kind == "script":
-        window = unit.lines[max(0, line_index - CONFIRM_LOOKBACK):line_index + 1]
-    else:
-        window = list(unit.lines)
-        if previous is not None and previous.kind == "prose":
-            window += previous.lines
-    return any(not _NEGATED_BEFORE.search(text[:m.start()])
-               for _, text in window for m in _CONFIRM.finditer(text))
+    """A confirmation step near a destructive command (checks.md, confirmation check).
+
+    Cached per unit, and per line in a script: outside scripts the window is the whole
+    unit, so the answer is the same for every match in it (MET-42). `previous` is always
+    the unit before this one in the same file, so it does not change the key."""
+    key = ("confirmed", line_index if unit.kind == "script" else None)
+    if key not in unit.cache:
+        if unit.kind == "script":
+            window = unit.lines[max(0, line_index - CONFIRM_LOOKBACK):line_index + 1]
+        else:
+            window = list(unit.lines)
+            if previous is not None and previous.kind == "prose":
+                window += previous.lines
+        # The negation pattern spans at most about 40 characters, so it is searched only
+        # just before the phrase, not on the whole line up to it (MET-42). The search
+        # starts mid-line with pos, so \b still sees the character before the window.
+        unit.cache[key] = any(
+            not _NEGATED_BEFORE.search(text, max(0, m.start() - _NEGATION_REACH), m.start())
+            for _, text in window for m in _CONFIRM.finditer(text))
+    return unit.cache[key]
 
 
 # --- Delete targets --------------------------------------------------------------
 
 # Any assignment counts; only a plain literal value can be followed.
-_SHELL_ASSIGN = re.compile(r"^\s*(?:export\s+|local\s+|readonly\s+|declare\s+)?([A-Za-z_]\w*)=(\S*)", re.M)
+# Leading whitespace is horizontal only ([^\S\n]): with re.M, `^\s*` let every line start
+# re-scan a run of blank lines below it, quadratic in the run (MET-42). A name starts its
+# own line either way, so the matches are the same.
+_SHELL_ASSIGN = re.compile(r"^[^\S\n]*(?:export\s+|local\s+|readonly\s+|declare\s+)?([A-Za-z_]\w*)=(\S*)", re.M)
 _SHELL_LITERAL = re.compile(r"\"([^\"$`]*)\"|'([^']*)'|([^\s;&|\"'$`]*)")
-_PY_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*?)\s*(?:#.*)?$", re.M)
+# The value runs to the end of the line; _assignments cuts a `#` comment and trailing
+# whitespace. A lazy `(.*?)\s*(?:#.*)?$` did the same but backtracked across a long run of
+# spaces once per character, quadratic in the run (MET-42).
+_PY_ASSIGN = re.compile(r"^[^\S\n]*([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$", re.M)
 _CMD_LITERAL = re.compile(r"([^%!]*)")
 _PY_LITERAL = re.compile(r"(['\"])([^'\"]*)\1")
 _PY_ANY = re.compile(r"(.+)")  # Python values are resolved by _python_path
-_CMD_ASSIGN = re.compile(r"^\s*set\s+\"?([A-Za-z_]\w*)=([^\"&|\r\n]*)\"?\s*$", re.M | re.I)
-_PS_ASSIGN = re.compile(r"^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*(?:#.*)?$", re.M)
+_CMD_ASSIGN = re.compile(r"^[^\S\n]*set\s+\"?([A-Za-z_]\w*)=([^\"&|\r\n]*)\"?\s*$", re.M | re.I)
+_PS_ASSIGN = re.compile(r"^[^\S\n]*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(.*)$", re.M)
 # $VAR, ${VAR}, ${VAR:?msg}, and on Windows %VAR%, $env:VAR, ${env:VAR}
 _VAR_REF = re.compile(r"\$\{(?:env:)?([A-Za-z_]\w*)(?::\?[^}]*)?\}|\$(?:env:)?([A-Za-z_]\w*)|%([A-Za-z_]\w*)%")
 _LN = re.compile(r"(?<![\w.-])ln\s+")
 
 
-def _assignments(pattern: re.Pattern, literal: re.Pattern, text: str) -> dict[str, list[str | None]]:
-    """Every assignment per name; None for a value that is not a plain literal."""
+def _assignments(pattern: re.Pattern, literal: re.Pattern, text: str,
+                 comments: bool = False) -> dict[str, list[str | None]]:
+    """Every assignment per name; None for a value that is not a plain literal.
+    comments: the value ends at the first `#`, and trailing whitespace is dropped."""
     found: dict[str, list[str | None]] = {}
     for m in pattern.finditer(text):
-        name, value = m.group(1), m.group(2).rstrip(";")
+        name, value = m.group(1), m.group(2)
+        if comments:
+            cut = value.find("#")
+            value = (value if cut == -1 else value[:cut]).rstrip()
+        value = value.rstrip(";")
         lit = literal.fullmatch(value)
         found.setdefault(name, []).append(
             next((g for g in lit.groups() if g is not None and g not in ("'", '"')), "") if lit else None)
@@ -1028,7 +1370,8 @@ def _created_links(units: list[_Unit]) -> set[str]:
     """Names the skill turns into symlinks with ln -s."""
     names = set()
     for unit in units:
-        for _, text in unit.lines:
+        for lineno, text in unit.lines:
+            _parsing_at(unit.path, lineno)
             for m in _LN.finditer(text):
                 args = _args(text, m.end())
                 if not any(a == "--symbolic" or (a.startswith("-") and not a.startswith("--") and "s" in a)
@@ -1169,16 +1512,16 @@ def _finding(hit: _Hit, unit: _Unit, lineno: int, text: str, ctx: _Context,
     location = f"{unit.path}:{lineno}"
     if hit.rule != "recursive-delete":
         return Finding(Dimension.SAFETY, hit.category, hit.severity, ChecksBackend.name, hit.rule,
-                       text.strip(), location, MESSAGES[hit.rule])
+                       _stripped(text), location, MESSAGES[hit.rule])
 
     judged = []
     for raw, follows in hit.targets:
         kind = _classify(raw, follows, unit.path, hit.py_var, ctx)
-        target = DeleteTarget(raw, location, text.strip(), follows, kind, _KIND_SEVERITY[kind])
+        target = DeleteTarget(raw, location, _stripped(text), follows, kind, _KIND_SEVERITY[kind])
         targets.append(target)
         judged.append(target)
     worst = max(judged, key=lambda t: SEVERITY_RANK[t.severity])
     return Finding(
-        Dimension.SAFETY, DESTRUCTIVE, worst.severity, ChecksBackend.name, hit.rule, text.strip(),
+        Dimension.SAFETY, DESTRUCTIVE, worst.severity, ChecksBackend.name, hit.rule, _stripped(text),
         location,
         f"Recursive delete of {_KIND_TEXT[worst.kind]} (`{worst.target}`) with no confirmation step")

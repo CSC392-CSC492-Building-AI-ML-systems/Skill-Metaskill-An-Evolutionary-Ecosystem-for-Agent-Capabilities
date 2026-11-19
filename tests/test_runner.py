@@ -515,6 +515,41 @@ def test_with_skill_runs_get_the_skill_in_skill_dir_and_baselines_none(skill, ru
     assert baseline.skill == {}
 
 
+def test_copied_is_the_one_rule_for_what_reaches_the_sandbox(skill, tmp_path):
+    from metaskill.evaluate.runner import copied
+
+    (skill.path / "scripts").mkdir()
+    (skill.path / "scripts/go.sh").write_text("exit 0\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.env").write_text("KEY=x", encoding="utf-8")
+    try:
+        (skill.path / "linked-dir").symlink_to(outside, target_is_directory=True)
+        os.link(outside / "secret.env", skill.path / "hard.md")
+    except OSError:
+        pytest.skip("cannot create links here")
+    assert copied(skill, Path("scripts/go.sh"))
+    assert not copied(skill, Path("linked-dir/secret.env"))  # not a link itself, but outside the skill
+    assert not copied(skill, Path("hard.md"))
+    assert not copied(skill, Path("missing.md"))
+
+
+def test_the_agents_own_seconds_replace_the_runners_clock(skill, run_dir):
+    # The runner's clock includes the agent's start-up; an agent that measures its session says so.
+    agent = FakeAgent(lambda prompt, s, workdir: AgentRun(output="done", seconds=1.25))
+    [with_skill, baseline] = run_tasks(skill, [task()], agent, config=config(runs=1),
+                                       run_dir=run_dir, sandbox=FakeSandbox()).tests
+    assert with_skill.metrics.seconds == baseline.metrics.seconds == 1.25
+
+
+@pytest.mark.parametrize("seconds", [None, -1, True, "5"])
+def test_an_unusable_agent_time_falls_back_to_the_runners_clock(skill, run_dir, seconds):
+    agent = FakeAgent(lambda prompt, s, workdir: AgentRun(output="done", seconds=seconds))
+    [with_skill, _] = run_tasks(skill, [task()], agent, config=config(runs=1),
+                                run_dir=run_dir, sandbox=FakeSandbox()).tests
+    assert 0 <= with_skill.metrics.seconds < 5
+
+
 @pytest.mark.parametrize("make_link", [
     lambda secret, link: link.symlink_to(secret),
     lambda secret, link: os.link(secret, link),
@@ -647,3 +682,12 @@ def test_a_skill_too_large_for_the_sandbox_is_a_failed_run(skill, run_dir):
     assert [c.skill for c in agent.calls] == [None]
     assert all(w.closed for w in sandbox.opened)
     assert (run_dir / "cleanup" / "logs" / "write-report-with_skill-r1.txt").is_file()
+
+
+def test_planned_task_ids_include_tasks_whose_runs_all_failed_to_be_made(skill, run_dir):
+    # Quality's assess counts a task that never ran against the skill, so the plan comes
+    # from the loaded tasks, not from the runs that happened.
+    result = run_tasks(skill, [task("judged", checks=[LLM_CHECK]), task("other")], FakeAgent(),
+                       config=config(runs=1), run_dir=run_dir)
+    assert [t.task_id for t in result.tests] == ["other", "other"]  # "judged" had no judge
+    assert result.task_ids == ["judged", "other"]
