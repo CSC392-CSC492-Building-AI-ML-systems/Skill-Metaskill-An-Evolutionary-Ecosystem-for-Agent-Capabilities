@@ -1,0 +1,11 @@
+name: metaskill-cisco
+version: 0.2.0
+manifest_version: 2
+description: Optional add-on for metaskill that adds Cisco's skill scanner to evaluate's safety score
+requires_plugins:
+  - id: metaskill
+    version_range: ">=0.2.0"
+# Pinned to the version metaskill's adapter is tested with (metaskill/evaluate/safety/cisco.py
+# TESTED_VERSION); change both together, after rerunning tests/safety with the scanner.
+python_dependencies:
+  - "cisco-ai-skill-scanner==2.2.1"

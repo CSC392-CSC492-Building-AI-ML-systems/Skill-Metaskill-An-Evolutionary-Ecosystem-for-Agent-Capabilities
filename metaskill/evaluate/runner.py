@@ -3,7 +3,8 @@
 The only module that executes the agent. For every task, variant (`with_skill`,
 `baseline`) and run 1..n it gives the agent a fresh sandboxed workspace with the task's
 fixtures, judges the result with judge.py, writes the full log to the report folder and
-records a TestResult. Quality, robustness and efficiency are computed from those results.
+records a TestResult. Quality, robustness and efficiency are computed from those results;
+robustness.score_from_runner takes a RunnerResult as it is.
 
 How an agent session is started is behind `Agent`, so tests use a fake one and no
 Hermes internals are imported here. Everything the agent runs, and the command of every
@@ -12,6 +13,7 @@ Hermes internals are imported here. Everything the agent runs, and the command o
 
 from __future__ import annotations
 
+import logging
 import shutil
 import tempfile
 import time
@@ -40,6 +42,7 @@ from .sandbox import DockerSandbox, RunFailed, Sandbox, Workspace
 from .tasks import SAFE_NAME, load_tasks
 
 VARIANTS = (Variant.WITH_SKILL, Variant.BASELINE)
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,7 +65,9 @@ class AgentRun:
     cache_write_tokens: int = 0
     llm_calls: int = 0  # model round-trips the session made
     tool_calls: int | None = 0  # None when the agent could not measure its tool calls
-    transcript: str = ""  # the full session for the log, if the agent provides one
+    # The full session, if the agent provides one: written to the log, and for with_skill
+    # runs handed to robustness for its method agreement (RunnerResult.transcripts).
+    transcript: str = ""
     # The session's own time, when the agent measured it. The runner's clock also counts the
     # agent's start-up (Hermes takes a second or two); this leaves that out. None: the runner's.
     seconds: float | None = None
@@ -121,6 +126,10 @@ class RunnerResult:
     errors: list[str] = field(default_factory=list)
     judge_model: str = ""  # for ReportMeta.judge_model; empty if no LLM check ran
     judge_usage: TokenUsage = field(default_factory=TokenUsage)
+    # (task_id, run) -> the agent's transcript, for with_skill runs in `tests` whose agent
+    # gave one (robustness's method agreement). Kept in memory only: like the logs, never
+    # written to the report, since a transcript can hold anything the session read.
+    transcripts: dict[tuple[str, int], str] = field(default_factory=dict)
 
 
 def timestamp(now: datetime | None = None) -> str:
@@ -144,23 +153,27 @@ def run_skill(skill: Skill, tasks_file: str | Path, agent: Agent, *,
 def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
               config: EvaluationConfig, run_dir: Path, ctx: Any = None,
               judges: Mapping[JudgeType, TaskJudge] | None = None,
-              sandbox: Sandbox | None = None) -> RunnerResult:
+              sandbox: Sandbox | None = None, log_folder: str | None = None) -> RunnerResult:
     """Run every task `config.runs_per_task` times per variant and judge each run.
 
     `ctx` is the Hermes plugin context, needed only for LLM checks. `sandbox` opens the
     workspace each run happens in, and runs its `exit_code` commands; None means a
     `DockerSandbox` whose run folders are `config.sandbox_disk` in size. `judges`
-    replaces the judges built from these, for tests. Logs go to `run_dir/[skill]/logs/`.
+    replaces the judges built from these, for tests. Logs go to
+    `run_dir/[log_folder]/logs/`; `log_folder` defaults to the skill's name, and a caller
+    running two skills of the same name into one run_dir gives each its own.
 
-    Raises ValueError if the skill's name cannot be a folder name: it comes from the
-    skill's own frontmatter, so `../x` or an absolute path would put the logs elsewhere.
+    Raises ValueError if the skill's name or log_folder cannot be a folder name: the name
+    comes from the skill's own frontmatter, so `../x` or an absolute path would put the
+    logs elsewhere.
     """
-    if not isinstance(skill.name, str) or not SAFE_NAME.fullmatch(skill.name):
-        raise ValueError(f"skill name {skill.name!r} may only contain letters, digits, "
+    folder = skill.name if log_folder is None else log_folder
+    if not isinstance(folder, str) or not SAFE_NAME.fullmatch(folder):
+        raise ValueError(f"skill name {folder!r} may only contain letters, digits, "
                          "'_', '.' and '-'")
     pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
     result = RunnerResult(tests=[], task_ids=[task.task_id for task in tasks])
-    log_dir = run_dir / skill.name / "logs"
+    log_dir = run_dir / folder / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     for task in tasks:
@@ -173,14 +186,23 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
                     result.errors.append(clean(f"{label}: {unavailable}", MAX_REASON_CHARS))
                     continue
                 try:
-                    result.tests.append(
-                        _run_once(skill, task, variant, n, agent, pool, config, run_dir))
+                    test, transcript = _run_once(
+                        skill, task, variant, n, agent, pool, config, run_dir, folder)
+                    result.tests.append(test)
+                    if transcript and variant is Variant.WITH_SKILL:
+                        result.transcripts[(task.task_id, n)] = transcript
                 # JudgeError also covers a workspace that could not be made, or Docker
                 # failing. OSError: writing the log failed. Either costs this run, not
                 # the runs already made.
                 except (JudgeError, JudgeUnavailable, OSError) as e:
                     result.errors.append(
                         clean(f"{label}: {type(e).__name__}: {e}", MAX_REASON_CHARS))
+                except Exception as e:
+                    # Unexpected, so likely a bug of ours: it costs this run (an error, not
+                    # a score), never the skill's other runs or its other dimensions.
+                    _log.warning("metaskill: run %s of %s failed unexpectedly", label,
+                                 clean(skill.name, MAX_REASON_CHARS), exc_info=True)
+                    result.errors.append(clean(f"{label}: {type(e).__name__}", MAX_REASON_CHARS))
 
     if pool.llm is not None:
         result.judge_model = pool.llm.judge_model
@@ -189,8 +211,10 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
 
 
 def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
-              pool: _Judges, config: EvaluationConfig, run_dir: Path) -> TestResult:
-    """One session in a fresh workspace, judged against every check of the task."""
+              pool: _Judges, config: EvaluationConfig,
+              run_dir: Path, folder: str) -> tuple[TestResult, str]:
+    """One session in a fresh workspace, judged against every check of the task. Returns
+    the result and the agent's transcript ("" if it gave none)."""
     workspace = pool.sandbox.open(task.fixtures)
     left_out: list[str] = []
     run, failure = AgentRun(output=""), ""
@@ -220,7 +244,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
     finally:
         workspace.close()
 
-    log = f"{skill.name}/logs/{task.task_id}-{variant.value}-r{n}.txt"
+    log = f"{folder}/logs/{task.task_id}-{variant.value}-r{n}.txt"
     metrics = Metrics(
         input_tokens=run.input_tokens, output_tokens=run.output_tokens,
         reasoning_tokens=run.reasoning_tokens,
@@ -228,7 +252,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         llm_calls=run.llm_calls, tool_calls=run.tool_calls,
         seconds=round(_own_seconds(run) if _own_seconds(run) is not None else seconds, 3))
     _write_log(run_dir / log, task, variant, n, run, metrics, verdict, left_out)
-    return TestResult(
+    test = TestResult(
         task_id=task.task_id,
         description=task.description,
         variant=variant,
@@ -242,6 +266,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         output=_truncate(run.output, config.output_max_chars, log),
         evidence=verdict.evidence,
     )
+    return test, run.transcript
 
 
 def _own_seconds(run: AgentRun) -> float | None:
@@ -277,6 +302,9 @@ def _put_skill(skill: Skill, workspace: Workspace) -> list[str]:
     for rel in [Path("SKILL.md"), *skill.files]:
         path = Path(skill.path) / rel
         if not copied(skill, rel):
+            # An error, not a failed run, and before the agent starts: the agent is given
+            # skill.body as its prompt, so running it would send a SKILL.md that links to,
+            # say, ~/.hermes/.env to the model provider. judge.skill_sources refuses it too.
             if rel == Path("SKILL.md"):
                 raise JudgeError("SKILL.md is a link or hard link, so it may be a file "
                                  "outside the skill; it was not copied into the sandbox")
@@ -301,6 +329,15 @@ def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Ve
         return _combine([pool.get(c.judge).judge(task, c, output) for c in task.checks])
     except RunFailed as e:
         return _failed(str(e))
+    except (JudgeError, JudgeUnavailable):
+        raise  # the judge or Docker, not the run: an error, as before
+    except Exception as e:
+        # Anything else came from judging what the run left behind (its files, links or
+        # output), so it is the run's doing: it fails rather than escaping, which would
+        # drop the whole skill from the evaluation. Logged in full, as it may be our bug.
+        _log.warning("metaskill: a check of task %s raised while judging a run", task.task_id,
+                     exc_info=True)
+        return _failed(f"the run's result could not be judged ({type(e).__name__})")
     finally:
         pool.workspace = None
         shutil.rmtree(workdir, ignore_errors=True)

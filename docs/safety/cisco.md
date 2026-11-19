@@ -64,13 +64,14 @@ The sketch's `except SkillScannerError` would catch neither: a setup failure wou
 
 ### `available()`
 
-True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. Hermes installs the scanner from `plugin.yaml`, so this is normally true. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
+True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. The scanner is the optional `metaskill-cisco` add-on ([evaluate-safety.md](../evaluate-safety.md) 3.1), so this is true once the user has installed it. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
 
 ### `scan(skill, tier)`
 
 1. **Not installed:** return `not-installed`, no findings, `detail` with the install command.
    - **Frontmatter that would stall the scanner:** return `error` without running it, when the frontmatter holds more than `MAX_FRONTMATTER_VALUES` (100,000) values once its YAML aliases are expanded, or is nested too deep to count (`frontmatter_too_large` in checks.py). The scanner parses the frontmatter itself, and its time doubles with each level of nested aliases: with 2.2.1, 6 s at 2^24 values and minutes past 2^28, from a frontmatter of a few hundred bytes. Real skills have a few hundred values. Safety is then `partial`, and our own checks report the frontmatter as a HIGH `frontmatter-aliases` finding ([checks.md](checks.md)).
-2. **Static:** run `SkillScanner().scan_skill(skill.path)`.
+   - **A copy without links:** the scanner reads the skill folder itself and, at the deep tier, sends what it reads to the model provider. A skill from git can hold a link such as `notes.md -> ../../.hermes/.env`, so it scans a temporary copy of the folder under the same name: every regular file and folder, hidden ones included, but no symlink (file or folder) and no hard link, which could be a file outside the skill. This is the rule `judge.skill_sources` applies to what the judge reads. The paths left out are listed in `detail` (`N link(s) left out, not scanned: ...`). If `SKILL.md` itself is a link or hard link, the scan does not run and the result is `error`, as the judge refuses it too. Finding locations are unchanged, since the scanner reports paths relative to the skill folder.
+2. **Static:** run `SkillScanner().scan_skill(copy)`.
 3. **Deep:**
    1. Without `ctx.llm` (outside Hermes, as in tests and CI), run the static scan and return `llm-unavailable`, with `detail` saying there is no Hermes LLM access.
    2. Otherwise route the model through `ctx.llm` (next section) and build the analyzers with the adapter's model name and a placeholder key.
@@ -113,7 +114,7 @@ Hermes never gives plugins API keys: a plugin asks Hermes for a completion throu
 1. It registers a LiteLLM custom provider, `metaskill_hermes`, added to LiteLLM's provider list rather than replacing it.
 2. For each scan, it gives Cisco a model name `metaskill_hermes/<scan id>` and a placeholder key (`not-a-key`). Cisco requires some key value; this one is never used or sent anywhere. Nothing is read from the environment.
 3. Each request Cisco makes is translated for `ctx.llm.complete_structured`: Cisco's system message becomes `instructions`, its user message `input`, and temperature and max tokens pass through. Requests `ctx.llm` cannot express (tools, streaming, multi-turn history) are refused with a clear error, never silently changed.
-4. The reply and its token usage go back to Cisco, which parses them as usual.
+4. The reply and its token usage go back to Cisco, which parses them as usual. The backend's `LlmUsage` also records each call (the `provider/model` that answered, tokens, a retry included), so the report header can say what Cisco's LLM analyzer used ([score.md](score.md), "Judge model and usage").
 
 So Cisco's LLM layer runs on whichever model the user has configured in Hermes, with Hermes's auth and permission settings. Without `ctx.llm`, Cisco runs static only.
 

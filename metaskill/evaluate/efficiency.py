@@ -74,7 +74,7 @@ def score_from_runs(with_skill: list[TestResult],
     and its cost is averaged over all of that task's with-skill runs. For each counted task
     and signal, forms the smoothed speedup ratio (baseline + 1)/(with_skill + 1); the
     unweighted geometric mean of all such ratios, mapped by G/(1+G), is the score
-    (parity -> 0.5, cheaper -> higher).
+    (parity -> 0.5, cheaper -> higher). If no task passed with the skill, the score is 0.
     """
     # Success-gating by task: a task counts if ANY of its with-skill runs passed; its cost
     # is then averaged over ALL of that task's with-skill runs, so an expensive failure is
@@ -103,9 +103,17 @@ def score_from_runs(with_skill: list[TestResult],
             counted += 1
 
     total = len(passed_tasks)
+    if not total and with_skill:
+        # Nothing succeeded, so there is no efficient success to credit: 0, a real score.
+        # Skipped would leave the skill without an overall, listed as unranked rather
+        # than last, which hides the worst result there is.
+        return DimensionScore(
+            Dimension.EFFICIENCY, 0.0, Status.OK,
+            reason="No task passed with the skill: no efficiency to credit",
+            detail=f"0 of {len({r.task_id for r in with_skill})} task(s) passed with the skill")
     if not ratios:
         return _skipped(f"{total} task(s) passed with the skill but none had a baseline"
-                        if total else "no task passed with the skill")
+                        if total else "no with-skill runs to score")
 
     g = geometric_mean(ratios)
     value = g / (1 + g)

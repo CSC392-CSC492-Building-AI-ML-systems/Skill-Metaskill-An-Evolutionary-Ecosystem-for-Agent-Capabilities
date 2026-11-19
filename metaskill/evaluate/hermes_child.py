@@ -112,6 +112,13 @@ def _register_backend(docker: str, container: str, workdir: str) -> None:
         """Runs every command in the runner's container. It never creates or removes the
         container: the runner owns it, so every isolation flag stays in sandbox.py."""
 
+        # Hermes' file tools (read_file, write_file, patch, search_files) work on the host's
+        # files directly when uses_host_filesystem is True, and through these commands when
+        # it is False. False is BaseEnvironment's default today; it is set here so a Hermes
+        # that changed the default could not route the agent's file tools to this machine.
+        uses_host_filesystem = False
+        is_local = False
+
         def __init__(self, cwd: str, timeout: int):
             super().__init__(cwd=cwd, timeout=timeout)
             self.init_session()
@@ -294,8 +301,21 @@ def _build_agent(request: dict[str, Any]):
         max_iterations=int(request["max_iterations"]),
         ephemeral_system_prompt=request.get("skill_message") or None)
     agent.suppress_status_output = True
+    seal_agent(agent)
     _check_tools(agent)
     return agent, choice.model, runtime.get("provider")
+
+
+def seal_agent(agent) -> None:
+    """Nothing of an evaluation session may outlive it. After a turn, Hermes can fork the agent
+    to review it and write memories or skills straight into the user's stores, and mirror the
+    turn into an external memory provider; the session runs a skill under evaluation, so it
+    could plant either. Today both are off only indirectly (no skill_manage tool, skip_memory),
+    so this turns the review off by its own switch and refuses an agent with a memory provider."""
+    agent.skip_background_review = True
+    if getattr(agent, "_memory_manager", None) is not None:
+        raise SetupError("the Hermes agent has a memory provider attached: a skill under "
+                         "evaluation could write to the user's memory")
 
 
 def _turn_off_tool_search() -> None:

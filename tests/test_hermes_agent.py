@@ -449,6 +449,26 @@ def test_a_tool_definition_that_cannot_be_read_counts_as_unexpected(shape):
     assert hermes_child.unexpected_tools([shape], {"terminal"}) != []
 
 
+def test_a_session_cannot_review_itself_into_the_users_skills_or_memory():
+    # Hermes can fork a finished turn to write memories or skills, which a skill under
+    # evaluation could steer; the review is switched off by its own flag.
+    agent = SimpleNamespace(skip_background_review=False, _memory_manager=None)
+    hermes_child.seal_agent(agent)
+    assert agent.skip_background_review is True
+
+
+def test_an_agent_with_a_memory_provider_is_refused():
+    agent = SimpleNamespace(skip_background_review=False, _memory_manager=object())
+    with pytest.raises(hermes_child.SetupError, match="memory provider"):
+        hermes_child.seal_agent(agent)
+
+
+def test_an_older_agent_without_a_memory_manager_attribute_is_fine():
+    agent = SimpleNamespace()
+    hermes_child.seal_agent(agent)
+    assert agent.skip_background_review is True
+
+
 def test_tool_search_is_turned_off_for_the_session(monkeypatch):
     # Hermes puts a bridge in front of the tools that reaches connected apps
     # and MCP installs; the session must not have it.

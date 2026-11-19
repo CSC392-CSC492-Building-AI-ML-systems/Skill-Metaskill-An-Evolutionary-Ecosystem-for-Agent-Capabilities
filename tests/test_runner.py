@@ -21,7 +21,7 @@ from metaskill.evaluate.models import (
     TestResult,
     Variant,
 )
-from metaskill.evaluate import efficiency
+from metaskill.evaluate import efficiency, robustness
 from metaskill.evaluate.runner import (
     AgentRun,
     agent_run_from_hermes_usage,
@@ -238,6 +238,60 @@ def test_runner_results_feed_the_efficiency_scorer(skill, run_dir):
     dimension = efficiency.score_from_runs(with_skill, baseline)
     assert dimension.status is Status.OK
     assert dimension.value > 0.5  # the skill made the task cheaper than no skill
+
+
+def with_transcript(prompt, skill, workdir):
+    run = writes_report_with_skill(prompt, skill, workdir)
+    run.transcript = "read SKILL.md\nwrite report.txt" if skill else "gave up"
+    return run
+
+
+def test_runner_keeps_planned_tasks_and_with_skill_transcripts(skill, run_dir):
+    result = run_tasks(skill, [task("a"), task("b")], FakeAgent(with_transcript),
+                       config=config(runs=2), run_dir=run_dir)
+    assert result.task_ids == ["a", "b"]
+    # Only with_skill runs, keyed by (task_id, run); baseline transcripts stay in the logs.
+    assert result.transcripts == {(t, n): "read SKILL.md\nwrite report.txt"
+                                  for t in ("a", "b") for n in (1, 2)}
+
+
+def test_runner_results_feed_the_robustness_scorer(skill, run_dir):
+    # End to end: a RunnerResult goes straight into robustness.score_from_runner.
+    result = run_tasks(skill, [task("a"), task("b")], FakeAgent(with_transcript),
+                       config=config(runs=3), run_dir=run_dir)
+    dimension = robustness.score_from_runner(result, config(runs=3))
+    assert dimension.status is Status.OK and dimension.value == 1.0
+    assert "from transcripts" in dimension.detail
+    assert "baseline outcome agreement 1.00" in dimension.detail  # context only
+    # Evaluate's entry point (score_runs) scores the same runner result.
+    assert robustness.score_runs(skill, config(runs=3), result) == dimension
+
+
+def test_a_task_that_lost_every_run_is_a_robustness_error(skill, run_dir):
+    # No judge for the LLM task, so none of its runs is made (they are runner errors).
+    result = run_tasks(skill, [task("judged", checks=[LLM_CHECK]), task("other")],
+                       FakeAgent(writes_report_with_skill), config=config(runs=2),
+                       run_dir=run_dir)
+    assert {t.task_id for t in result.tests} == {"other"}
+    dimension = robustness.score_from_runner(result, config(runs=2))
+    assert dimension.status is Status.ERROR and dimension.value is None
+    assert "judged" in dimension.detail
+
+
+def test_one_lost_run_is_a_robustness_error(skill, run_dir):
+    calls = []
+
+    def fails_once(prompt, skill, workdir):
+        calls.append(skill)
+        if skill is not None and len(calls) == 2:  # the second with_skill run
+            raise JudgeError("docker went away")
+        return writes_report_with_skill(prompt, skill, workdir)
+
+    result = run_tasks(skill, [task()], FakeAgent(fails_once), config=config(runs=3),
+                       run_dir=run_dir)
+    assert len(result.errors) == 1
+    dimension = robustness.score_from_runner(result, config(runs=3))
+    assert dimension.status is Status.ERROR and "incomplete run matrix" in dimension.detail
 
 
 def test_each_run_gets_a_fresh_workspace_with_the_fixtures(skill, run_dir, tmp_path):
@@ -590,6 +644,50 @@ def test_a_hard_linked_skill_md_is_a_run_error(skill, run_dir, tmp_path):
     assert [t.variant for t in result.tests] == [Variant.BASELINE]
     assert "SKILL.md is a link or hard link" in result.errors[0]
     assert all(w.closed for w in sandbox.opened) and len(agent.calls) == 1
+
+
+class RaisingJudge:
+    """A judge that raises `error`, as one did on a link loop the run left behind."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def judge(self, task, check, run):
+        raise self.error
+
+
+def test_a_check_that_raises_on_what_the_run_left_fails_the_run(skill, run_dir):
+    # Raised past the runner, it dropped the whole skill (safety included) from evaluate.
+    result = run_tasks(skill, [task()], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1), run_dir=run_dir, sandbox=FakeSandbox(),
+                       judges={JudgeType.DETERMINISTIC: RaisingJudge(RuntimeError("loop"))})
+    assert result.errors == []
+    assert [t.passed for t in result.tests] == [False, False]
+    assert all("could not be judged (RuntimeError)" in t.reason for t in result.tests)
+
+
+def test_a_judge_error_is_still_a_run_error(skill, run_dir):
+    result = run_tasks(skill, [task()], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1), run_dir=run_dir, sandbox=FakeSandbox(),
+                       judges={JudgeType.DETERMINISTIC: RaisingJudge(JudgeError("broken check"))})
+    assert result.tests == [] and len(result.errors) == 2
+
+
+def test_an_unexpected_failure_costs_that_run_only(skill, run_dir):
+    # Anything else that escapes a run (here an agent result the runner cannot use) is an
+    # error for that run; the other runs are still made and the call returns.
+    calls = []
+
+    def bad_once(prompt, skill, workdir):
+        calls.append(skill)
+        if len(calls) == 1:
+            return AgentRun(output=None)  # not text: the runner's _truncate raises TypeError
+        return writes_report_with_skill(prompt, skill, workdir)
+
+    result = run_tasks(skill, [task()], FakeAgent(bad_once), config=config(runs=2),
+                       run_dir=run_dir, sandbox=FakeSandbox())
+    assert len(result.errors) == 1 and "TypeError" in result.errors[0]
+    assert len(result.tests) == 3
 
 
 class BrokenWorkspace(FakeWorkspace):

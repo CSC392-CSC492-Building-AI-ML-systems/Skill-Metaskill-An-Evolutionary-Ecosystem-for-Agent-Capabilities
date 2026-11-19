@@ -453,6 +453,9 @@ class Judge:
         self.retries = retries  # extra calls when a reply does not fit its schema
         self.max_chars = max_chars  # characters of a skill sent to the judge
         self.used: set[tuple[str, str]] = set()  # (provider, model) of every reply
+        # Replies by "provider/model", so a caller can tell which models answered between
+        # two points in time (a set cannot: a model used before and again looks unchanged).
+        self.model_calls: dict[str, int] = {}
         self.usage: dict[str, TokenUsage] = {}  # by purpose: rate, review, check, ...
 
     @classmethod
@@ -516,6 +519,8 @@ class Judge:
                 result = self._complete(text, material, system, purpose,
                                         temperature, max_tokens, timeout)
                 self.used.add((result.provider, result.model))
+                name = f"{result.provider}/{result.model}"
+                self.model_calls[name] = self.model_calls.get(name, 0) + 1
                 reply_usage = getattr(result, "usage", None)
                 usage.input_tokens += int(getattr(reply_usage, "input_tokens", 0) or 0)
                 usage.output_tokens += int(getattr(reply_usage, "output_tokens", 0) or 0)
@@ -862,8 +867,15 @@ class DeterministicJudge:
             raise JudgeError(f"file_exists target {check.target} is outside the run folder")
         # A link the run made that leads out of the folder does not count as the file.
         root = run.workdir.resolve()
-        path = (root / target).resolve()
-        found = path.is_relative_to(root) and path.exists()
+        try:
+            path = (root / target).resolve()
+            found = path.is_relative_to(root) and path.exists()
+        except (OSError, RuntimeError):
+            # The run left a link loop (`ln -s a a`) or a path that cannot be read: there
+            # is no file there. RuntimeError is how Python before 3.13 reports a loop.
+            # Raising would turn the run's own doing into an error that leaves it unscored.
+            return _binary(False, f"{check.target} does not exist (a link loop or an "
+                                  "unreadable path)")
         return _binary(found, f"{check.target} {'exists' if found else 'does not exist'}")
 
     def _exit_code(self, check: Check, run: RunOutput) -> Verdict:

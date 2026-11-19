@@ -69,11 +69,19 @@ Examples:
 **`detail`**: empty when the status is `ok`. Otherwise one line per backend that was not `ok`, taken from its `BackendResult.detail`:
 
 ```
-cisco: Cisco skill-scanner not installed; run `hermes plugins disable metaskill; hermes plugins enable metaskill` in a terminal, then restart Hermes
+cisco: Cisco skill-scanner not installed (the optional metaskill-cisco add-on); run `hermes plugins install CSC392-CSC492-Building-AI-ML-systems/Skill-Metaskill-An-Evolutionary-Ecosystem-for-Agent-Capabilities#plugins/metaskill-cisco` in a terminal, then restart Hermes
 llm-review: no judge configured
 ```
 
 Scanner notes, such as files the LLM skipped, are added even when the status is `ok`, because they qualify the result.
+
+## Judge model and usage
+
+At the `deep` tier, `score()` also fills `DimensionScore.judge_model` and `judge_usage` with what its two LLM passes used: the review's `Judge` (its `judge_model`, which shows a mid-run fallback, and `total_usage`) and Cisco's LLM analyzer (counted per call by the bridge, [cisco.md](cisco.md)). Evaluate puts them in the report header (`ReportMeta.judge_model`, `judge_usage`), so a deep-tier report names the model behind its safety findings and what it cost. At the `static` tier both stay empty: no model is called.
+
+- **Per scan.** The judge and Cisco's tracker count for their whole life, so `score()` reads them before and after the scan and reports the difference. A caller that builds backends once (`backends_from_context`) and scores several skills gets each skill's own calls.
+- **Replies only.** A call counts once a reply comes back; one the provider refused or that failed in transit is not counted.
+- **Merged in the header.** The report keeps the merged model and usage in `ReportMeta`, not per dimension: a header with both a task judge and the deep safety tier does not say which model judged which.
 
 ## Tier mismatch
 
@@ -92,3 +100,5 @@ Backends are replaced with fakes that return fixed `BackendResult`s, so these te
 ## Open
 
 - Whether the runner calls `missing_dependencies()` once per evaluation or once per session. Proposed: once per evaluation call, before any skill is scanned.
+
+The judge and Cisco's tracker count for their whole life, so `score()` takes their totals before and after each scan and keeps the difference. That holds for the models as well as the tokens: both `Judge` and `LlmUsage` keep `model_calls`, the replies by `provider/model`, and a scan reports the models whose count grew during it. A backend reused for a scan on model A and then one on model B reports only B for the second, and a model that answered in both scans is reported in both. A backend with no `model_calls` is credited with every call on the models it names.

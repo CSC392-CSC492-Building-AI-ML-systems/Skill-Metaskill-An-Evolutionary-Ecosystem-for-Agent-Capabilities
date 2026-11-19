@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import os
+import shutil
+import stat
+import tempfile
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
@@ -19,13 +23,17 @@ from typing import Any
 from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .checks import MAX_FRONTMATTER_VALUES, frontmatter_too_large
 from .findings import BackendResult, BackendStatus
-from .hermes_bridge import PLACEHOLDER_KEY, PluginLlm, routed
+from .hermes_bridge import PLACEHOLDER_KEY, LlmUsage, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
+# Pinned in plugins/metaskill-cisco/plugin.yaml too; change both together.
 TESTED_VERSION = "2.2.1"
-# Hermes installs what plugin.yaml declares when the plugin is enabled. pip would reach
-# another Python: Hermes' own environment has no pip.
-INSTALL_COMMAND = "hermes plugins disable metaskill; hermes plugins enable metaskill"
+ADDON = "metaskill-cisco"
+# The scanner is the optional metaskill-cisco add-on: installing it makes Hermes install the
+# scanner into its own environment, after the user consents. pip would reach another Python:
+# Hermes' own environment has no pip.
+INSTALL_COMMAND = ("hermes plugins install CSC392-CSC492-Building-AI-ML-systems/"
+                   f"Skill-Metaskill-An-Evolutionary-Ecosystem-for-Agent-Capabilities#plugins/{ADDON}")
 
 # Name the scanner gives its LLM analyzer in analyzers_used and analyzers_failed.
 LLM_ANALYZER = "llm_analyzer"
@@ -48,6 +56,27 @@ class LLMSetupError(Exception):
     """The scanner's LLM analyzer could not be configured."""
 
 
+def _addon_installed() -> bool:
+    """Whether the add-on's folder is in Hermes' plugins folder: $HERMES_HOME/plugins, or
+    beside this plugin's own folder, which is where Hermes installs plugins."""
+    folders = [Path(__file__).resolve().parents[3].parent / ADDON]
+    if os.environ.get("HERMES_HOME"):
+        folders.insert(0, Path(os.environ["HERMES_HOME"]) / "plugins" / ADDON)
+    return any((folder / "plugin.yaml").is_file() for folder in folders)
+
+
+def not_installed_hint() -> str:
+    """What to do when the scanner cannot be imported. Hermes installs a plugin's Python
+    dependencies only when the plugin is enabled, so an add-on that was installed but not
+    enabled (a declined or skipped prompt) has no scanner, and installing it again does not
+    help: enabling it does."""
+    if _addon_installed():
+        return (f"the {ADDON} add-on is installed but not enabled, so Hermes has not installed "
+                f"the scanner: run `hermes plugins enable {ADDON}` in a terminal, accept "
+                "installing its Python dependencies, then restart Hermes")
+    return f"optional add-on {ADDON}: run `{INSTALL_COMMAND}` in a terminal, then restart Hermes"
+
+
 class CiscoBackend:
     name = "cisco"
 
@@ -61,6 +90,8 @@ class CiscoBackend:
         self.task = task
         self.provider = provider
         self.model = model
+        # What the LLM analyzer's calls used, for the report header; empty at the static tier.
+        self.llm_usage = LlmUsage()
 
     def available(self) -> bool:
         return importlib.util.find_spec("skill_scanner") is not None
@@ -76,8 +107,7 @@ class CiscoBackend:
         if not self.available():
             return BackendResult(
                 self.name, BackendStatus.NOT_INSTALLED, tier,
-                detail=(f"Cisco skill-scanner not installed; run `{INSTALL_COMMAND}` in a "
-                        "terminal, then restart Hermes"))
+                detail=f"Cisco skill-scanner not installed ({not_installed_hint()})")
         try:
             # The scanner parses the frontmatter itself, and its time doubles with each
             # level of nested aliases (2.2.1: 6s at 2^24 values, minutes past 2^28). Our
@@ -88,28 +118,48 @@ class CiscoBackend:
                     detail=(f"not run: the frontmatter expands to more than "
                             f"{MAX_FRONTMATTER_VALUES} values through YAML aliases, which "
                             "would stall the scanner"))
-            if tier is SafetyTier.DEEP:
-                if self.llm is None:
-                    result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)
-                    return _fell_back(result, "no Hermes LLM access (ctx.llm), so Cisco ran static only")
-                with self._route() as model:
-                    try:
-                        analyzers = self._build_deep_analyzers(model)
-                    except LLMSetupError as e:
-                        result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)
-                        return _fell_back(result, str(e))
-                    return convert(self._run_scanner(skill.path, analyzers), tier)
-            return convert(self._run_scanner(skill.path, None), tier)
+            with tempfile.TemporaryDirectory(prefix="metaskill-cisco-") as tmp:
+                # The scanner reads the folder itself and, at the deep tier, sends what it
+                # reads to the model provider. A skill from git can hold a link such as
+                # notes.md -> ../../.hermes/.env, so it scans a copy without links, as the
+                # judge only reads files that are the skill's (judge.skill_sources).
+                # The folder keeps its name: the scanner may compare it with the frontmatter.
+                source = Path(skill.path)
+                copy, left_out = _without_links(source, Path(tmp) / (source.resolve().name or "skill"))
+                if "SKILL.md" in left_out:
+                    return BackendResult(
+                        self.name, BackendStatus.ERROR, tier,
+                        detail="not run: SKILL.md is a link or hard link, so it may be a "
+                               "file outside the skill")
+                result = self._scan_copy(copy, tier)
+            if left_out:
+                note = f"{len(left_out)} link(s) left out, not scanned: {', '.join(left_out[:5])}"
+                result.detail = "; ".join(p for p in (result.detail, note) if p)
+            return result
         except Exception as e:  # never raise into the caller
             return BackendResult(
                 self.name, BackendStatus.ERROR, tier,
                 detail=f"{type(e).__name__}: {e}")
 
+    def _scan_copy(self, path: Path, tier: SafetyTier) -> BackendResult:
+        if tier is SafetyTier.DEEP:
+            if self.llm is None:
+                result = convert(self._run_scanner(path, None), SafetyTier.STATIC)
+                return _fell_back(result, "no Hermes LLM access (ctx.llm), so Cisco ran static only")
+            with self._route() as model:
+                try:
+                    analyzers = self._build_deep_analyzers(model)
+                except LLMSetupError as e:
+                    result = convert(self._run_scanner(path, None), SafetyTier.STATIC)
+                    return _fell_back(result, str(e))
+                return convert(self._run_scanner(path, analyzers), tier)
+        return convert(self._run_scanner(path, None), tier)
+
     # --- The only methods that touch skill_scanner or LiteLLM. Tests replace them. ---
 
     def _route(self) -> AbstractContextManager[str]:
         """Make self.llm reachable by Cisco; yields the model name to give it."""
-        return routed(self.llm, self.task, self.provider, self.model)
+        return routed(self.llm, self.task, self.provider, self.model, usage=self.llm_usage)
 
     def _build_deep_analyzers(self, model: str) -> list[Any]:
         from skill_scanner.core.analyzer_factory import (
@@ -167,6 +217,35 @@ def convert(scan: dict[str, Any], tier: SafetyTier) -> BackendResult:
         reason = llm_errors[0] if llm_errors else "LLM analyzer did not run"
         return _fell_back(result, f"LLM analysis failed: {reason}")
     return result
+
+
+def _without_links(source: Path, dest: Path) -> tuple[Path, list[str]]:
+    """Copy the skill at source to dest without links: every regular file and folder,
+    hidden ones too (the scanner looks at those), but no symlink and no hard link, either
+    of which could be a file outside the skill. Returns dest and the paths left out,
+    relative to source with `/`, sorted."""
+    left_out: list[str] = []
+    dest.mkdir(parents=True)
+    for folder, dirs, files in os.walk(source, followlinks=False):
+        here = Path(folder)
+        rel = here.relative_to(source)
+        for name in list(dirs):
+            if (here / name).is_symlink():
+                dirs.remove(name)  # not descended into
+                left_out.append((rel / name).as_posix())
+            else:
+                (dest / rel / name).mkdir()
+        for name in files:
+            path = here / name
+            try:
+                info = path.lstat()
+            except OSError:
+                continue  # gone or unreadable: the scanner could not read it either
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                left_out.append((rel / name).as_posix())
+                continue
+            shutil.copyfile(path, dest / rel / name, follow_symlinks=False)
+    return dest, sorted(left_out)
 
 
 def _fell_back(result: BackendResult, reason: str) -> BackendResult:

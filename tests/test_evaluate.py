@@ -29,15 +29,18 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-# Implemented dimensions have separate assertions.
+# Built dimensions; Safety, Quality, Config Cleanliness and the ones that need task runs
+# have separate assertions below, and Clarity is skipped without a judge
+# (test_clarity_without_model_access_is_skipped).
+NEEDS_RUNS = (Dimension.EFFICIENCY, Dimension.ROBUSTNESS)
 NOT_BUILT = [
     d for d in Dimension
     if d not in (
         Dimension.SAFETY,
         Dimension.CLARITY,
-        Dimension.EFFICIENCY,
         Dimension.QUALITY,
         Dimension.CONFIG_CLEANLINESS,
+        *NEEDS_RUNS,
     )
 ]
 
@@ -102,12 +105,13 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
         assert getattr(skill.scores, dimension.value) is None
         assert skill.dimensions[dimension].status is Status.SKIPPED
         assert skill.dimensions[dimension].detail == "not built yet"
-    # Efficiency's module is built, but it needs task runs the runner does not feed yet.
-    efficiency = skill.dimensions[Dimension.EFFICIENCY]
-    assert skill.scores.efficiency is None and efficiency.status is Status.SKIPPED
-    assert "task runs" in efficiency.detail
+    # These modules are built, but they need task runs the runner does not feed yet.
+    for dimension in NEEDS_RUNS:
+        assert getattr(skill.scores, dimension.value) is None
+        assert skill.dimensions[dimension].status is Status.SKIPPED
+        assert "task runs" in skill.dimensions[dimension].detail
     quality = skill.dimensions[Dimension.QUALITY]
-    assert skill.scores.clarity is None and quality.status is Status.SKIPPED
+    assert skill.scores.quality is None and quality.status is Status.SKIPPED
     assert "task" in (quality.reason + quality.detail).lower()  # evaluate skips it: detail
 
 
@@ -182,6 +186,23 @@ def test_no_judge_is_a_skipped_dimension(tmp_path, out, placeholder):
     status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)
                   ).skills[0].dimensions[PLACEHOLDER]
     assert status.status is Status.SKIPPED and status.detail == "no judge model is available"
+
+
+@pytest.mark.parametrize("has_aux_tasks, expected", [(True, "metaskill_judge"), (False, "none")])
+def test_safety_calls_go_through_the_judge_task_where_hermes_has_one(tmp_path, out, placeholder,
+                                                                     has_aux_tasks, expected):
+    # The deep tier's review and Cisco's analyzer ran with task=None, so on the main model,
+    # while every other judge of the call used the model set for "Metaskill judge".
+    placeholder(Dimension.SAFETY, (
+        "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+        "def score(skill, config, llm=None, task=None, **_):\n"
+        "    return DimensionScore(Dimension.SAFETY, 1.0, detail=str(task or 'none'))\n"))
+    ctx = SimpleNamespace(llm=None)
+    if has_aux_tasks:
+        ctx.register_auxiliary_task = lambda *a, **k: None
+    status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out, ctx=ctx)
+                  ).skills[0].dimensions[Dimension.SAFETY]
+    assert status.detail == expected
 
 
 @pytest.mark.parametrize("dimension", [d for d in Dimension if d not in evaluate.TASK_DIMENSIONS],
