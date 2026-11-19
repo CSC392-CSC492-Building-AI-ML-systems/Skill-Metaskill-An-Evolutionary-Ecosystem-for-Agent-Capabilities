@@ -353,6 +353,7 @@ def _details(entry: RankedSkill) -> list[str]:
         *_section("Dimensions", [
             f"{d.value}: {s.status}" + "".join(f". {_md(t)}" for t in (s.reason, s.detail) if t)
             for d, s in result.dimensions.items()]),
+        *_section("Quality by task", _quality_by_task(result)),
         *_section("Tests", [
             f"{_md(t.task_id)} ({_md(t.description)}), {t.variant} r{t.run}: "
             f"{'passed' if t.passed else 'failed'}, score {t.score:.2f}, judge {t.judge}, "
@@ -375,6 +376,28 @@ def _details(entry: RankedSkill) -> list[str]:
             f"at {_md(w.location)}. Why: {_md(', '.join(w.reasons))}"
             for w in result.local_warnings]),
     ]
+
+
+def _quality_by_task(result: SkillResult) -> list[str]:
+    outcomes = {}
+    for test in result.tests:
+        outcomes.setdefault(test.task_id, {}).setdefault(str(test.variant), []).append(test.passed)
+    lines = []
+    for task_id, variants in sorted(outcomes.items()):
+        skill, baseline = variants.get("with_skill"), variants.get("baseline")
+        if not skill or not baseline:
+            lines.append(f"{_md(task_id)}: incomplete comparison "
+                         f"(with skill {len(skill or [])} run(s), "
+                         f"baseline {len(baseline or [])} run(s)).")
+            continue
+        a, b = sum(skill), sum(baseline)
+        delta = a * len(baseline) - b * len(skill)
+        label = ("improved" if delta > 0 else "regressed" if delta < 0 else
+                 "unchanged (all passed)" if a == len(skill) else
+                 "unchanged (all failed)" if a == 0 else "unchanged (mixed)")
+        lines.append(f"{_md(task_id)}: with skill {a}/{len(skill)}, "
+                     f"baseline {b}/{len(baseline)}; {label}.")
+    return lines
 
 
 def _section(title: str, items: list[str]) -> list[str]:

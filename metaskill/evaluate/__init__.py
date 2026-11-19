@@ -81,24 +81,27 @@ PROVIDER_FAILED = "failed: the judge model's provider did not answer"
 
 def evaluate_skill(skill_path: str | Path, *, config_path: str | Path | None = None,
                    output_path: str | Path | None = None, tasks_path: str | Path | None = None,
-                   ctx: Any = None) -> dict[str, Any]:
+                   ctx: Any = None, agent: Any = None, sandbox: Any = None,
+                   judges: Any = None) -> dict[str, Any]:
     """Score one skill, a folder or its SKILL.md, and write its report. With tasks_path,
     its tasks run first (real model calls)."""
-    return _evaluate([skill_path], config_path, output_path, tasks_path, ctx)
+    return _evaluate([skill_path], config_path, output_path, tasks_path, ctx, agent, sandbox, judges)
 
 
 def rank_skills(skill_paths: list[str | Path], *, config_path: str | Path | None = None,
                 output_path: str | Path | None = None, tasks_path: str | Path | None = None,
-                ctx: Any = None) -> dict[str, Any]:
+                ctx: Any = None, agent: Any = None, sandbox: Any = None,
+                judges: Any = None) -> dict[str, Any]:
     """Score skills in one run, rank them and write their report. With tasks_path, every
     skill runs the same tasks. A skill that cannot be loaded is listed in `warnings`; the
     others go on."""
-    return _evaluate(skill_paths, config_path, output_path, tasks_path, ctx)
+    return _evaluate(skill_paths, config_path, output_path, tasks_path, ctx, agent, sandbox, judges)
 
 
 def _evaluate(paths: list[str | Path], config_path: str | Path | None,
               output_path: str | Path | None, tasks_path: str | Path | None,
-              ctx: Any) -> dict[str, Any]:
+              ctx: Any, agent: Any = None, sandbox: Any = None,
+              judges: Any = None) -> dict[str, Any]:
     from . import safety
 
     try:
@@ -113,7 +116,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
         if config.tasks_path is not None:
             config.tasks_path = Path(session_cwd()) / config.tasks_path
 
-    tasks, agent, sandbox = None, None, None
+    tasks = None
     if config.tasks_path is None:
         # Nothing runs, so only what safety needs; Docker is not asked for.
         missing = safety.missing_dependencies()
@@ -125,13 +128,13 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
                     "error": clean(f"tasks_path is not a usable task file: {e}", MAX_REASON_CHARS)}
         from . import dependencies
 
-        sandbox = _make_sandbox(config)
+        sandbox = sandbox if sandbox is not None else _make_sandbox(config)
         missing = dependencies.missing_dependencies(sandbox)
         if any(d.required for d in missing):  # dependencies.md: nothing starts without them
             return {"status": "error",
                     "error": "running the tasks needs what `dependencies` lists; nothing was run",
                     "dependencies": [asdict(d) for d in missing]}
-        agent = _make_agent(config)
+        agent = agent if agent is not None else _make_agent(config)
         problem = _check_agent(agent, sandbox)
         if problem:  # one clear error now, not one per run
             return {"status": "error",
@@ -152,7 +155,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     for path in paths:
         try:
             result, runs = _result(Skill.load(_folder(path)), config, llm, tasks, judge=judge,
-                                   agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx)
+                                   agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges)
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))
@@ -304,7 +307,7 @@ def _judge(ctx: Any, config: EvaluationConfig) -> Judge | None:
 
 def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None = None, *,
             judge: Judge | None = None, agent: Any = None, sandbox: Any = None,
-            run_dir: Path | None = None, ctx: Any = None) -> tuple[SkillResult, RunnerResult | None]:
+            run_dir: Path | None = None, ctx: Any = None, judges: Any = None) -> tuple[SkillResult, RunnerResult | None]:
     """The skill's result, and its task runs (None when no tasks ran). judge is the run's
     shared Judge, for the dimensions in JUDGED."""
     from . import safety
@@ -312,8 +315,12 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
     runs = None
     if tasks is not None:
         try:
+            from .tasks import SAFE_NAME
+            if (isinstance(skill.name, str) and SAFE_NAME.fullmatch(skill.name)
+                    and (run_dir / skill.name / "logs").exists()):
+                raise ValueError("Another skill in this report already uses this log directory")
             runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
-                             sandbox=sandbox)
+                             sandbox=sandbox, judges=judges)
         except ValueError as e:  # a skill name that cannot be a log folder: no run made
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
                                 errors=[clean(str(e), MAX_REASON_CHARS)])

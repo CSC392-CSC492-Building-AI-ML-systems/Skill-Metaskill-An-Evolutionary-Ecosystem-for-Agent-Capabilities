@@ -42,6 +42,41 @@ QualityAssessment is an evaluator-side helper, not a new serialized report field
 
 The standard evaluator skips Quality when no tasks are configured. With a task file it calls `score_runs` with the skill's runs, and copies the same assessment's lift into `SkillResult.lift` (`_lift` in evaluate's `__init__.py`). Both QualityAssessment and SkillResult represent unavailable lift as None.
 
+### Hermes smoke test
+
+Run `/metaskill quality-pilot` in Hermes. It makes six text-only completions
+(three with the bundled reference instructions and three without), using the
+active Hermes provider and model. It sends only the bundled synthetic task,
+inputs, and profile, with the reference instructions included only in the
+with-skill runs. The evaluator keeps expected answers local and judges the
+returned JSON deterministically. Provider failures or a change of provider
+or model during the comparison leave Quality and lift unscored.
+
+This requires Hermes plugin completion access and the runner's Docker setup.
+It measures text-only completion behaviour, not a Hermes session with tools.
+Reports use the normal evaluation report directory. To opt in from
+`evaluate` itself, run:
+
+```text
+/metaskill evaluate tests/fixtures/hermes-skills/email/himalaya --quality-pilot
+```
+
+Himalaya's pilot uses three draft scenarios: paginated envelope listing,
+a folder name containing spaces, and interpretation of a simulated
+authentication failure. It makes 18 text-only completions (three per scenario
+and condition). It does not execute Himalaya or access a mailbox. The Markdown
+report shows per-task pass counts and observed improvements or regressions;
+these comparisons do not change the provisional Quality formula. The flag uses
+fixed settings and only accepts the bundled Himalaya and ticket-summary
+reference fixtures. The ordinary command without the flag stays static.
+Arbitrary skills still need suitable tasks and a live agent adapter for
+tool-using evaluation.
+
+The pilot supplies a temporary task file, an explicit completion agent, and its
+deterministic judge through the shared evaluator. Agent input/output token counts
+and LLM calls are recorded on each TestResult. The report header's judge_usage
+records judging costs, including Clarity, separately from task-agent usage.
+
 ## Evidence validation
 
 A complete comparison requires each planned task to have exactly one record for every run index from 1 through runs_per_task, for both with_skill and baseline.

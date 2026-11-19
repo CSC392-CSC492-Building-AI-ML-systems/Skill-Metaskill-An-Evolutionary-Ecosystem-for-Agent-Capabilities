@@ -484,3 +484,15 @@ def test_table():
     assert lines[3] == "| - | partial | - | 0.50 | 0.50 | - | 0.50 | 0.50 | 0.50 |"
     assert "Notes:" in lines
     assert lines[-1].startswith("Recommendation: Use good")
+
+
+def test_quality_by_task_lists_incomplete_evidence_without_numeric_quality():
+    from types import SimpleNamespace
+
+    skill = result("partial", quality=None)
+    skill.tests = [
+        SimpleNamespace(task_id="half-run", variant="with_skill", passed=True),
+    ]
+    assert rank_module._quality_by_task(skill) == [
+        "half-run: incomplete comparison (with skill 1 run(s), baseline 0 run(s)).",
+    ]
