@@ -14,6 +14,7 @@ from metaskill.personalize import REPORT_FILE, SKILL_DIR, personalize_skill
 from metaskill.personalize.config import PersonalizeError, parse_schema, validate_config
 from metaskill.personalize.transform import substitute
 from skill_fixtures import secrets as fake_secrets
+from skill_fixtures import symlink
 
 FIXTURE = Path(__file__).parent / "fixtures" / "personalize" / "deploy-helper"
 FIELDS = {
@@ -288,6 +289,7 @@ def test_encoding_line_endings_and_other_files_are_preserved(tmp_path):
     ]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="NTFS does not keep the executable bit")
 def test_file_permissions_are_preserved(bundle, values, tmp_path):
     os.chmod(bundle / "generalized-skill" / "scripts" / "deploy.sh", 0o755)
     _, out = run(bundle, tmp_path, values)
@@ -297,8 +299,8 @@ def test_file_permissions_are_preserved(bundle, values, tmp_path):
 def test_symlinks_are_skipped_not_followed(bundle, values, tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("private")
-    os.symlink(outside, bundle / "generalized-skill" / "link.txt")
-    os.symlink(tmp_path, bundle / "generalized-skill" / "linkdir")
+    symlink(outside, bundle / "generalized-skill" / "link.txt")
+    symlink(tmp_path, bundle / "generalized-skill" / "linkdir")
     result, out = run(bundle, tmp_path, values)
     assert not (out / SKILL_DIR / "link.txt").exists()
     assert not (out / SKILL_DIR / "linkdir").exists()
@@ -334,6 +336,6 @@ def test_output_inside_the_input_is_rejected(bundle, values, tmp_path, inside):
 
 def test_a_symlinked_output_is_rejected(bundle, values, tmp_path):
     (tmp_path / "real").mkdir()
-    os.symlink(tmp_path / "real", tmp_path / "out")
+    symlink(tmp_path / "real", tmp_path / "out")
     result, _ = run(bundle, tmp_path, values)
     assert result["errors"] == ["output path: refusing to write through a symlink"]
