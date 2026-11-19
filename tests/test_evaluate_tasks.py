@@ -123,6 +123,25 @@ def test_run_logs_go_into_this_calls_report_folder(tmp_path, harness):
     assert len(logs) == 2 * RUNS * 2 and "t1-with_skill-r1.txt" in logs
 
 
+def readable(result):
+    return Path(next(p for p in result["artifacts"] if p.endswith(".md"))).read_text(encoding="utf-8")
+
+
+def test_the_markdown_report_shows_the_task_table_for_a_run_with_tasks(tmp_path, harness):
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks)
+    text = readable(result)
+    assert "### Task results" in text and "Logs: s/logs/ in this report's folder" in text
+    assert f"| t1 | with_skill | {RUNS}/{RUNS} (100%) | 110 | 2.0 | 1.0 | unchanged |" in text
+    assert f"| t2 | baseline | {RUNS}/{RUNS} (100%) | 440 | 6.0 | 4.0 | - |" in text
+    assert "could not be made" not in text.split("### Task results", 1)[1].split("### ", 2)[1]
+
+
+def test_the_markdown_report_has_no_task_section_without_tasks(tmp_path, harness):
+    assert "Task results" not in readable(evaluate_skill(make_skill(tmp_path, "s"),
+                                                         output_path=tmp_path / "out"))
+
+
 def test_rank_runs_every_skill_on_the_same_tasks(tmp_path, harness):
     result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
                          config_path=harness.config, output_path=tmp_path / "out",
@@ -402,3 +421,54 @@ def test_a_task_file_beside_the_skill_is_fine(tmp_path, harness):
     result = evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out",
                             tasks_path=harness.tasks)
     assert "artifacts" in result
+
+
+# --- The agent's limits (MET-49) ---------------------------------------------------------------
+
+
+def test_the_agent_limits_default_to_what_was_hard_coded():
+    config = EvaluationConfig()
+    assert (config.agent_max_iterations, config.agent_timeout) == (30, 600.0)
+    agent = evaluate._make_agent(config)
+    assert (agent.max_iterations, agent.timeout) == (30, 600.0)
+
+
+def test_the_agent_limits_round_trip_reach_the_agent_and_change_the_hash():
+    config = EvaluationConfig(agent_max_iterations=12, agent_timeout=90.5)
+    again = EvaluationConfig.from_dict(json.loads(json.dumps(config.to_dict())))
+    assert (again.agent_max_iterations, again.agent_timeout) == (12, 90.5)
+    assert again.hash() == config.hash()
+    agent = evaluate._make_agent(config)
+    assert (agent.max_iterations, agent.timeout) == (12, 90.5)
+    # Each changes what an agent can finish, so each changes the hash.
+    assert config.hash() != EvaluationConfig(agent_max_iterations=13, agent_timeout=90.5).hash()
+    assert config.hash() != EvaluationConfig(agent_max_iterations=12, agent_timeout=91).hash()
+    assert EvaluationConfig.from_dict({}).agent_max_iterations == 30
+
+
+def test_a_whole_number_of_seconds_is_the_same_limit_as_its_float():
+    assert EvaluationConfig(agent_timeout=600).hash() == EvaluationConfig().hash()
+    assert EvaluationConfig.from_dict({"agent_timeout": 90}).to_dict()["agent_timeout"] == 90.0
+
+
+@pytest.mark.parametrize("field, value", [
+    ("agent_max_iterations", 0), ("agent_max_iterations", -3), ("agent_max_iterations", True),
+    ("agent_max_iterations", 2.5), ("agent_max_iterations", "30"), ("agent_max_iterations", None),
+    ("agent_timeout", 0), ("agent_timeout", -1), ("agent_timeout", float("nan")),
+    ("agent_timeout", float("inf")), ("agent_timeout", True), ("agent_timeout", "600"),
+    ("agent_timeout", None),
+])
+def test_invalid_agent_limits_are_rejected(field, value):
+    with pytest.raises(ValueError, match=field):
+        EvaluationConfig(**{field: value})
+    with pytest.raises(ValueError, match=field):
+        EvaluationConfig.from_dict({field: value})
+
+
+def test_an_invalid_limit_in_the_config_file_is_an_error_before_anything_runs(tmp_path, harness):
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"agent_timeout": 0}))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=bad, output_path=tmp_path / "out",
+                            tasks_path=harness.tasks)
+    assert result["status"] == "error" and "not a valid evaluation config" in result["error"]
+    assert harness.agents == []

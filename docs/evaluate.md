@@ -53,6 +53,8 @@ Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their 
           [task_id]-[variant]-r[run].txt
   ```
 
+- `ranked-evaluation.md` has, for each skill whose tasks ran, a task table: each task's pass rate with and without the skill, the mean tokens, LLM calls and tool calls per variant, the reason for each failed run (cleaned and capped), a note of runs that could not be made, and the log folder above. A call without tasks has no such section ([evaluate/rank.md](evaluate/rank.md) 5).
+- The task agent's limits are settings, `agent_max_iterations` (model turns, default 30) and `agent_timeout` (seconds per session, default 600), in the config ([evaluate/models.md](evaluate/models.md)). They are part of the config hash, since a lower limit can turn a pass into a failure.
 - `[timestamp]` is simply the time the skill was invoked (written as YYYY-MM-DD-T(Hour)-Minute-Seconds).
 - Reports are kept. Nothing is deleted or overwritten automatically.
 - Every ranking is computed fresh. `rank` evaluates the skills it is given in one run and never reads earlier reports or reuses earlier results, so all skills in a ranking are scored under the same settings. Old reports are a record only.

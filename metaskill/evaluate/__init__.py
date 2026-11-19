@@ -279,7 +279,8 @@ def _make_agent(config: EvaluationConfig) -> Any:
     """The agent the task runs use: a Hermes session (hermes_agent.py); replaced in tests."""
     from .hermes_agent import HermesAgent
 
-    return HermesAgent(model=config.agent_model or None, provider=config.agent_provider or None)
+    return HermesAgent(model=config.agent_model or None, provider=config.agent_provider or None,
+                       max_iterations=config.agent_max_iterations, timeout=config.agent_timeout)
 
 
 def _task_files_in_skills(tasks_path: Path, tasks: list, skill_paths: list[str | Path]) -> str:
