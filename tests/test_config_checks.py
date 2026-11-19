@@ -47,3 +47,50 @@ def test_pilot_fixed_profile_setting_requires_matching_reviewed_instruction():
 def test_benign_example_does_not_match_the_reviewed_instruction():
     text = 'An example organization label is "Example Alpha".'
     assert check_configuration(skill_text=text, fixed_settings=[FIXED_ORGANIZATION]) == []
+
+
+def test_indirect_descriptions_are_left_unassessed():
+    for keyword in ("$ref", "allOf", "oneOf", "anyOf"):
+        definition = {"$ref": "#/$defs/label"} if keyword == "$ref" else {
+            keyword: [{"description": "Label"}],
+        }
+        assert check_configuration(schema={
+            "required": ["label"],
+            "properties": {"label": definition},
+            "$defs": {"label": {"description": "Label"}},
+        }) == []
+
+
+def test_required_name_without_local_definition_is_left_unassessed():
+    assert check_configuration(schema={
+        "required": ["label"], "properties": {},
+    }) == []
+
+
+def test_custom_schema_location():
+    [finding] = check_configuration(schema={
+        "required": ["label"], "properties": {"label": {}},
+    }, schema_location="settings/schema.json")
+    assert finding.location == "settings/schema.json#/properties/label"
+
+
+def test_markdown_bullets_and_numbered_instructions_match():
+    for prefix in ("- ", "* ", "+ ", "1. ", "2) "):
+        [finding] = check_configuration(
+            skill_text=prefix + FIXED_ORGANIZATION.line,
+            fixed_settings=[FIXED_ORGANIZATION],
+        )
+        assert finding.location == "SKILL.md:1"
+        assert "/organization" in finding.message
+
+
+def test_distinct_settings_on_same_line_have_distinct_messages():
+    findings = check_configuration(
+        skill_text="Use fixed settings.",
+        fixed_settings=[
+            FixedSettingEvidence("organization", "Use fixed settings."),
+            FixedSettingEvidence("region", "Use fixed settings."),
+        ],
+    )
+    assert len(findings) == 2
+    assert findings[0].message != findings[1].message
