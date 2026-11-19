@@ -67,6 +67,8 @@ Links are left out of the file list, as the runner leaves them out of the copy. 
 
 Which side a `failed` session falls on is decided by `hermes_child.failure_status` from Hermes' own reason, and only the reasons in `TASK_FAILURES` count against the skill; any other reason, including one added by a later Hermes, stays an environment error, so the run is not scored. `content_policy_blocked` is in the set because the skill's text can cause it and the baseline run gets the same prompt; it is a team decision and moving it is a one-line change. `loop_error` stays out: it is an exception inside Hermes' own loop, not evidence about the skill.
 
+**The pre-flight check.** `HermesAgent.check(workspace)` sets Hermes up and drives its terminal and file tools once each, with no model. Setup being accepted is not enough, because with Docker stopped or on a Hermes whose tools run in another folder every tool call fails and setup still succeeds. So `check_problems` reads each tool's answer: the file tool wrote `check.txt` into the workspace root, the terminal ran there and exited 0, the file tool read back what the terminal wrote, and every guard refused. Anything else raises `HermesAgentUnavailable` with a short reason for each failure (no tool output or stderr in the message). Checked on 0.21.5, 0.22.2 and 0.23.2 against a real container, and against a container that does not exist.
+
 A timeout stops the child's whole process group, so the `docker exec` processes it started stop too; commands inside the container stop with it when the runner removes it.
 
 ## 5. Tests

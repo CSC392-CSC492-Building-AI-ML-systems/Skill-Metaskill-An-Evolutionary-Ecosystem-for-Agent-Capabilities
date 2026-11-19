@@ -94,6 +94,12 @@ class HermesAgent:
             result = _read_result(result_path)
             if result.get("status") != "ok":
                 raise HermesAgentUnavailable(str(result.get("error")))
+            # Setup being accepted is not enough: with Docker stopped, or on a Hermes whose
+            # tools run in another folder, every tool call fails and setup still succeeds.
+            problems = check_problems(result.get("check"), workspace.root)
+            if problems:
+                raise HermesAgentUnavailable(
+                    "the Hermes tools did not work in the sandbox: " + "; ".join(problems))
             return result
 
     def _runtime_argv(self) -> list[str]:
@@ -141,6 +147,44 @@ def skill_message(skill: Skill, workspace: Workspace | None = None) -> str:
         parts.append(f"\nRead any of these with the file tools, or run scripts directly by "
                      f"absolute path (e.g. `{skill_dir}/scripts/foo.sh`).")
     return "\n".join(parts)
+
+
+def check_problems(check: Any, workdir: str) -> list[str]:
+    """What is wrong in the result of the child's check mode, one short reason each; an empty
+    list means the file tool wrote into `workdir`, the terminal ran there as exit 0, the file
+    tool read back what the terminal wrote, and every guard refused. Each tool's answer is
+    JSON; one that cannot be read counts as failed."""
+    if not isinstance(check, dict):
+        return ["no check result"]
+    problems = []
+
+    def answer(tool: str) -> dict[str, Any]:
+        try:
+            value = json.loads(check.get(tool))
+        except (TypeError, ValueError):
+            problems.append(f"{tool} gave no readable answer")
+            return {}
+        if not isinstance(value, dict):
+            problems.append(f"{tool} gave no readable answer")
+            return {}
+        if value.get("error"):
+            problems.append(f"{tool} reported an error")
+        return value
+
+    written = answer("write_file")
+    if written and written.get("resolved_path") != f"{workdir}/check.txt":
+        problems.append(f"write_file did not write into {workdir}")
+    ran = answer("terminal")
+    if ran and (ran.get("exit_code") != 0 or not str(ran.get("output")).startswith(f"{workdir}\n")):
+        problems.append(f"terminal did not run in {workdir} and exit 0")
+    read = answer("read_file")
+    if read and (read.get("not_found") or "from-terminal" not in str(read.get("content"))):
+        problems.append("read_file did not find what the terminal wrote")
+    guards = check.get("guards")
+    if (not isinstance(guards, dict) or not guards
+            or not all(isinstance(v, str) and v.startswith("refused") for v in guards.values())):
+        problems.append("a guard did not refuse")
+    return problems
 
 
 def _container(workspace: Workspace) -> tuple[str, str]:

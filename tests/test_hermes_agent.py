@@ -214,6 +214,60 @@ def test_the_two_reason_fields_are_both_read():
     assert hermes_child.failure_status(result) == "agent_error"
 
 
+# --- The pre-flight check ------------------------------------------------------------------
+
+GOOD_CHECK = {
+    "write_file": json.dumps({"bytes_written": 24, "resolved_path": "/work/check.txt"}),
+    "terminal": json.dumps({"output": "/work\nnobody\nwritten by the file tool", "exit_code": 0, "error": None}),
+    "read_file": json.dumps({"content": "1|from-terminal", "not_found": False}),
+    "guards": {"local backend": "refused: no", "docker backend": "refused: no"},
+}
+
+
+def broken(**changes):
+    return {**GOOD_CHECK, **changes}
+
+
+def test_a_working_check_has_no_problems():
+    assert hermes_agent.check_problems(GOOD_CHECK, "/work") == []
+
+
+@pytest.mark.parametrize("check, expected", [
+    # Docker stopped: every tool fails and Hermes' setup still succeeded.
+    (broken(terminal=json.dumps({"output": "", "exit_code": 126, "error": "failed to connect to the docker API"}),
+            write_file=json.dumps({"error": "failed to connect to the docker API"}),
+            read_file=json.dumps({"error": "failed to connect", "not_found": True})),
+     ["write_file reported an error", "terminal reported an error", "read_file reported an error"]),
+    # A Hermes whose tools work in another folder (/root, not /work).
+    (broken(write_file=json.dumps({"resolved_path": "/root/check.txt"})), ["write_file did not write into /work"]),
+    (broken(terminal=json.dumps({"output": "/root\nnobody", "exit_code": 0})), ["terminal did not run in /work"]),
+    (broken(terminal=json.dumps({"output": "/work\n", "exit_code": 1})), ["terminal did not run in /work"]),
+    (broken(read_file=json.dumps({"content": "", "not_found": True})), ["read_file did not find"]),
+    (broken(guards={"local backend": "created a local backend"}), ["a guard did not refuse"]),
+    (broken(guards={}), ["a guard did not refuse"]),
+    (broken(terminal="not json"), ["terminal gave no readable answer"]),
+    (broken(read_file=None), ["read_file gave no readable answer"]),
+    (broken(write_file="[1, 2]"), ["write_file gave no readable answer"]),
+    ("nothing", ["no check result"]),
+])
+def test_each_way_the_tools_can_fail_is_reported(check, expected):
+    problems = hermes_agent.check_problems(check, "/work")
+    assert len(problems) >= len(expected)
+    for reason in expected:
+        assert any(reason in p for p in problems), (reason, problems)
+
+
+def test_check_is_unavailable_when_the_tools_failed_even_though_setup_succeeded(tmp_path):
+    result = {"status": "ok", "check": broken(terminal=json.dumps({"output": "", "exit_code": 126}))}
+    with pytest.raises(HermesAgentUnavailable, match="tools did not work in the sandbox.*terminal did not run"):
+        fake_agent(tmp_path, writes(result)).check(docker_workspace())
+
+
+def test_check_returns_the_result_when_the_tools_worked(tmp_path):
+    result = {"status": "ok", "check": GOOD_CHECK, "hermes_version": "9.9"}
+    assert fake_agent(tmp_path, writes(result)).check(docker_workspace())["hermes_version"] == "9.9"
+
+
 def test_a_child_that_dies_without_a_result_is_unavailable(tmp_path):
     agent = fake_agent(tmp_path, "sys.stderr.write('ImportError: no module named run_agent')\nsys.exit(3)\n")
     with pytest.raises(HermesAgentUnavailable, match="exited 3.*run_agent"):
