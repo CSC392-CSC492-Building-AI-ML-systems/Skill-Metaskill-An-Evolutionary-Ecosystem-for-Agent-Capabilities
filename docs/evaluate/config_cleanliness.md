@@ -72,3 +72,35 @@ Cisco findings routed to Configuration Cleanliness remain report evidence.
 A confirmed Separation failure scores zero. The pinned reference scores one
 when its complete reviewed inputs match. Other incomplete cases remain null.
 Schema references and compositions remain unassessed by the description check.
+
+## MET-59 evidence discovery
+
+The normal evaluation entry point collects Configuration Cleanliness evidence for
+arbitrary skill bundles using the existing generalization inventory, detectors,
+and literal config placeholder pattern. Evidence uses the source config-evidence
+and records relative file names and line numbers. Detected values and credential
+contents are omitted from finding quotes and messages.
+
+Supported sources are Markdown, plain text, Python, shell, JavaScript, and
+TypeScript files accepted by the generalization inventory. Literal
+{{config.key}} references are recorded using the same syntax as personalization.
+Environment-variable references and embedded-value candidates use the existing
+generalization detectors. Configuration JSON, schema files, and other data files
+are excluded from embedded instruction checks, since supplied configuration is
+expected to contain concrete values.
+
+These observations have INFO severity and provide partial coverage. An embedded
+value is a candidate for review of required variability. It does not prove a
+Separation failure. References can occur in examples, dead code, or optional
+branches, and dynamic accesses can escape detection. The adapter therefore never
+declares semantic usage complete, never infers unused settings from missing
+references, and never independently awards a numeric score.
+
+Inventory limits and skipped files remain visible in the dimension detail.
+Reported observations are capped at 1,000 per skill. Existing reviewed pilot
+evidence and explicit complete inventories retain their MET-56 behavior.
+
+The generalization pipeline currently returns detection counts rather than a
+persistent reviewed decision artifact. MET-59 reuses its deterministic detectors
+directly. Consuming independently reviewed decisions with source bindings and
+establishing complete usage for additional patterns remain adapter extensions.

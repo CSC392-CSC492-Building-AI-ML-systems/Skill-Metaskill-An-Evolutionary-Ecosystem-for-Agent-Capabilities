@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterable
 
 from .config_checks import FixedSettingEvidence, check_configuration
+from .config_evidence import collect_configuration_evidence
 from .golden.config_evidence import configuration_evidence, reference_usage
 from .models import Dimension, DimensionScore, EvaluationConfig, Finding, Severity, Skill, Status
 
@@ -43,6 +44,8 @@ def score(
 ) -> DimensionScore:
     """Report available findings and apply the confirmed Separation gate."""
     schema, schema_detail = _schema(skill)
+    discovered = collect_configuration_evidence(skill)
+    schema_detail += " " + discovered.detail
     pilot_fixed, unused = configuration_evidence(skill)
     fixed_settings = (*fixed_settings, *pilot_fixed)
     reviewed_usage = reference_usage(skill)
@@ -57,6 +60,7 @@ def score(
         schema=schema, skill_text=skill.body, fixed_settings=fixed_settings,
         consumed_settings=consumed_settings, usage_complete=usage_complete,
     )
+    findings.extend(discovered.findings)
     properties = schema.get("properties", {}) if schema is not None else {}
     for name in unused:
         if name in properties:
@@ -82,13 +86,14 @@ def score(
             detail=schema_detail,
             findings=findings,
         )
-    if schema is not None and reviewed_usage is not None and not findings:
+    if schema is not None and reviewed_usage is not None and not any(f.source == "config-checks" for f in findings):
         return DimensionScore(
             dimension=Dimension.CONFIG_CLEANLINESS,
             value=1.0,
             status=Status.OK,
             reason="All four Configuration Cleanliness properties pass for the reviewed reference.",
             detail="The required organization is documented, consumed, and supplied through configuration.",
+            findings=findings,
         )
     return DimensionScore(
         dimension=Dimension.CONFIG_CLEANLINESS,
