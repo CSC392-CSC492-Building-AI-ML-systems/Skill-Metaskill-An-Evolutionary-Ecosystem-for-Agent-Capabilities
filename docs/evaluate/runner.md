@@ -68,7 +68,7 @@ class AgentRun:
     input_tokens: int = 0          # also output_tokens, reasoning_tokens, cache_read_tokens,
     llm_calls: int = 0             # cache_write_tokens: see the class docstring
     tool_calls: int | None = 0     # None: the agent could not measure them
-    transcript: str = ""           # the full session, for the log
+    transcript: str = ""           # the full session, for the log and robustness (with_skill)
     seconds: float | None = None   # the session's own time; None: the runner's clock
 ```
 
@@ -110,10 +110,11 @@ Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run]
 | Field | Description |
 |---|---|
 | `tests` | One `TestResult` per task, variant and run that could be judged, in run order. This is the per-skill `tests` list of the report (evaluate.md 2.1) |
-| `task_ids` | The planned tasks' `task_id`s, in order, whether or not any of their runs is in `tests`. A scorer needs them to count a task that never ran (Quality's `assess` does), rather than infer the plan from the runs that happened |
+| `task_ids` | The planned tasks' `task_id`s, in order, whether or not any of their runs is in `tests`. A scorer needs them to count a task that never ran (Quality's `assess` does), rather than infer the plan from the runs that happened; Robustness uses them the same way ([evaluate-robustness.md](../evaluate-robustness.md) 3) |
 | `errors` | `"[task_id] [variant] r[run]: [error]"` for every run left out of `tests` |
 | `judge_model` | `"provider/model"` of every LLM judge reply, for `ReportMeta.judge_model`; empty if no LLM check ran |
 | `judge_usage` | Tokens the LLM judge used (`TokenUsage`) |
+| `transcripts` | `(task_id, run)` to the agent's transcript, for `with_skill` runs in `tests` whose agent gave one; robustness's method term. In memory only: never written to the report |
 
 The runner writes only the logs. Writing `ranked-evaluation.json` and `.md` and computing scores belong to the scoring modules, `rank.py` and `__init__.py`.
 

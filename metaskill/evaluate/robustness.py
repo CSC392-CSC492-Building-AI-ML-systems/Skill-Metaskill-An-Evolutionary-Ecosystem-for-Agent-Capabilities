@@ -18,10 +18,12 @@ failure are different results however alike their text or call counts, so such a
 agrees on nothing but its score term, which keeps scoring.md's binary examples exact.
 
 A task's value is the unweighted mean of the four, each averaged over its run pairs, and
-Robustness is the mean over tasks. `score_from_runs` holds the method. `score` is the
-dimension entry point the evaluator's SCORERS dispatch calls; the runner is not wired into
-`evaluate` yet (evaluate.md 3.2), so in the live pipeline it reports `skipped`, as
-efficiency does.
+Robustness is the mean over tasks. `score_from_runs` holds the method. `score_from_runner`
+scores a runner.RunnerResult as it is: the planned tasks and runs per task, so a lost run
+is an error rather than a smaller denominator, and the with-skill transcripts for the
+method term. `score` is the dimension entry point the evaluator's SCORERS dispatch calls;
+given `runner=` it scores that, and without it, as in `evaluate` today, which does not run
+tasks yet (evaluate.md 3.2), it reports `skipped`, as efficiency does.
 """
 
 from __future__ import annotations
@@ -32,10 +34,13 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import combinations
 from statistics import mean
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .models import (
     Dimension, DimensionScore, EvaluationConfig, Metrics, Skill, Status, TestResult, Variant)
+
+if TYPE_CHECKING:  # runner imports the judge and the sandbox; scoring needs neither
+    from .runner import RunnerResult
 
 # The runner appends " (full log: <skill>/logs/<task>-<variant>-r<run>.txt)" to every
 # output (runner.md 2.4). The path differs on every run, so it is removed before comparing.
@@ -70,23 +75,39 @@ class TaskConsistency:
         return (self.outcome + self.score + self.output + self.method) / 4
 
 
-def score(skill: Skill, config: EvaluationConfig, llm: Any = None) -> DimensionScore:
-    """Dimension entry point. The runner is not wired into evaluate yet, so there are no
-    task runs to score here; this reports skipped until that integration lands. The real
-    scoring is `score_from_runs`, which it will call."""
-    return _unscored(Status.SKIPPED,
-                     "robustness needs repeated task runs; the runner is not wired into "
-                     "evaluate yet (evaluate.md 3.2)")
+def score(skill: Skill, config: EvaluationConfig, llm: Any = None, *,
+          runner: RunnerResult | None = None) -> DimensionScore:
+    """Dimension entry point. `runner` is the skill's RunnerResult; the skill is not
+    re-read. `evaluate` does not run tasks yet, so it passes none, and this reports
+    skipped until it does."""
+    if runner is None:
+        return _unscored(Status.SKIPPED,
+                         "robustness needs repeated task runs; evaluate does not run "
+                         "tasks yet (evaluate.md 3.2)")
+    return score_from_runner(runner, config)
+
+
+def score_from_runner(result: RunnerResult, config: EvaluationConfig) -> DimensionScore:
+    """Robustness of one skill's RunnerResult, with the evidence rules applied in full:
+    every planned task must have config.runs_per_task with-skill runs, and the transcripts
+    the runner kept decide the method term where every run of a task has one."""
+    return score_from_runs(result.tests, runs_per_task=config.runs_per_task,
+                           task_ids=result.task_ids or None,
+                           transcripts=result.transcripts)
 
 
 def score_from_runs(results: Iterable[TestResult], *, runs_per_task: int | None = None,
+                    task_ids: Iterable[str] | None = None,
                     transcripts: Transcripts | None = None) -> DimensionScore:
     """Robustness in [0, 1] from the runner's results (docs/evaluate-robustness.md 2-4).
 
     Only with-skill runs are scored; baseline runs, if given, are reported as context.
     runs_per_task, when given (config.runs_per_task), is the number of runs every task
     must have: a task with fewer lost runs, and scoring it anyway would hide that.
-    transcripts maps (task_id, run) to that run's transcript, for the method agreement.
+    task_ids, when given, are the planned tasks: one with no with-skill run at all lost
+    them all, and must not quietly leave the mean, and a run of an unplanned task is not
+    this evaluation's. transcripts maps (task_id, run) to that run's transcript, for the
+    method agreement.
     """
     records = list(results)
     with_skill = [r for r in records if r.variant == Variant.WITH_SKILL]
@@ -97,6 +118,15 @@ def score_from_runs(results: Iterable[TestResult], *, runs_per_task: int | None 
     by_task, problem = _group(with_skill)
     if problem:
         return _unscored(Status.ERROR, problem)
+    if task_ids is not None:
+        planned = set(task_ids)
+        if unplanned := sorted(set(by_task) - planned):
+            return _unscored(Status.ERROR,
+                             f"with-skill runs of unplanned task(s): {', '.join(unplanned)}")
+        if lost := sorted(planned - set(by_task)):
+            return _unscored(Status.ERROR,
+                             f"incomplete run matrix: no with-skill runs of planned "
+                             f"task(s) {', '.join(lost)}")
     counts = {len(runs) for runs in by_task.values()}
     if runs_per_task is not None and counts != {runs_per_task}:
         return _unscored(Status.ERROR,

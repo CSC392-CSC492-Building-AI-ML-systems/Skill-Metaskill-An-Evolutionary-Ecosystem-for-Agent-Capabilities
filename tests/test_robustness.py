@@ -7,7 +7,9 @@ import pytest
 
 from metaskill.evaluate.models import (
     Dimension, EvaluationConfig, JudgeType, Metrics, Skill, Status, TestResult, Variant)
-from metaskill.evaluate.robustness import score, score_from_runs, task_consistency
+from metaskill.evaluate.robustness import (
+    score, score_from_runner, score_from_runs, task_consistency)
+from metaskill.evaluate.runner import RunnerResult
 
 CODE = "def total(xs):\n    return sum(xs)\n"
 OTHER_CODE = "import functools\n\ntotal = lambda xs: functools.reduce(int.__add__, xs, 0)\n"
@@ -173,13 +175,48 @@ def test_incomplete_or_inconsistent_evidence_is_an_error_not_a_score(runs, kwarg
     assert result.value is None and result.status is Status.ERROR
 
 
+def test_a_planned_task_with_no_runs_is_an_error_not_a_smaller_mean():
+    runs = [run(1), run(2)]  # task "b" was planned but lost every run
+    assert score_from_runs(runs, runs_per_task=2).status is Status.OK  # undetectable without
+    result = score_from_runs(runs, runs_per_task=2, task_ids=["a", "b"])
+    assert result.value is None and result.status is Status.ERROR
+    assert "planned task(s) b" in result.detail
+
+
+def test_runs_of_an_unplanned_task_are_an_error():
+    result = score_from_runs([run(1), run(2), run(1, task="x"), run(2, task="x")],
+                             task_ids=["a"])
+    assert result.value is None and result.status is Status.ERROR
+    assert "unplanned task(s): x" in result.detail
+
+
+def test_planned_tasks_that_all_ran_score_as_usual():
+    runs = [run(1), run(2), run(1, task="b"), run(2, task="b")]
+    assert value(*runs, task_ids=["b", "a"], runs_per_task=2) == value(*runs)
+
+
 def test_scoring_is_reproducible_over_identical_evidence():
     runs = [run(1), run(2, output=OTHER_CODE, tools=7), run(3, passed=False, reason="r")]
     assert score_from_runs(runs) == score_from_runs(list(runs))
 
 
-def test_entry_point_is_skipped_until_the_runner_is_wired_in(tmp_path):
+def test_entry_point_without_runner_results_is_skipped(tmp_path):
+    # evaluate does not run tasks yet, so it calls score() without a RunnerResult.
     skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
     result = score(skill, EvaluationConfig())
     assert result.value is None and result.status is Status.SKIPPED
     assert "task runs" in result.detail
+
+
+def test_entry_point_scores_a_runner_result_with_its_plan_and_transcripts(tmp_path):
+    skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
+    apart = {("a", 1): "read input.csv\nwrite out.csv",
+             ("a", 2): "curl http://example.test\npip install pandas\nwrite out.csv"}
+    result = RunnerResult(tests=[run(1), run(2)], task_ids=["a"], transcripts=apart)
+    scored = score(skill, EvaluationConfig(runs_per_task=2), runner=result)
+    assert scored.status is Status.OK and scored.value < 1.0  # the transcripts differ
+    assert "from transcripts" in scored.detail
+    assert score_from_runner(result, EvaluationConfig(runs_per_task=2)) == scored
+    # The config's runs_per_task is enforced: three runs were planned, two were made.
+    missing = score_from_runner(result, EvaluationConfig(runs_per_task=3))
+    assert missing.status is Status.ERROR and "incomplete run matrix" in missing.detail

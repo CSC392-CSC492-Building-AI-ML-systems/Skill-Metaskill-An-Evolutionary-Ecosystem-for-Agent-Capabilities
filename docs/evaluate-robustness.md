@@ -28,8 +28,9 @@ different result. Two empty texts are identical. At most 2,000 lines of each are
 
 - **Output** is `TestResult.output`, without the ` (full log: …)` suffix the runner adds:
   that path names the run, so it differs every time.
-- **Method** compares the two runs' transcripts when the caller passes them (the runner
-  keeps transcripts only in the run logs). Otherwise it is the mean over `tool_calls` and
+- **Method** compares the two runs' transcripts when every with-skill run of the task has
+  one. The runner returns them in `RunnerResult.transcripts` when the agent gives them
+  (kept in memory, never written to the report). Otherwise it is the mean over `tool_calls` and
   `llm_calls` of `(min + 1) / (max + 1)`, the same smoothing efficiency uses; a count not
   measured (`None`) is left out. Token counts are not used: they measure volume, which the
   output comparison already covers.
@@ -75,29 +76,44 @@ was used in `detail`.
   different numbers of with-skill runs, fewer than `runs_per_task` when the caller gives
   it, or two results claim the same task and run, Robustness is `error` with no score:
   a lost run must not quietly leave the denominator.
+- **Every planned task** must be there when the caller gives the planned task ids, as
+  the runner does. A task that lost every with-skill run (for example, its LLM judge was
+  unavailable) is `error`, not a task left out of the mean; a run of a task that was not
+  planned is `error` too.
 - No with-skill runs at all is `skipped`.
 
 ## 4. Implementation
 
 - [`metaskill/evaluate/robustness.py`](../metaskill/evaluate/robustness.py) — pure logic
   over runner results, no agent run and no model call.
-  - `score_from_runs(results, *, runs_per_task=None, transcripts=None)` holds §1–§3.
-    `transcripts` maps `(task_id, run)` to that run's transcript.
+  - `score_from_runs(results, *, runs_per_task=None, task_ids=None, transcripts=None)`
+    holds §1–§3. `task_ids` are the planned tasks; `transcripts` maps `(task_id, run)` to
+    that run's transcript.
+  - `score_from_runner(result, config)` scores a
+    [`RunnerResult`](evaluate/runner.md#25-what-it-returns) as it is: its `tests`, its
+    planned `task_ids`, its with-skill `transcripts`, and `config.runs_per_task`, so every
+    rule in §3 applies.
   - `task_consistency(runs, transcripts=None)` returns one task's four terms
     (`TaskConsistency`), for tests and diagnostics.
-  - `score(skill, config, llm=...)` is the dimension entry point. The runner is **not yet
-    wired into `evaluate`**, so in the live pipeline it returns `skipped`, as efficiency
-    does.
-- Tests: [`tests/test_robustness.py`](../tests/test_robustness.py), on recorded results
-  only.
+  - `score(skill, config, llm=..., runner=None)` is the dimension entry point. Given the
+    skill's `RunnerResult` it calls `score_from_runner`. `evaluate` does **not run tasks
+    yet**, so it passes none, and in the live pipeline Robustness is `skipped`, as
+    efficiency is.
+- Runner: [`metaskill/evaluate/runner.py`](../metaskill/evaluate/runner.py) records
+  `RunnerResult.task_ids` and, for with-skill runs whose agent gave one,
+  `RunnerResult.transcripts`.
+- Tests: [`tests/test_robustness.py`](../tests/test_robustness.py) on recorded results,
+  and [`tests/test_runner.py`](../tests/test_runner.py) from a fake agent's runs through
+  `score_from_runner`.
 
 ## 5. Open questions
 
 1. **Weights.** The four terms are equal. Outcome and score overlap for binary scores
    (scoring.md); output and method overlap when the output is the work itself.
 2. **Method without transcripts.** Call counts are a weak proxy: the same counts can hide
-   different tools. Whether the runner should pass transcripts, or a list of tool names
-   per run, is open.
+   different tools. The runner now passes transcripts when the agent gives them, but the
+   Hermes usage file has none (`agent_run_from_hermes_usage`), so a real run falls back to
+   call counts until the agent records its session or a list of tool names per run.
 3. **Long outputs.** A line diff of a long reply is slower and noisier than of a short
    one. Whether to compare only the files the run produced, or a normalised form of the
    output, is untested.

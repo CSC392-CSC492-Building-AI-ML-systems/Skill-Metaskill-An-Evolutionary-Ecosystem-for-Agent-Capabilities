@@ -3,7 +3,8 @@
 The only module that executes the agent. For every task, variant (`with_skill`,
 `baseline`) and run 1..n it gives the agent a fresh sandboxed workspace with the task's
 fixtures, judges the result with judge.py, writes the full log to the report folder and
-records a TestResult. Quality, robustness and efficiency are computed from those results.
+records a TestResult. Quality, robustness and efficiency are computed from those results;
+robustness.score_from_runner takes a RunnerResult as it is.
 
 How an agent session is started is behind `Agent`, so tests use a fake one and no
 Hermes internals are imported here. Everything the agent runs, and the command of every
@@ -62,7 +63,9 @@ class AgentRun:
     cache_write_tokens: int = 0
     llm_calls: int = 0  # model round-trips the session made
     tool_calls: int | None = 0  # None when the agent could not measure its tool calls
-    transcript: str = ""  # the full session for the log, if the agent provides one
+    # The full session, if the agent provides one: written to the log, and for with_skill
+    # runs handed to robustness for its method agreement (RunnerResult.transcripts).
+    transcript: str = ""
     # The session's own time, when the agent measured it. The runner's clock also counts the
     # agent's start-up (Hermes takes a second or two); this leaves that out. None: the runner's.
     seconds: float | None = None
@@ -121,6 +124,10 @@ class RunnerResult:
     errors: list[str] = field(default_factory=list)
     judge_model: str = ""  # for ReportMeta.judge_model; empty if no LLM check ran
     judge_usage: TokenUsage = field(default_factory=TokenUsage)
+    # (task_id, run) -> the agent's transcript, for with_skill runs in `tests` whose agent
+    # gave one (robustness's method agreement). Kept in memory only: like the logs, never
+    # written to the report, since a transcript can hold anything the session read.
+    transcripts: dict[tuple[str, int], str] = field(default_factory=dict)
 
 
 def timestamp(now: datetime | None = None) -> str:
@@ -173,8 +180,11 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
                     result.errors.append(clean(f"{label}: {unavailable}", MAX_REASON_CHARS))
                     continue
                 try:
-                    result.tests.append(
-                        _run_once(skill, task, variant, n, agent, pool, config, run_dir))
+                    test, transcript = _run_once(
+                        skill, task, variant, n, agent, pool, config, run_dir)
+                    result.tests.append(test)
+                    if transcript and variant is Variant.WITH_SKILL:
+                        result.transcripts[(task.task_id, n)] = transcript
                 # JudgeError also covers a workspace that could not be made, or Docker
                 # failing. OSError: writing the log failed. Either costs this run, not
                 # the runs already made.
@@ -189,8 +199,10 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
 
 
 def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
-              pool: _Judges, config: EvaluationConfig, run_dir: Path) -> TestResult:
-    """One session in a fresh workspace, judged against every check of the task."""
+              pool: _Judges, config: EvaluationConfig,
+              run_dir: Path) -> tuple[TestResult, str]:
+    """One session in a fresh workspace, judged against every check of the task. Returns
+    the result and the agent's transcript ("" if it gave none)."""
     workspace = pool.sandbox.open(task.fixtures)
     left_out: list[str] = []
     run, failure = AgentRun(output=""), ""
@@ -228,7 +240,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         llm_calls=run.llm_calls, tool_calls=run.tool_calls,
         seconds=round(_own_seconds(run) if _own_seconds(run) is not None else seconds, 3))
     _write_log(run_dir / log, task, variant, n, run, metrics, verdict, left_out)
-    return TestResult(
+    test = TestResult(
         task_id=task.task_id,
         description=task.description,
         variant=variant,
@@ -242,6 +254,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         output=_truncate(run.output, config.output_max_chars, log),
         evidence=verdict.evidence,
     )
+    return test, run.transcript
 
 
 def _own_seconds(run: AgentRun) -> float | None:
