@@ -104,3 +104,23 @@ The generalization pipeline currently returns detection counts rather than a
 persistent reviewed decision artifact. MET-59 reuses its deterministic detectors
 directly. Consuming independently reviewed decisions with source bindings and
 establishing complete usage for additional patterns remain adapter extensions.
+
+### Processing bounds and detector coverage
+
+MET-59 now bounds work before calling the eager generalization detector. A
+supported source over 64 KiB is skipped in full, and at most 256 KiB of supported
+source text is passed to placeholder and detector analysis per skill. The detail
+reports the number of files skipped by these limits. Inventory discovery retains
+its existing bounded read limits; the 1,000-observation cap additionally bounds
+the report. Skipped analysis always leaves usage coverage partial.
+
+The embedded-value-needs-review rule forwards REPLACE and REVIEW candidates
+actually emitted by generalization's deterministic detectors. These cover
+recognized credential patterns and secret assignments, repository identifiers,
+email addresses, phone numbers, machine-specific paths, organization hosts, and
+configuration-like assignments. The detectors retain their existing context,
+example-value, public-value, and confidence filters. A value appearing in prose
+or resembling a provider region or credential does not guarantee a finding.
+Environment references classified KEEP are reported separately as references.
+This adapter adds no independent PII classifier, and absence of candidates
+provides no clean Separation verdict.

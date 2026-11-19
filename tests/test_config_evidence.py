@@ -19,8 +19,7 @@ def skill_at(tmp_path, body, files=None):
 def test_template_references_use_existing_generalizer_syntax(tmp_path):
     skill = skill_at(tmp_path, "Use {{config.organization}}.")
     evidence = collect_configuration_evidence(skill)
-    assert "organization" in evidence.referenced_settings
-    assert not evidence.usage_complete
+    assert "partial" in evidence.detail
     [finding] = evidence.findings
     assert finding.rule == "template-setting-reference"
     assert finding.location == "SKILL.md:1"
@@ -37,7 +36,7 @@ def test_real_google_workspace_environment_reference():
         and f.location.startswith("scripts/google_api.py:")
         for f in evidence.findings
     )
-    assert not evidence.usage_complete
+    assert "partial" in evidence.detail
 
 
 def test_embedded_values_are_candidates_and_do_not_force_zero(tmp_path):
@@ -73,8 +72,8 @@ def test_existing_personalize_template_collects_references():
     evidence = collect_configuration_evidence(Skill(
         path=folder, name=folder.name, body=(folder / "SKILL.md").read_text(encoding="utf-8"),
     ))
-    assert {"workdir", "build_host", "contact_email"} <= evidence.referenced_settings
-    assert not evidence.usage_complete
+    assert sum(f.rule == "template-setting-reference" for f in evidence.findings) >= 3
+    assert "partial" in evidence.detail
 
 
 def test_skipped_sources_are_visible(tmp_path):
@@ -85,7 +84,7 @@ def test_skipped_sources_are_visible(tmp_path):
 def test_invalid_inventory_is_reported_without_values(tmp_path):
     skill = Skill(path=tmp_path / "missing", name="missing", body="")
     evidence = collect_configuration_evidence(skill)
-    assert not evidence.findings and not evidence.usage_complete
+    assert not evidence.findings
     assert "unavailable" in evidence.detail
 
 
@@ -117,5 +116,49 @@ def test_evidence_cap_preserves_partial_coverage(tmp_path, monkeypatch):
         tmp_path, "{{config.first}} {{config.second}}",
     ))
     assert len(evidence.findings) == 1
-    assert not evidence.usage_complete
+    assert "partial" in evidence.detail
     assert "Evidence limit reached" in evidence.detail
+
+
+def test_megabyte_environment_flood_is_skipped_before_detection(tmp_path, monkeypatch):
+    import metaskill.evaluate.config_evidence as adapter
+
+    seen = []
+    original = adapter.detect_file
+
+    def detect_bounded(source):
+        seen.append(source.path)
+        assert source.path != "flood.py"
+        return original(source)
+
+    monkeypatch.setattr(adapter, "detect_file", detect_bounded)
+    skill = skill_at(tmp_path, "# Skill", {
+        "flood.py": '$A_B ' * (1024 * 1024 // 5),
+    })
+    evidence = collect_configuration_evidence(skill)
+    assert "SKILL.md" in seen
+    assert "1 file(s) skipped by evidence processing limits" in evidence.detail
+    assert not evidence.findings
+
+
+def test_total_input_budget_is_enforced_before_detection(tmp_path, monkeypatch):
+    import metaskill.evaluate.config_evidence as adapter
+
+    monkeypatch.setattr(adapter, "MAX_ANALYSIS_FILE_BYTES", 32)
+    monkeypatch.setattr(adapter, "MAX_ANALYSIS_TOTAL_BYTES", 64)
+    seen = []
+
+    def detect_bounded(source):
+        seen.append(len(source.text.encode("utf-8")))
+        return []
+
+    monkeypatch.setattr(adapter, "detect_file", detect_bounded)
+    skill = skill_at(tmp_path, "# Skill", {
+        "a.py": "a" * 24,
+        "b.py": "b" * 24,
+        "c.py": "c" * 24,
+    })
+    evidence = collect_configuration_evidence(skill)
+    assert sum(seen) <= 64 and all(size <= 32 for size in seen)
+    assert "1 file(s) skipped by evidence processing limits" in evidence.detail
+    assert "Usage is partial" in evidence.detail

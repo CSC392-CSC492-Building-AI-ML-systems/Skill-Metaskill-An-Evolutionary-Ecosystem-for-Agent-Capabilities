@@ -13,6 +13,10 @@ from ..generalize.inventory import InventoryError, load_inventory
 from .models import Dimension, Finding, Severity, Skill
 
 MAX_EVIDENCE = 1000
+# The generalization detector is eager and can be quadratic within a file.
+# Bound its inputs before calling it, independently of the output-count cap.
+MAX_ANALYSIS_FILE_BYTES = 64 * 1024
+MAX_ANALYSIS_TOTAL_BYTES = 256 * 1024
 # Configuration data and example values are inputs, rather than evidence of
 # hardcoding in the executable instructions.
 INSTRUCTION_SUFFIXES = frozenset({".md", ".txt", ".py", ".sh", ".js", ".ts"})
@@ -22,8 +26,6 @@ REFERENCE_SOURCE = "config-evidence"
 @dataclass
 class ConfigurationEvidence:
     findings: list[Finding] = field(default_factory=list)
-    referenced_settings: frozenset[str] = frozenset()
-    usage_complete: bool = False
     detail: str = ""
 
 
@@ -39,15 +41,23 @@ def collect_configuration_evidence(skill: Skill) -> ConfigurationEvidence:
         return ConfigurationEvidence(detail="Configuration evidence inventory unavailable.")
 
     findings = []
-    referenced = set()
+    limited = []
+    remaining = MAX_ANALYSIS_TOTAL_BYTES
     for source in inventory.files:
         if Path(source.path).suffix.lower() not in INSTRUCTION_SUFFIXES:
             continue
+        size = len(source.text.encode("utf-8"))
+        if size > MAX_ANALYSIS_FILE_BYTES:
+            limited.append(source.path)
+            continue
+        if size > remaining:
+            limited.append(source.path)
+            continue
+        remaining -= size
         line, cursor = 1, 0
         for match in PLACEHOLDER_PATTERN.finditer(source.text):
             line += source.text.count("\n", cursor, match.start())
             cursor = match.start()
-            referenced.add(match.group(1))
             findings.append(Finding(
                 dimension=Dimension.CONFIG_CLEANLINESS,
                 category="configuration-reference",
@@ -59,17 +69,13 @@ def collect_configuration_evidence(skill: Skill) -> ConfigurationEvidence:
                 message="Metaskill configuration placeholder occurs here.",
             ))
             if len(findings) >= MAX_EVIDENCE:
-                return _result(findings, referenced, len(inventory.skipped), capped=True)
+                return _result(findings, len(inventory.skipped), limited, capped=True)
 
         for detected in detect_file(source):
             if detected.category is Category.ENVIRONMENT_VARIABLE:
                 rule = "environment-setting-reference"
                 category = "configuration-reference"
                 message = "Generalization detected an external environment setting reference."
-                # Never echo detected values, including environment names. Only use
-                # syntactically valid names internally for reference coverage.
-                if detected.name and detected.name.isidentifier():
-                    referenced.add(detected.name)
             elif detected.action in (Action.REPLACE, Action.REVIEW):
                 rule = "embedded-value-needs-review"
                 category = "separation-review"
@@ -90,17 +96,23 @@ def collect_configuration_evidence(skill: Skill) -> ConfigurationEvidence:
                 message=message,
             ))
             if len(findings) >= MAX_EVIDENCE:
-                return _result(findings, referenced, len(inventory.skipped), capped=True)
+                return _result(findings, len(inventory.skipped), limited, capped=True)
 
-    return _result(findings, referenced, len(inventory.skipped))
+    return _result(findings, len(inventory.skipped), limited)
 
 
-def _result(findings, referenced, skipped, *, capped=False) -> ConfigurationEvidence:
+def _result(findings, skipped, limited, *, capped=False) -> ConfigurationEvidence:
     detail = (
         f"Configuration evidence from the generalization inventory and detectors: "
         f"{len(findings)} reference(s) or review candidate(s); {skipped} skipped file(s). "
         "Usage is partial; references do not establish complete consumption or required variability."
     )
+    if limited:
+        detail += (
+            f" {len(limited)} file(s) skipped by evidence processing limits "
+            f"({MAX_ANALYSIS_FILE_BYTES} bytes per file, "
+            f"{MAX_ANALYSIS_TOTAL_BYTES} bytes total)."
+        )
     if capped:
         detail += " Evidence limit reached."
-    return ConfigurationEvidence(findings, frozenset(referenced), False, detail)
+    return ConfigurationEvidence(findings, detail)
