@@ -407,3 +407,34 @@ def test_task_dimensions_are_skipped_without_a_task_file_even_when_built(tmp_pat
     status = report(evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")
                     ).skills[0].dimensions[Dimension.QUALITY]
     assert status.status is Status.SKIPPED and "no tasks were given" in status.detail
+
+
+# --- The task file is not part of a skill ------------------------------------------------
+
+
+def test_a_task_file_inside_the_skill_is_refused_before_any_run(tmp_path, harness):
+    skill = make_skill(tmp_path, "s")
+    inside = skill / "tasks.json"
+    inside.write_text(harness.tasks.read_text())
+    (skill / "data.csv").write_text("a,b\n1,2\n")
+    result = evaluate_skill(skill, output_path=tmp_path / "out", tasks_path=inside)
+    assert result["status"] == "error" and "outside every evaluated skill" in result["error"]
+    assert harness.agents == [] and harness.sandbox.opened == []
+
+
+def test_a_task_file_inside_any_ranked_skill_is_refused(tmp_path, harness):
+    clean_skill, other = make_skill(tmp_path, "a"), make_skill(tmp_path, "b")
+    inside = other / "evals" / "tasks.json"
+    inside.parent.mkdir()
+    inside.write_text(harness.tasks.read_text())
+    (inside.parent / "data.csv").write_text("a,b\n1,2\n")
+    result = rank_skills([clean_skill, other / "SKILL.md"], output_path=tmp_path / "out",
+                         tasks_path=inside)
+    assert result["status"] == "error" and "outside every evaluated skill" in result["error"]
+    assert harness.agents == [] and harness.sandbox.opened == []
+
+
+def test_a_task_file_beside_the_skill_is_fine(tmp_path, harness):
+    result = evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out",
+                            tasks_path=harness.tasks)
+    assert "artifacts" in result

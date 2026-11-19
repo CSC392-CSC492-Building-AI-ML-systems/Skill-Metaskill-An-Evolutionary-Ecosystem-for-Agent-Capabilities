@@ -124,6 +124,12 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
         except TaskError as e:  # names the file and the task: the user's own, not a skill's
             return {"status": "error",
                     "error": clean(f"tasks_path is not a usable task file: {e}", MAX_REASON_CHARS)}
+        inside = _task_files_in_skills(config.tasks_path, tasks, paths)
+        if inside:  # the with-skill agent would read the checks and expected answers
+            return {"status": "error",
+                    "error": clean(f"the task file must be outside every evaluated skill: "
+                                   f"{inside} is inside one, so the skill's copy in the sandbox "
+                                   f"would hold the answers; nothing was run", MAX_REASON_CHARS)}
         from . import dependencies
 
         sandbox = _make_sandbox(config)
@@ -282,6 +288,21 @@ def _make_agent(config: EvaluationConfig) -> Any:
     from .hermes_agent import HermesAgent
 
     return HermesAgent(model=config.agent_model or None, provider=config.agent_provider or None)
+
+
+def _task_files_in_skills(tasks_path: Path, tasks: list, skill_paths: list[str | Path]) -> str:
+    """The first task file or fixture that lies inside one of the skills' folders, or "".
+    The runner copies a skill's folder into the sandbox, so a task file there would hand the
+    with-skill agent the checks and the expected answers, and the baseline would not have them."""
+    try:
+        folders = [_folder(p).resolve() for p in skill_paths]
+        files = [tasks_path.resolve()] + [f.resolve() for t in tasks for f in t.fixtures]
+    except (OSError, RuntimeError):
+        return ""
+    for f in files:
+        if any(f == d or d in f.parents for d in folders):
+            return f.name
+    return ""
 
 
 def _folder(path: str | Path) -> Path:
