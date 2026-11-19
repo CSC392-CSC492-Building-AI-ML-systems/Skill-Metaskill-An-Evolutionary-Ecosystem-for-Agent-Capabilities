@@ -67,7 +67,7 @@ Settings for one `evaluate` or `rank` call.
 | `output_dir` | `evaluation-reports` | Each run writes `[timestamp]/` here |
 
 - `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, since the output location does not affect scores. The result becomes `ReportMeta.config`.
-- `to_meta(timestamp, skills, scanner_version, checks_version)` builds the `ReportMeta` for a run.
+- `to_meta(timestamp, skills, scanner_version, checks_version, clarity_rubric_version="")` builds the `ReportMeta` for a run.
 - `from_dict` re-validates `weights` after loading them.
 
 ### `Check`
@@ -134,7 +134,7 @@ One Clarity rubric criterion (evaluate.md 3.3), produced by `Judge.rate`.
 
 | Field | Description |
 |---|---|
-| `criterion` | e.g. `trigger_specificity` |
+| `criterion` | e.g. `purpose_and_trigger` |
 | `rating` | Anchored level normalised to `[0, 1]` |
 | `reason` | Why the judge chose this level |
 | `quote` | Verified text from the skill |
@@ -190,6 +190,7 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `safety_tier` | Tier used |
 | `scanner_version` | External scanner version; empty if it did not run |
 | `checks_version` | Version of our own safety rule set |
+| `clarity_rubric_version` | `clarity.RUBRIC_VERSION` for the run; empty in reports written before it was recorded |
 
 ### `Report`
 

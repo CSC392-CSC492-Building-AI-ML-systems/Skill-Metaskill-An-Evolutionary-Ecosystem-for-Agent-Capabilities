@@ -9,6 +9,13 @@ A dimension whose module is not built yet is `skipped`, with a score of None, so
 skill is not ranked (evaluate.md 5.2). No built dimension runs tasks yet, so nothing here
 needs the sandbox and `lift` is None.
 
+One LLM judge is built per call and shared by the dimensions in JUDGED, and the report's
+`judge_model` lists the models that answered it. The safety review's deep tier still
+builds its own Judge, so its model is not listed yet.
+
+A judge whose provider fails mid-run (a rate limit, an outage) makes the dimension `error`
+for every skill after that point; the result's `warnings` say the provider was the cause.
+
 The plugin imports judge.py through this package when it registers, so whatever is
 imported at the top here has to load with it. `safety` is imported where it is used: a
 failure there must cost `evaluate`, not the whole plugin.
@@ -19,12 +26,13 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .judge import MAX_REASON_CHARS, JudgeUnavailable, clean
+from .judge import MAX_REASON_CHARS, Judge, JudgeCallFailed, JudgeUnavailable, clean
 from .models import (
     Dimension,
     DimensionScore,
@@ -39,6 +47,8 @@ from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
 from .runner import report_dir, timestamp
 
+_log = logging.getLogger(__name__)
+
 # The module that scores each dimension (evaluate.md section 6), once it exists. Each has
 # score(skill, config, llm=...) -> DimensionScore, so adding one needs no change here.
 SCORERS = {
@@ -49,6 +59,12 @@ SCORERS = {
     Dimension.EFFICIENCY: "efficiency",
     Dimension.SAFETY: "safety",
 }
+
+# Dimensions whose score() also takes judge=, the run's shared Judge.
+JUDGED = {Dimension.CLARITY}
+
+# DimensionStatus.detail when the judge's provider did not answer (JudgeCallFailed).
+PROVIDER_FAILED = "failed: the judge model's provider did not answer"
 
 
 def evaluate_skill(skill_path: str | Path, *, config_path: str | Path | None = None,
@@ -83,25 +99,28 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     # require_dependencies() before it starts (dependencies.md).
     missing = safety.missing_dependencies()
     llm = getattr(ctx, "llm", None)
+    judge = _judge(ctx, config)
     results: list[SkillResult] = []
     warnings: list[str] = []
     for path in paths:
         try:
-            results.append(_result(Skill.load(_folder(path)), config, llm))
+            results.append(_result(Skill.load(_folder(path)), config, llm, judge))
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))
     if not results:
         return {"status": "error", "error": "no skill could be evaluated",
                 "warnings": warnings}
+    warnings += _provider_warnings(results)
 
     ranking = rank_results(results, config)
     run_dir, started = _new_run_dir(config)
     versions = safety.versions()
+    versions["clarity_rubric_version"] = _clarity_rubric_version()
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
-    # No judge has run: to_meta gives the model asked for, and this field says which
-    # models judged (models.md).
-    meta.judge_model = ""
+    # to_meta gives the model asked for; this field says which models judged (models.md),
+    # so it stays empty when no judge answered.
+    meta.judge_model = judge.judge_model if judge else ""
     artifacts = _write(Report(meta, [e.result for e in ranking.entries]), ranking, run_dir)
     return {
         "artifacts": artifacts,
@@ -131,10 +150,31 @@ def _folder(path: str | Path) -> Path:
     return path.parent if path.name.lower() == "skill.md" else path
 
 
-def _result(skill: Skill, config: EvaluationConfig, llm: Any) -> SkillResult:
+def _clarity_rubric_version() -> str:
+    """clarity.RUBRIC_VERSION, or "" if clarity.py does not import. Clarity is then already
+    `error` for every skill (_score), and the rest of the report must still be written."""
+    try:
+        from . import clarity
+    except Exception:
+        _log.warning("metaskill: clarity could not be imported", exc_info=True)
+        return ""
+    return clarity.RUBRIC_VERSION
+
+
+def _judge(ctx: Any, config: EvaluationConfig) -> Judge | None:
+    """The run's LLM judge, or None when Hermes gives no model access. A missing provider
+    only shows up on the first call, as JudgeUnavailable from the dimension (judge.md 3)."""
+    try:
+        return Judge.from_context(ctx, config)
+    except JudgeUnavailable:
+        return None
+
+
+def _result(skill: Skill, config: EvaluationConfig, llm: Any,
+            judge: Judge | None = None) -> SkillResult:
     from . import safety
 
-    found = {d: _score(d, skill, config, llm) for d in Dimension}
+    found = {d: _score(d, skill, config, llm, judge) for d in Dimension}
     return SkillResult(
         name=skill.name,
         scores=make_scores(found, config),
@@ -147,7 +187,7 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any) -> SkillResult:
 
 
 def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
-           llm: Any) -> DimensionScore:
+           llm: Any, judge: Judge | None = None) -> DimensionScore:
     """The dimension's score from its module. Not built is `skipped`. A module that is
     there but fails is `error`, as a broken import must not pass for an unbuilt one."""
     module = SCORERS[dimension]
@@ -156,13 +196,35 @@ def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
         return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",
                               detail="not built yet")
     try:
-        return importlib.import_module(name).score(skill, config, llm=llm)
+        extra = {"judge": judge} if dimension in JUDGED else {}
+        return importlib.import_module(name).score(skill, config, llm=llm, **extra)
     except JudgeUnavailable:  # judge.md 3
         return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",
                               detail="no judge model is available")
     except Exception as e:
+        # The report keeps only the type; the full error goes to the host's log. The name
+        # is the skill's own frontmatter, so it is cleaned: a newline could fake a log line.
+        _log.warning("metaskill: %s failed for %s", dimension.value,
+                     clean(skill.name, MAX_REASON_CHARS), exc_info=True)
+        detail = (PROVIDER_FAILED if isinstance(e, JudgeCallFailed)
+                  else f"failed: {type(e).__name__}")
         return DimensionScore(dimension, None, Status.ERROR, reason="Not scored",
-                              detail=f"failed: {type(e).__name__}")
+                              detail=detail)
+
+
+def _provider_warnings(results: list[SkillResult]) -> list[str]:
+    """One warning per dimension the judge's provider failed for, so skills left unranked
+    by a rate limit or an outage are not read as broken skills."""
+    warnings = []
+    for dimension in Dimension:
+        failed = sum(1 for r in results
+                     if r.dimensions[dimension].detail == PROVIDER_FAILED)
+        if failed:
+            warnings.append(
+                f"The judge model's provider did not answer for {failed} of {len(results)} "
+                f"skill(s) (e.g. a rate limit or an outage), so their {dimension.value} is "
+                "not scored and they are unranked. Run them again later.")
+    return warnings
 
 
 def _new_run_dir(config: EvaluationConfig) -> tuple[Path, str]:
