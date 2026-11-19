@@ -247,6 +247,48 @@ def test_a_backend_reused_across_skills_reports_only_this_scans_calls():
     assert cisco.llm_usage.calls == 2  # the tracker itself still counts everything
 
 
+def per_scan_cisco(*scans):
+    """Cisco's backend, reused: scan N records scans[N], a list of (provider, model) replies."""
+    queue = list(scans)
+
+    def spend(backend):
+        for provider, model in queue.pop(0):
+            backend.llm_usage.record(SimpleNamespace(provider=provider, model=model), 10, 1)
+    return Spending("cisco", spend, llm_usage=LlmUsage())
+
+
+def test_a_reused_backend_reports_only_the_models_this_scan_used():
+    cisco = per_scan_cisco([("p", "A")], [("p", "B")])
+    assert run(cisco, config=DEEP).judge_model == "p/A"
+    assert run(cisco, config=DEEP).judge_model == "p/B"  # not "p/A, p/B"
+
+
+def test_a_model_used_in_an_earlier_scan_is_still_reported_when_it_answers_again():
+    # A plain set difference would drop A from the second and third scans.
+    cisco = per_scan_cisco([("p", "A")], [("p", "A"), ("p", "B")], [("p", "A")])
+    assert [run(cisco, config=DEEP).judge_model for _ in range(3)] == ["p/A", "p/A, p/B", "p/A"]
+
+
+def test_the_review_judge_is_tracked_per_model_too():
+    answers = iter([{"p/A": 1}, {"p/A": 1, "p/B": 2}, {"p/A": 3, "p/B": 2}])
+    usage = iter([TokenUsage(1, 1, 1), TokenUsage(4, 4, 4), TokenUsage(5, 5, 6)])
+
+    def spend(backend):
+        backend.judge.model_calls, backend.judge.total_usage = next(answers), next(usage)
+    review = Spending("llm-review", spend, judge=SimpleNamespace(
+        judge_model="", model_calls={}, total_usage=TokenUsage()))
+    assert [run(review, config=DEEP).judge_model for _ in range(3)] == ["p/A", "p/B", "p/A"]
+
+
+def test_judge_and_bridge_count_replies_by_model():
+    from metaskill.evaluate.judge import Judge
+    usage = LlmUsage()
+    usage.record(SimpleNamespace(provider="p", model="A"), 1, 1)
+    usage.record(SimpleNamespace(provider="p", model="A"), 1, 1)
+    assert usage.model_calls == {"p/A": 2}
+    assert Judge(SimpleNamespace()).model_calls == {}
+
+
 def test_the_cisco_backend_tracks_its_own_calls():
     backend = CiscoBackend()
     assert isinstance(backend.llm_usage, LlmUsage) and backend.llm_usage.calls == 0

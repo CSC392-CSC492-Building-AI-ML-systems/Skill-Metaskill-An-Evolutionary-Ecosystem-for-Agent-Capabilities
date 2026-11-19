@@ -100,3 +100,5 @@ Backends are replaced with fakes that return fixed `BackendResult`s, so these te
 ## Open
 
 - Whether the runner calls `missing_dependencies()` once per evaluation or once per session. Proposed: once per evaluation call, before any skill is scanned.
+
+The judge and Cisco's tracker count for their whole life, so `score()` takes their totals before and after each scan and keeps the difference. That holds for the models as well as the tokens: both `Judge` and `LlmUsage` keep `model_calls`, the replies by `provider/model`, and a scan reports the models whose count grew during it. A backend reused for a scan on model A and then one on model B reports only B for the second, and a model that answered in both scans is reported in both. A backend with no `model_calls` is credited with every call on the models it names.

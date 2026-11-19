@@ -56,6 +56,7 @@ class LlmUsage:
     retry included. Cisco may call from worker threads, so record() locks."""
 
     used: set[tuple[str, str]] = field(default_factory=set)
+    model_calls: dict[str, int] = field(default_factory=dict)  # replies by "provider/model"
     input_tokens: int = 0
     output_tokens: int = 0
     calls: int = 0
@@ -66,6 +67,8 @@ class LlmUsage:
             provider, model = getattr(result, "provider", ""), getattr(result, "model", "")
             if provider or model:
                 self.used.add((str(provider), str(model)))
+                name = f"{provider}/{model}"
+                self.model_calls[name] = self.model_calls.get(name, 0) + 1
             self.input_tokens += input_tokens
             self.output_tokens += output_tokens
             self.calls += 1
