@@ -192,7 +192,9 @@ def _agent_run(result: dict[str, Any]) -> AgentRun:
             f"the model provider could not serve the session"
             f"{f' ({reason})' if reason else ''}: {result.get('error') or 'no detail'}")
     if status == "agent_error":
-        raise RuntimeError(str(result.get("error") or "the agent failed"))
+        reason = result.get("failure_reason")
+        raise RuntimeError(f"the agent's session failed{f' ({reason})' if reason else ''}: "
+                           f"{result.get('error') or 'the agent failed'}")
     if status != "ok":
         raise HermesAgentUnavailable(f"unexpected result status {status!r} from the Hermes session")
     run = agent_run_from_hermes_usage(result.get("final_response") or "", result.get("usage") or {},

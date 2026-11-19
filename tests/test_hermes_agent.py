@@ -185,6 +185,35 @@ def test_an_agent_error_is_an_ordinary_failure(tmp_path):
     assert not isinstance(e.value, JudgeError)
 
 
+def test_an_agent_error_names_why_the_session_failed(tmp_path):
+    agent = fake_agent(tmp_path, writes({"status": "agent_error", "failure_reason": "context_overflow",
+                                         "error": "context window exceeded"}))
+    with pytest.raises(RuntimeError, match=r"session failed \(context_overflow\): context window"):
+        agent.run("p", None, docker_workspace())
+
+
+@pytest.mark.parametrize("reason", sorted(hermes_child.TASK_FAILURES))
+def test_a_failure_the_task_caused_is_a_failed_run(reason):
+    # A skill can drive these (it floods the context, or its text is blocked), so dropping
+    # the run as an environment error would let such a skill go unscored.
+    assert hermes_child.failure_status({"failed": True, "failure_reason": reason}) == "agent_error"
+    assert hermes_child.failure_status({"failed": True, "turn_exit_reason": reason}) == "agent_error"
+
+
+@pytest.mark.parametrize("reason", [
+    "rate_limit", "billing", "billing_unverified", "auth", "model_not_found", "model_entitlement",
+    "server_error", "empty_response", "loop_error", "session_busy", "interpreter_shutdown",
+    "a-reason-hermes-adds-later", None])
+def test_any_other_failure_is_the_environment_not_the_skill(reason):
+    # Unnamed reasons stay unscored: a new Hermes reason must not count against a skill by accident.
+    assert hermes_child.failure_status({"failed": True, "failure_reason": reason}) == "provider_error"
+
+
+def test_the_two_reason_fields_are_both_read():
+    result = {"failed": True, "failure_reason": "server_error", "turn_exit_reason": "context_compression_timeout"}
+    assert hermes_child.failure_status(result) == "agent_error"
+
+
 def test_a_child_that_dies_without_a_result_is_unavailable(tmp_path):
     agent = fake_agent(tmp_path, "sys.stderr.write('ImportError: no module named run_agent')\nsys.exit(3)\n")
     with pytest.raises(HermesAgentUnavailable, match="exited 3.*run_agent"):

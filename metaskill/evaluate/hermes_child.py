@@ -32,6 +32,17 @@ TOOLSETS = ("terminal", "file")
 # The in-container `timeout` gets this much more than Hermes' own command timeout, so
 # Hermes' timeout fires first and the container's only stops what Hermes could not.
 KILL_GRACE = 5
+# Hermes marks a session `failed` for two different kinds of reasons. Most say the environment
+# could not serve it (billing, auth, rate limits, a model the provider does not have, a
+# provider outage, Hermes' own runtime errors): the run tells nothing about the skill and is
+# not scored. These say how the task itself went, and the skill can drive them (a skill that
+# floods the context, or whose text the provider blocks): the run fails like any other.
+# Anything not named here stays an environment problem, so a new Hermes reason is never
+# scored against a skill by accident.
+TASK_FAILURES = frozenset({
+    "context_overflow", "truncated", "content_policy_blocked",
+    "context_compression_exhausted", "context_compression_timeout",
+})
 MAX_TRANSCRIPT_CHARS = 200_000
 MAX_TOOL_TEXT_CHARS = 2_000
 
@@ -50,6 +61,13 @@ def docker_argv(docker: str, container: str, workdir: str, command: str, *,
     return [docker, "exec", *(["-i"] if stdin else []), "--workdir", workdir, container,
             "timeout", "-s", "KILL", str(int(timeout) + KILL_GRACE),
             "bash", *(["-l"] if login else []), "-c", command]
+
+
+def failure_status(result: dict[str, Any]) -> str:
+    """`agent_error` (a failed run) when Hermes' failure_reason or turn_exit_reason is one of
+    TASK_FAILURES, else `provider_error` (the environment failed; the run is not scored)."""
+    reasons = {result.get("failure_reason"), result.get("turn_exit_reason")}
+    return "agent_error" if reasons & TASK_FAILURES else "provider_error"
 
 
 def count_tool_calls(messages: list[dict[str, Any]]) -> int:
@@ -398,13 +416,13 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
             pass
     messages = result.get("messages") or []
     if result.get("failed"):
-        # Hermes marks a session the model provider could not serve (model unavailable,
-        # billing, retries exhausted, a content-policy block) as failed, and puts its own
-        # error text in final_response. That text is not the agent's answer and must not
-        # be judged as one: the run tells nothing about the skill.
-        out.update(status="provider_error",
-                   error=str(result.get("error") or "the model provider failed"),
-                   failure_reason=result.get("failure_reason"))
+        # Hermes puts its own error text in final_response for a failed session. That text is
+        # not the agent's answer and must not be judged as one. Whether the failure counts
+        # against the skill depends on why it failed (failure_status).
+        status = failure_status(result)
+        out.update(status=status,
+                   error=str(result.get("error") or "the session failed"),
+                   failure_reason=result.get("failure_reason") or result.get("turn_exit_reason"))
         return out
     out.update(
         status="ok", seconds=round(time.monotonic() - start, 3),
