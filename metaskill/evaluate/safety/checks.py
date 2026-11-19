@@ -48,7 +48,9 @@ MAX_CLEARING_CHARS = 500_000
 # Some matchers' regexes read ahead along the line from where a command starts
 # (_COMMAND_START), so a line costs such starts x line length. A line with more than this
 # is not checked at all: it becomes one CRITICAL scan-limit finding, since what it hides is
-# unknown. The most on one line in any real skill is 16.
+# unknown. The most on one line in any real skill is 16. The count is of words, so
+# ordinary English (more, head, tail, cat) adds to it; a line only reaches the limit
+# with hundreds of them, which a natural paragraph does not have (MET-42 review).
 MAX_COMMANDS_PER_LINE = 200
 # Characters the Python-level parsers (shell arguments, call arguments, print arguments)
 # may read per skill. Real skills read a few hundred; past this, the rest is not parsed

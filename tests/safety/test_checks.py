@@ -878,6 +878,34 @@ def test_every_read_ahead_start_counts_toward_the_line_limit(tmp_path, command):
     assert any(f.rule == "scan-limit" for f in scan(make(tmp_path, {"SKILL.md": body})).findings)
 
 
+def test_a_long_line_of_ordinary_prose_is_not_limited(tmp_path):
+    # Long paragraphs on one line are common. English only trips the limit by saying
+    # more/head/tail/cat/echo/git more than 200 times on that line, which takes hundreds
+    # of thousands of characters, so a realistic wall of text must not be a CRITICAL.
+    sentence = "Read the head of the file, then ask for more detail before you tail the log. "
+    prose = (sentence + "The summary stays short and each step is checked by the reader. " * 8) * 60
+    assert len(prose) > 30_000
+    starts = sum(1 for _ in checks._COMMAND_START.finditer(prose))
+    assert 0 < starts <= checks.MAX_COMMANDS_PER_LINE  # dense, but under the limit
+    result = scan(make(tmp_path, {"SKILL.md": "# Skill\n\n" + prose + "\n"}))
+    assert not any(f.rule == "scan-limit" for f in result.findings)
+
+
+def test_prose_packed_with_command_words_is_limited_like_any_other_line(tmp_path):
+    # The limit counts command-like words, not whether the line reads as prose: a
+    # reader cannot tell the two apart for the matchers that read ahead from each word, and
+    # a bypass through `.git push` or `x.echo` is what the bare word match closes. So a
+    # line that is only the word "more" repeated is limited, in a paragraph or a block.
+    body = "# Skill\n\n" + "Show more. " * (checks.MAX_COMMANDS_PER_LINE + 1) + "\n"
+    limit = [f for f in scan(make(tmp_path, {"SKILL.md": body})).findings
+             if f.rule == "scan-limit"]
+    assert [(f.location, f.severity) for f in limit] == [("SKILL.md:3", CRITICAL)]
+    # One word fewer is under the limit.
+    body = "# Skill\n\n" + "Show more. " * checks.MAX_COMMANDS_PER_LINE + "\n"
+    assert not any(f.rule == "scan-limit"
+                   for f in scan(make(tmp_path, {"SKILL.md": body})).findings)
+
+
 def test_a_minified_script_with_many_print_calls_is_not_limited(tmp_path):
     # One long line with dozens of console.log( calls is ordinary minified code: no
     # scan-limit, and still checked (a secret in one of the calls is found).
