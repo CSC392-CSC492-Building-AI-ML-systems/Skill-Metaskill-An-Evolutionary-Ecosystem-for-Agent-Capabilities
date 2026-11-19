@@ -72,3 +72,55 @@ Cisco findings routed to Configuration Cleanliness remain report evidence.
 A confirmed Separation failure scores zero. The pinned reference scores one
 when its complete reviewed inputs match. Other incomplete cases remain null.
 Schema references and compositions remain unassessed by the description check.
+
+## MET-59 evidence discovery
+
+The normal evaluation entry point collects Configuration Cleanliness evidence for
+arbitrary skill bundles using the existing generalization inventory, detectors,
+and literal config placeholder pattern. Evidence uses the source config-evidence
+and records relative file names and line numbers. Detected values and credential
+contents are omitted from finding quotes and messages.
+
+Supported sources are Markdown, plain text, Python, shell, JavaScript, and
+TypeScript files accepted by the generalization inventory. Literal
+{{config.key}} references are recorded using the same syntax as personalization.
+Environment-variable references and embedded-value candidates use the existing
+generalization detectors. Configuration JSON, schema files, and other data files
+are excluded from embedded instruction checks, since supplied configuration is
+expected to contain concrete values.
+
+These observations have INFO severity and provide partial coverage. An embedded
+value is a candidate for review of required variability. It does not prove a
+Separation failure. References can occur in examples, dead code, or optional
+branches, and dynamic accesses can escape detection. The adapter therefore never
+declares semantic usage complete, never infers unused settings from missing
+references, and never independently awards a numeric score.
+
+Inventory limits and skipped files remain visible in the dimension detail.
+Reported observations are capped at 1,000 per skill. Existing reviewed pilot
+evidence and explicit complete inventories retain their MET-56 behavior.
+
+The generalization pipeline currently returns detection counts rather than a
+persistent reviewed decision artifact. MET-59 reuses its deterministic detectors
+directly. Consuming independently reviewed decisions with source bindings and
+establishing complete usage for additional patterns remain adapter extensions.
+
+### Processing bounds and detector coverage
+
+MET-59 now bounds work before calling the eager generalization detector. A
+supported source over 64 KiB is skipped in full, and at most 256 KiB of supported
+source text is passed to placeholder and detector analysis per skill. The detail
+reports the number of files skipped by these limits. Inventory discovery retains
+its existing bounded read limits; the 1,000-observation cap additionally bounds
+the report. Skipped analysis always leaves usage coverage partial.
+
+The embedded-value-needs-review rule forwards REPLACE and REVIEW candidates
+actually emitted by generalization's deterministic detectors. These cover
+recognized credential patterns and secret assignments, repository identifiers,
+email addresses, phone numbers, machine-specific paths, organization hosts, and
+configuration-like assignments. The detectors retain their existing context,
+example-value, public-value, and confidence filters. A value appearing in prose
+or resembling a provider region or credential does not guarantee a finding.
+Environment references classified KEEP are reported separately as references.
+This adapter adds no independent PII classifier, and absence of candidates
+provides no clean Separation verdict.

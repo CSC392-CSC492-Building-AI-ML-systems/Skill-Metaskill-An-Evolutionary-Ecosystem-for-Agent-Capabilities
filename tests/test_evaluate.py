@@ -136,6 +136,31 @@ def test_config_cleanliness_reports_findings_without_a_score(tmp_path, out, sche
         assert "config.schema.json#/properties/org" in Path(report).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("schema, expected_rule", [
+    (None, None),
+    ("{broken", None),
+    ('{"required":["org"],"properties":{"org":{"description":"Organization"}}}', None),
+    ('{"required":["org"],"properties":{"org":{}}}', "missing-required-description"),
+])
+def test_config_cleanliness_reports_findings_without_a_score(tmp_path, out, schema, expected_rule):
+    folder = make_skill(tmp_path, "config-example")
+    if schema is not None:
+        (folder / "config.schema.json").write_text(schema, encoding="utf-8")
+
+    result = evaluate_skill(folder, output_path=out)
+    [skill] = load(result).skills
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    assert skill.scores.config_cleanliness is None
+    assert status.status is Status.SKIPPED
+    assert "incomplete coverage" in status.reason
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
+    assert [f.rule for f in findings] == ([expected_rule] if expected_rule else [])
+    if expected_rule:
+        report = next(p for p in result["artifacts"] if p.endswith(".md"))
+        assert "config.schema.json#/properties/org" in Path(report).read_text(encoding="utf-8")
+
+
 def test_no_tasks_means_no_lift(tmp_path, out):
     assert load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)).skills[0].lift is None
 
