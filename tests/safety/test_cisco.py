@@ -208,7 +208,9 @@ def test_ordinary_frontmatter_is_scanned():
         BackendStatus.OK)
 
 
-def test_not_installed():
+def test_not_installed(monkeypatch):
+    # The add-on folder is absent: installing it is the hint (enabling it, when present).
+    monkeypatch.setattr("metaskill.evaluate.safety.cisco._addon_installed", lambda: False)
     result = FakeCisco(installed=False).scan(SKILL, SafetyTier.STATIC)
     assert result.status is BackendStatus.NOT_INSTALLED
     assert result.findings == []

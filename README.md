@@ -65,8 +65,10 @@ hermes plugins install CSC392-CSC492-Building-AI-ML-systems/Skill-Metaskill-An-E
 
 Hermes asks before installing the scanner package; run it in a terminal and restart Hermes
 afterwards. Use this command rather than `pip install`, which would reach a different
-Python. Without the add-on, Safety is marked `partial` and the `evaluate` result says how to
-install it. Details in [plugins/metaskill-cisco](plugins/metaskill-cisco/README.md).
+Python. Hermes installs the scanner only when the add-on is enabled: if `hermes plugins list`
+shows `metaskill-cisco` as `not enabled`, run `hermes plugins enable metaskill-cisco` in a
+terminal and accept the prompt. Without the scanner, Safety is marked `partial` and the
+`evaluate` result says which of the two to run. Details in [plugins/metaskill-cisco](plugins/metaskill-cisco/README.md).
 
 **Upgrading from metaskill before MET-45:** metaskill used to install the scanner itself.
 Updating removes it, so install this add-on after `hermes plugins update metaskill` to keep

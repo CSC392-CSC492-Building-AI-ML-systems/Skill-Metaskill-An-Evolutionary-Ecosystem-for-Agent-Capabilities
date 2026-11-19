@@ -56,6 +56,27 @@ class LLMSetupError(Exception):
     """The scanner's LLM analyzer could not be configured."""
 
 
+def _addon_installed() -> bool:
+    """Whether the add-on's folder is in Hermes' plugins folder: $HERMES_HOME/plugins, or
+    beside this plugin's own folder, which is where Hermes installs plugins."""
+    folders = [Path(__file__).resolve().parents[3].parent / ADDON]
+    if os.environ.get("HERMES_HOME"):
+        folders.insert(0, Path(os.environ["HERMES_HOME"]) / "plugins" / ADDON)
+    return any((folder / "plugin.yaml").is_file() for folder in folders)
+
+
+def not_installed_hint() -> str:
+    """What to do when the scanner cannot be imported. Hermes installs a plugin's Python
+    dependencies only when the plugin is enabled, so an add-on that was installed but not
+    enabled (a declined or skipped prompt) has no scanner, and installing it again does not
+    help: enabling it does."""
+    if _addon_installed():
+        return (f"the {ADDON} add-on is installed but not enabled, so Hermes has not installed "
+                f"the scanner: run `hermes plugins enable {ADDON}` in a terminal, accept "
+                "installing its Python dependencies, then restart Hermes")
+    return f"optional add-on {ADDON}: run `{INSTALL_COMMAND}` in a terminal, then restart Hermes"
+
+
 class CiscoBackend:
     name = "cisco"
 
@@ -86,9 +107,7 @@ class CiscoBackend:
         if not self.available():
             return BackendResult(
                 self.name, BackendStatus.NOT_INSTALLED, tier,
-                detail=(f"Cisco skill-scanner not installed (the optional {ADDON} add-on); "
-                        f"run `{INSTALL_COMMAND}` in a "
-                        "terminal, then restart Hermes"))
+                detail=f"Cisco skill-scanner not installed ({not_installed_hint()})")
         try:
             # The scanner parses the frontmatter itself, and its time doubles with each
             # level of nested aliases (2.2.1: 6s at 2^24 values, minutes past 2^28). Our

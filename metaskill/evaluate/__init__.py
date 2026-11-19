@@ -39,7 +39,8 @@ from pathlib import Path
 from typing import Any
 
 from .judge import (
-    MAX_REASON_CHARS, Judge, JudgeCallFailed, JudgeError, JudgeUnavailable, TokenUsage, clean)
+    JUDGE_TASK, MAX_REASON_CHARS, Judge, JudgeCallFailed, JudgeError, JudgeUnavailable,
+    TokenUsage, clean)
 from .models import (
     Dimension,
     DimensionScore,
@@ -73,6 +74,12 @@ TASK_DIMENSIONS = frozenset({Dimension.QUALITY, Dimension.ROBUSTNESS, Dimension.
 
 # Dimensions whose score() also takes judge=, the run's shared Judge.
 JUDGED = {Dimension.CLARITY}
+
+# Dimensions whose score() takes task=, the auxiliary task their own model calls go through
+# (safety's deep tier: the review's judge and Cisco's LLM analyzer). Given only where Hermes
+# registered it, as Judge.from_context does, so every judge of a call runs on the model the
+# user set for "Metaskill judge", not the deep tier alone on the main model.
+TASKED = {Dimension.SAFETY}
 
 # DimensionStatus.detail when the judge's provider did not answer (JudgeCallFailed).
 PROVIDER_FAILED = "failed: the judge model's provider did not answer"
@@ -372,7 +379,8 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
         except ValueError as e:  # a skill name that cannot be a log folder: no run made
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
                                 errors=[clean(str(e), MAX_REASON_CHARS)])
-    found = {d: _score(d, skill, config, llm, runs, judge) for d in Dimension}
+    task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
+    found = {d: _score(d, skill, config, llm, runs, judge, task) for d in Dimension}
     return SkillResult(
         name=skill.name,
         scores=make_scores(found, config),
@@ -401,7 +409,8 @@ def _lift(config: EvaluationConfig, runs: RunnerResult | None) -> float | None:
 
 
 def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
-           llm: Any, runs: RunnerResult | None = None, judge: Judge | None = None) -> DimensionScore:
+           llm: Any, runs: RunnerResult | None = None, judge: Judge | None = None,
+           task: str | None = None) -> DimensionScore:
     """The dimension's score from its module. Not built is `skipped`. A module that is
     there but fails is `error`, as a broken import must not pass for an unbuilt one. A
     task-based dimension gets the skill's runs, and is `skipped` when no tasks ran."""
@@ -419,7 +428,9 @@ def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
                                       detail=f"{dimension.value} needs task runs; no tasks "
                                              "were given (tasks_path)")
             return scorer.score_runs(skill, config, runs)
-        extra = {"judge": judge} if dimension in JUDGED else {}
+        extra: dict[str, Any] = {"judge": judge} if dimension in JUDGED else {}
+        if dimension in TASKED and task:
+            extra["task"] = task
         return scorer.score(skill, config, llm=llm, **extra)
     except JudgeUnavailable:  # judge.md 3
         return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",

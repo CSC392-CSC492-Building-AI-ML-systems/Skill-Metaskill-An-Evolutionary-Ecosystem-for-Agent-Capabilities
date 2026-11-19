@@ -104,6 +104,28 @@ def test_the_addon_loads_as_a_package_under_its_own_name(monkeypatch):
 
 def test_without_the_scanner_the_dependency_names_the_addon(monkeypatch):
     monkeypatch.setattr(cisco.CiscoBackend, "available", lambda self: False)
+    monkeypatch.setattr(cisco, "_addon_installed", lambda: False)
     [dep] = missing_dependencies()
     assert dep.package == cisco.PACKAGE and not dep.required and dep.install_command == ""
     assert "metaskill-cisco" in dep.reason and cisco.INSTALL_COMMAND in dep.reason
+
+
+def test_an_addon_installed_but_not_enabled_is_told_to_enable_it(monkeypatch, tmp_path):
+    # Hermes installs the scanner only when the add-on is enabled. Installed but not
+    # enabled (a declined or skipped prompt), installing it again does not help.
+    (tmp_path / "plugins" / "metaskill-cisco").mkdir(parents=True)
+    (tmp_path / "plugins" / "metaskill-cisco" / "plugin.yaml").write_text("name: metaskill-cisco\n")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(cisco.CiscoBackend, "available", lambda self: False)
+    [dep] = missing_dependencies()
+    assert "installed but not enabled" in dep.reason
+    assert "hermes plugins enable metaskill-cisco" in dep.reason
+    assert cisco.INSTALL_COMMAND not in dep.reason
+    result = cisco.CiscoBackend().scan(cisco.Skill(path=tmp_path, name="s", body=""), cisco.SafetyTier.STATIC)
+    assert "hermes plugins enable metaskill-cisco" in result.detail
+
+
+def test_without_hermes_home_the_addon_is_looked_for_beside_this_plugin(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    assert cisco._addon_installed() is (
+        Path(cisco.__file__).resolve().parents[3].parent / "metaskill-cisco" / "plugin.yaml").is_file()

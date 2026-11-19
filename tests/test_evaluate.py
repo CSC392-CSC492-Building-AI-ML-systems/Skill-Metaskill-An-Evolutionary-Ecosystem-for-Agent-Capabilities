@@ -188,6 +188,23 @@ def test_no_judge_is_a_skipped_dimension(tmp_path, out, placeholder):
     assert status.status is Status.SKIPPED and status.detail == "no judge model is available"
 
 
+@pytest.mark.parametrize("has_aux_tasks, expected", [(True, "metaskill_judge"), (False, "none")])
+def test_safety_calls_go_through_the_judge_task_where_hermes_has_one(tmp_path, out, placeholder,
+                                                                     has_aux_tasks, expected):
+    # The deep tier's review and Cisco's analyzer ran with task=None, so on the main model,
+    # while every other judge of the call used the model set for "Metaskill judge".
+    placeholder(Dimension.SAFETY, (
+        "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+        "def score(skill, config, llm=None, task=None, **_):\n"
+        "    return DimensionScore(Dimension.SAFETY, 1.0, detail=str(task or 'none'))\n"))
+    ctx = SimpleNamespace(llm=None)
+    if has_aux_tasks:
+        ctx.register_auxiliary_task = lambda *a, **k: None
+    status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out, ctx=ctx)
+                  ).skills[0].dimensions[Dimension.SAFETY]
+    assert status.detail == expected
+
+
 @pytest.mark.parametrize("dimension", [d for d in Dimension if d not in evaluate.TASK_DIMENSIONS],
                          ids=lambda d: d.value)
 def test_the_placeholder_replaces_built_modules_too(tmp_path, out, placeholder, dimension):
