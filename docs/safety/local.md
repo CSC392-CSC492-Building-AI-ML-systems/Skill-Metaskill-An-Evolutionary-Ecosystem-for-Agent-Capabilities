@@ -69,6 +69,8 @@ Looking at the user's files must be harmless:
 - **Metadata only.** It uses `lstat`, `readlink` and directory listings. It never opens or reads a file's contents.
 - **Never follows links while counting**, so a link cannot send it walking the whole disk. Links inside a folder are not counted at all: deleting the folder removes the link, not what it points to.
 - **Bounded:** counting stops at 10,000 entries and after one second per target, and reports "at least 10,000 files".
+- **Once per place (MET-42).** A skill can delete the same folder on hundreds of lines (`rm -rf ~/Documents` 300 times, or `~/Documents/`, `~/Documents/*`, `~/./Documents`). Each place on this machine (the resolved path, and whether the delete follows links) is looked up and warned about once, at its first delete. Before this, 300 deletes of one folder gave 300 identical warnings and 300 walks of it.
+- **Bounded per skill (MET-42).** All lookups for one skill share `MAX_TOTAL_SECONDS` (5 s), so naming many different folders cannot stall the evaluation either. If it runs out, the list ends with a warning that says lookups stopped and how many deletes were not checked, so a shortened list is never mistaken for a complete one. Local warnings are not scored, so a time limit is safe here; the safety score never depends on them.
 - **Never changes anything.** No file is created, moved or deleted.
 
 ## Where warnings go
@@ -111,6 +113,7 @@ All tests use a temporary folder as the home directory and a fake environment, s
 - A missing target raises no warning.
 - A symlink is reported with where it points, but not followed while counting.
 - Counting stops at the limit and says "at least".
+- The same place named many ways and many times is walked and warned about once, at its first delete; lookups stop at the total time limit and say so; 2,000 deletes of a 3,000-file Documents folder take well under the limit.
 - No file in the temporary folder is opened, changed or removed (checked by comparing before and after).
 
 ## Limits and open questions

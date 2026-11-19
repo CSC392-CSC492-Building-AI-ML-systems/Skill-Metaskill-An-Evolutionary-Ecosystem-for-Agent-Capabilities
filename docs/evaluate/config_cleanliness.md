@@ -53,3 +53,22 @@ If the detector is unavailable, report the limit explicitly; do not conclude tha
 Agree the adapter, finding categories, unavailable-backend handling, rating anchors, and weighting with the team. Safety scanner category routing stays owned by the existing safety/configuration integration discussion; this pilot does not introduce a second safety score.
 
 Offline tests check annotation references and synthetic profile semantics. They do not implement or validate a general-purpose configuration-cleanliness scorer.
+
+## Current evidence ownership and scoring
+
+The Configuration Cleanliness workstream owns the adapter that supplies reviewed
+variability and usage evidence. The evaluator currently supplies pinned evidence
+only for the bundled ticket-summary pilot. Supporting arbitrary skills requires
+a separate adapter with declared input coverage and provenance.
+
+A usage inventory must explicitly declare completeness through usage_complete.
+Partial inventories provide positive usage evidence only. Completeness is an
+assertion by the evidence producer and requires review or a supported analysis
+method covering the entire bundle. The checker cannot establish completeness
+from a set of names alone.
+
+Only findings produced by config-checks participate in this scorer's decisions.
+Cisco findings routed to Configuration Cleanliness remain report evidence.
+A confirmed Separation failure scores zero. The pinned reference scores one
+when its complete reviewed inputs match. Other incomplete cases remain null.
+Schema references and compositions remain unassessed by the description check.
