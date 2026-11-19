@@ -39,6 +39,7 @@ def score(
     *,
     fixed_settings: Iterable[FixedSettingEvidence] = (),
     consumed_settings: frozenset[str] | None = None,
+    usage_complete: bool = False,
 ) -> DimensionScore:
     """Report available findings and apply the confirmed Separation gate."""
     schema, schema_detail = _schema(skill)
@@ -47,17 +48,19 @@ def score(
     reviewed_usage = reference_usage(skill)
     if consumed_settings is None:
         consumed_settings = reviewed_usage
+        usage_complete = reviewed_usage is not None
     if not fixed_settings and reviewed_usage is None:
         schema_detail += " No reviewed profile-variability evidence supplied."
     if consumed_settings is None:
         schema_detail += " Necessary Setup needs a complete usage inventory."
     findings = check_configuration(
         schema=schema, skill_text=skill.body, fixed_settings=fixed_settings,
-        consumed_settings=consumed_settings,
+        consumed_settings=consumed_settings, usage_complete=usage_complete,
     )
     properties = schema.get("properties", {}) if schema is not None else {}
     for name in unused:
         if name in properties:
+            pointer = name.replace("~", "~0").replace("/", "~1")
             findings.append(Finding(
                 dimension=Dimension.CONFIG_CLEANLINESS,
                 category="integrity",
@@ -65,7 +68,7 @@ def score(
                 source="config-checks",
                 rule="unused-pilot-setting",
                 quote="",
-                location=f"{SCHEMA_NAME}#/properties/{name}",
+                location=f"{SCHEMA_NAME}#/properties/{pointer}",
                 message="The instruction-only pilot declares a setting with no consumer.",
             ))
     # A confirmed portability failure fixes the maximum score at zero,

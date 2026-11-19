@@ -127,7 +127,8 @@ def test_config_cleanliness_reports_findings_without_a_score(tmp_path, out, sche
     assert skill.scores.config_cleanliness is None
     assert status.status is Status.SKIPPED
     assert "incomplete coverage" in status.reason
-    findings = [f for f in skill.findings if f.dimension is Dimension.CONFIG_CLEANLINESS]
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
     assert [f.rule for f in findings] == ([expected_rule] if expected_rule else [])
     if expected_rule:
         report = next(p for p in result["artifacts"] if p.endswith(".md"))
@@ -389,7 +390,8 @@ def test_config_cleanliness_reports_pilot_evidence(out, variant, expected):
     else:
         assert skill.scores.config_cleanliness is None
         assert status.status is Status.SKIPPED
-    findings = [f for f in skill.findings if f.dimension is Dimension.CONFIG_CLEANLINESS]
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
     assert [f.rule for f in findings] == expected
 
 

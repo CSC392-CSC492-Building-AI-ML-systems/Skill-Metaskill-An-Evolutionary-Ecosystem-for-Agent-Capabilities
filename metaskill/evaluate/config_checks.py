@@ -31,18 +31,24 @@ def check_configuration(
     skill_text: str = "",
     fixed_settings: Iterable[FixedSettingEvidence] = (),
     consumed_settings: frozenset[str] | None = None,
+    usage_complete: bool = False,
 ) -> list[Finding]:
     """Check explicit top-level properties and reviewed fixed-setting evidence.
 
     Schema coverage is limited to explicitly declared top-level properties.
     Absent or unsupported evidence produces no finding for that check.
     consumed_settings must be a complete inventory of settings used by the
-    skill. None means usage is unknown. An empty inventory confirms no usage.
+    skill. usage_complete must explicitly confirm its completeness before unused
+    settings are reported. An empty complete inventory confirms no usage.
 
     References and compositions are unsupported and skipped for description
     checks. A required name without a local property definition may be supplied
     elsewhere in a valid schema, so it is also left unassessed.
     """
+    if type(usage_complete) is not bool:
+        raise ValueError("usage_complete must be a Boolean")
+    if usage_complete and consumed_settings is None:
+        raise ValueError("Complete usage evidence requires an inventory")
     findings = []
     required = schema.get("required") if schema is not None else None
     properties = schema.get("properties") if schema is not None else None
@@ -52,7 +58,7 @@ def check_configuration(
             if not isinstance(definition, Mapping):
                 continue
             pointer = name.replace("~", "~0").replace("/", "~1")
-            if consumed_settings is not None and name not in consumed_settings:
+            if usage_complete and consumed_settings is not None and name not in consumed_settings:
                 findings.append(Finding(
                     dimension=Dimension.CONFIG_CLEANLINESS,
                     category="necessary-setup",
