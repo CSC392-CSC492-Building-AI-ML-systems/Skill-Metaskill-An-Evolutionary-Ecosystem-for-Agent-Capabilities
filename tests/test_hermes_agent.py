@@ -289,6 +289,20 @@ def test_each_way_the_tools_can_fail_is_reported(check, expected):
         assert any(reason in p for p in problems), (reason, problems)
 
 
+@pytest.mark.parametrize("empty, expected", [
+    ({"write_file": "{}"}, "write_file did not write into /work"),
+    ({"terminal": "{}"}, "terminal did not run in /work"),
+    ({"read_file": "{}"}, "read_file did not find"),
+    ({"write_file": "{}", "terminal": "{}", "read_file": "{}"}, "write_file did not write into /work"),
+])
+def test_an_empty_answer_is_not_a_success(empty, expected):
+    # A tool that answers {} wrote, ran and read nothing: the success fields must be there.
+    problems = hermes_agent.check_problems(broken(**empty), "/work")
+    assert any(expected in p for p in problems), problems
+    if len(empty) == 3:
+        assert len(problems) == 3
+
+
 def test_check_is_unavailable_when_the_tools_failed_even_though_setup_succeeded(tmp_path):
     result = {"status": "ok", "check": broken(terminal=json.dumps({"output": "", "exit_code": 126}))}
     with pytest.raises(HermesAgentUnavailable, match="tools did not work in the sandbox.*terminal did not run"):

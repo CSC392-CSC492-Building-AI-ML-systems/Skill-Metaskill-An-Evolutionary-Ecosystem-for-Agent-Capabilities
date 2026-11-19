@@ -177,27 +177,28 @@ def check_problems(check: Any, workdir: str) -> list[str]:
         return ["no check result"]
     problems = []
 
-    def answer(tool: str) -> dict[str, Any]:
+    def answer(tool: str) -> dict[str, Any] | None:
+        """The tool's parsed answer, or None (already reported) when it cannot be read. An
+        empty object is a readable answer: it is checked for the success fields like any other."""
         try:
             value = json.loads(check.get(tool))
         except (TypeError, ValueError):
-            problems.append(f"{tool} gave no readable answer")
-            return {}
+            value = None
         if not isinstance(value, dict):
             problems.append(f"{tool} gave no readable answer")
-            return {}
+            return None
         if value.get("error"):
             problems.append(f"{tool} reported an error")
         return value
 
     written = answer("write_file")
-    if written and written.get("resolved_path") != f"{workdir}/check.txt":
+    if written is not None and written.get("resolved_path") != f"{workdir}/check.txt":
         problems.append(f"write_file did not write into {workdir}")
     ran = answer("terminal")
-    if ran and (ran.get("exit_code") != 0 or not str(ran.get("output")).startswith(f"{workdir}\n")):
+    if ran is not None and (ran.get("exit_code") != 0 or not str(ran.get("output")).startswith(f"{workdir}\n")):
         problems.append(f"terminal did not run in {workdir} and exit 0")
     read = answer("read_file")
-    if read and (read.get("not_found") or "from-terminal" not in str(read.get("content"))):
+    if read is not None and (read.get("not_found") or "from-terminal" not in str(read.get("content"))):
         problems.append("read_file did not find what the terminal wrote")
     guards = check.get("guards")
     if (not isinstance(guards, dict) or not guards
