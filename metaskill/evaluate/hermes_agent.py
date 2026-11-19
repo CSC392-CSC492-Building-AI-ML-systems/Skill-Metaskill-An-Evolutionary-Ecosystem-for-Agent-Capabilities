@@ -29,7 +29,7 @@ from typing import Any
 
 from .judge import JudgeError, clean
 from .models import Skill
-from .runner import AgentRun, Workspace, agent_run_from_hermes_usage
+from .runner import AgentRun, Workspace, agent_run_from_hermes_usage, copied
 from .sandbox import SKILL_DIR
 
 CHILD = Path(__file__).with_name("hermes_child.py")
@@ -129,7 +129,8 @@ def skill_message(skill: Skill, workspace: Workspace | None = None) -> str:
     """How Hermes preloads a skill (`hermes -s`, agent/skill_commands._build_skill_message),
     pointing at the sandbox copy instead of the host's skills folder: Hermes' own message
     names a host path the sandbox does not have, and its skill_view tool reads the host.
-    Bundled files are listed as the runner copied them; links are left out (runner.md 2.2)."""
+    Bundled files are listed as the runner copied them (runner.copied: links, hard links and
+    paths outside the skill are left out, runner.md 2.2)."""
     skill_dir = workspace.skill_dir if workspace is not None else SKILL_DIR
     parts = [
         f'[IMPORTANT: The user launched this CLI session with the "{skill.name}" skill '
@@ -140,7 +141,7 @@ def skill_message(skill: Skill, workspace: Workspace | None = None) -> str:
         "`templates/config.yaml`) against that directory, then run them with the terminal "
         "tool using the absolute path.",
     ]
-    files = [f.as_posix() for f in skill.files if not (Path(skill.path) / f).is_symlink()]
+    files = [f.as_posix() for f in skill.files if copied(skill, f)]
     if files:
         parts += ["", "[This skill has supporting files (paths relative to the skill directory above):]"]
         parts += [f"- {f}" for f in files]
@@ -243,5 +244,7 @@ def _agent_run(result: dict[str, Any]) -> AgentRun:
         raise HermesAgentUnavailable(f"unexpected result status {status!r} from the Hermes session")
     run = agent_run_from_hermes_usage(result.get("final_response") or "", result.get("usage") or {},
                                       transcript=result.get("transcript") or "")
-    tool_calls = result.get("tool_calls")
-    return dataclasses.replace(run, tool_calls=tool_calls if isinstance(tool_calls, int) else None)
+    tool_calls, seconds = result.get("tool_calls"), result.get("seconds")
+    return dataclasses.replace(
+        run, tool_calls=tool_calls if isinstance(tool_calls, int) else None,
+        seconds=float(seconds) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else None)

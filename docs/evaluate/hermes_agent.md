@@ -75,16 +75,25 @@ A timeout stops the child's whole process group, so the `docker exec` processes 
 
 `tests/test_hermes_agent.py`. The unit tests need neither Hermes nor Docker: a fake child process stands in for the session.
 
-- The skill message points at `/tmp/skill`, never at a host path, never at `skill_view`, and leaves out links.
+- The skill message points at `/tmp/skill`, never at a host path, never at `skill_view`, and lists exactly the files the runner copies (`runner.copied`: no links, hard links or paths outside the skill).
 - Hermes' launch command keeps its bootstrap and runs the child; any other shape, or no Hermes, is unavailable.
 - A finished session maps every usage field and the tool calls; the request names the container, the Docker executable and `/work`, and carries a skill message only with the skill.
 - A setup error is a `JudgeError`; an agent error is not; a child that dies without a result is unavailable with its error; a timeout stops the child and what it started; a workspace that is not Docker is unavailable; through the runner, unavailability is an error, not a failed run.
 - The child imports only the standard library at the top (it runs on Hermes' interpreter); its `docker exec` command, tool-call count and transcript are tested directly; a request from another protocol version is refused before Hermes is touched.
 
+Opt-in integration tests need, besides Hermes and Docker:
+
+- **Python 3.12.11, 3.13.4 or later** for the test process. The sandbox refuses older ones because of CVE-2025-4517 (tarfile), and the tests then skip with that reason. Hermes' own bundled Python (3.14) works for a test virtual environment.
+- **The sandbox image pulled first** (`docker pull` of the pinned image in `sandbox.DEFAULT_IMAGE`; [dependencies.md](dependencies.md) lists the command). Without it the tests skip.
+
+Hermes 0.21.5, 0.22.2 and 0.23.2 all pass them; the tests use whichever `hermes` is first on `PATH`.
+
 Opt-in integration tests:
 
 - `METASKILL_HERMES_IT=1` (Hermes and Docker, no model): Hermes' real `write_file`, `terminal` and `read_file` tools reach the container (`/work`, user `nobody`, files written by one read by another), and creating Hermes' local backend, its Docker backend, or `LocalEnvironment` directly is refused. A session on a model the provider does not have is an error, not a judged run (the provider rejects it, so it costs nothing).
 - `METASKILL_HERMES_LIVE=1` (also the configured model): one real session per variant through `run_skill`, with no errors and every metric measured.
+
+`seconds` in a run's metrics is the session's own time as the child measured it (`AgentRun.seconds`), which leaves out the one to two seconds Hermes takes to start; an agent that does not measure it gets the runner's clock.
 
 ## 6. Hermes internals this relies on
 

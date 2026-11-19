@@ -90,6 +90,31 @@ def test_skill_message_leaves_out_links_the_runner_does_not_copy(tmp_path):
     assert "- scripts/total.sh" in message and "link.txt" not in message
 
 
+def test_skill_message_lists_exactly_the_files_the_runner_copies(tmp_path):
+    # One rule (runner.copied) for the copy and the list, so the agent is never pointed at a
+    # file that is not in the sandbox: hard links and paths outside the skill too.
+    skill = make_skill(tmp_path, {"scripts/total.sh": "echo 60\n"})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.env").write_text("KEY=x", encoding="utf-8")
+    try:
+        (skill.path / "linked-dir").symlink_to(outside, target_is_directory=True)
+        os.link(outside / "secret.env", skill.path / "hard.md")
+    except OSError:
+        pytest.skip("cannot create links here")
+    skill.files += [Path("linked-dir/secret.env"), Path("hard.md")]
+    message = skill_message(skill)
+    assert "- scripts/total.sh" in message
+    assert "secret.env" not in message and "hard.md" not in message
+
+
+def test_the_sessions_own_seconds_reach_the_run(tmp_path):
+    run = fake_agent(tmp_path, writes({**OK_RESULT, "seconds": 4.5})).run("p", None, docker_workspace())
+    assert run.seconds == 4.5
+    assert fake_agent(tmp_path, writes(OK_RESULT)).run("p", None, docker_workspace()).seconds is None
+    assert fake_agent(tmp_path, writes({**OK_RESULT, "seconds": "soon"})).run("p", None, docker_workspace()).seconds is None
+
+
 def test_a_skill_without_bundled_files_has_no_file_list(tmp_path):
     assert "supporting files" not in skill_message(make_skill(tmp_path))
 

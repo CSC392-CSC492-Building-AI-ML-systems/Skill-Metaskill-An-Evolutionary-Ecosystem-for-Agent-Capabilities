@@ -64,15 +64,19 @@ class Agent(Protocol):
 
 @dataclass
 class AgentRun:
-    output: str           # the agent's final reply
-    tokens: int = 0
-    tool_calls: int = 0
-    transcript: str = ""  # the full session, for the log
+    output: str                    # the agent's final reply
+    input_tokens: int = 0          # also output_tokens, reasoning_tokens, cache_read_tokens,
+    llm_calls: int = 0             # cache_write_tokens: see the class docstring
+    tool_calls: int | None = 0     # None: the agent could not measure them
+    transcript: str = ""           # the full session, for the log
+    seconds: float | None = None   # the session's own time; None: the runner's clock
 ```
+
+`seconds` lets an agent report its session without its own start-up (Hermes takes a second or two to start); the runner records it in the run's metrics when it is a non-negative number, and uses its own clock otherwise.
 
 The session itself, its model calls, runs on this machine: it needs the user's provider and credentials, which never enter the sandbox. Everything it does runs in `workspace`: every command goes through `workspace.run_command`, every file it reads or writes is in `workspace.root`, and for a `with_skill` run the skill is already in `workspace.skill_dir` (`/tmp/skill`).
 
-**The runner copies the skill, not the agent**, so every `with_skill` run starts from the same files instead of whatever the agent chose to copy. `SKILL.md` and every bundled file in `skill.files` go into `/tmp/skill`, laid out as in the skill's folder and copied as bytes. Links and hard links are left out, as for the judge ([judge.md](judge.md)): either could be a file outside the skill, e.g. `~/.hermes/.env`. The run's log lists them (`skill files left out (links): ...`), so a run that needed one does not fail without a hint. The skill has to fit in `/tmp` (64 MB), which is far above a normal skill. If `SKILL.md` itself is one, the run is an error (2.3), not a run without the skill. `baseline` runs get no skill files. `/tmp/skill` is outside `/work`, so the skill does not use up the run's space and the judges do not read it as the run's work.
+**The runner copies the skill, not the agent**, so every `with_skill` run starts from the same files instead of whatever the agent chose to copy. `SKILL.md` and every bundled file in `skill.files` go into `/tmp/skill`, laid out as in the skill's folder and copied as bytes. Links, hard links and paths that resolve outside the skill are left out, as for the judge ([judge.md](judge.md)): any could be a file outside the skill, e.g. `~/.hermes/.env`. `runner.copied(skill, rel)` is that one rule, used both for the copy and for any list of files shown to the agent, so the agent is never pointed at a file that is not there. The run's log lists them (`skill files left out (links): ...`), so a run that needed one does not fail without a hint. The skill has to fit in `/tmp` (64 MB), which is far above a normal skill. If `SKILL.md` itself is one, the run is an error (2.3), not a run without the skill. `baseline` runs get no skill files. `/tmp/skill` is outside `/work`, so the skill does not use up the run's space and the judges do not read it as the run's work.
 
 The Hermes implementation is `HermesAgent` ([hermes_agent.md](hermes_agent.md)). Each session runs in a process of its own on Hermes' interpreter; Hermes' terminal and file tools reach the run's container through a backend of ours that `docker exec`s into it, not through Hermes' own Docker backend, so every isolation flag stays in `sandbox.py`. The skill is given as Hermes preloads one, pointing at `/tmp/skill`; tokens come from the session's usage and tool calls are counted from its messages.
 
