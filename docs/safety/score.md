@@ -69,7 +69,7 @@ Examples:
 **`detail`**: empty when the status is `ok`. Otherwise one line per backend that was not `ok`, taken from its `BackendResult.detail`:
 
 ```
-cisco: Cisco skill-scanner not installed; run `hermes plugins disable metaskill; hermes plugins enable metaskill` in a terminal, then restart Hermes
+cisco: Cisco skill-scanner not installed (the optional metaskill-cisco add-on); run `hermes plugins install CSC392-CSC492-Building-AI-ML-systems/Skill-Metaskill-An-Evolutionary-Ecosystem-for-Agent-Capabilities#plugins/metaskill-cisco` in a terminal, then restart Hermes
 llm-review: no judge configured
 ```
 

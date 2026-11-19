@@ -64,7 +64,7 @@ The sketch's `except SkillScannerError` would catch neither: a setup failure wou
 
 ### `available()`
 
-True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. Hermes installs the scanner from `plugin.yaml`, so this is normally true. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
+True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. The scanner is the optional `metaskill-cisco` add-on ([evaluate-safety.md](../evaluate-safety.md) 3.1), so this is true once the user has installed it. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
 
 ### `scan(skill, tier)`
 

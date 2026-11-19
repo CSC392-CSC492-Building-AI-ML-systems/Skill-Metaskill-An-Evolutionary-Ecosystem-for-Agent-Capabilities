@@ -15,7 +15,7 @@ from ..models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
 from . import local
 from .checks import CHECKS_VERSION, ChecksBackend, delete_targets
-from .cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
+from .cisco import ADDON, INSTALL_COMMAND, PACKAGE, CiscoBackend
 from .findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
 from .hermes_bridge import PluginLlm
@@ -169,10 +169,11 @@ def missing_dependencies() -> list[Dependency]:
     """
     if CiscoBackend().available():
         return []
-    # No install_command: Hermes asks the user to consent, so the commands need the user's
-    # terminal. Run by the agent without one, they can leave the plugin disabled.
+    # No install_command: the scanner is the optional metaskill-cisco add-on, and Hermes asks
+    # the user to consent to installing it, so the command needs the user's terminal.
     return [Dependency(CiscoBackend.name, PACKAGE, "",
-                       reason=f"run `{INSTALL_COMMAND}` in a terminal, then restart Hermes")]
+                       reason=f"optional add-on {ADDON}: run `{INSTALL_COMMAND}` in a terminal, "
+                              "then restart Hermes")]
 
 
 def versions() -> dict[str, str]:

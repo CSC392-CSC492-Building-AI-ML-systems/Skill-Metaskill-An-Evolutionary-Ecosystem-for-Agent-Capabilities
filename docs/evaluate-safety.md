@@ -66,7 +66,7 @@ The scanner's own diagnostic notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET
 
 ### 3.1 Cisco skill-scanner (primary)
 
-`cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing) under `python_dependencies` in `plugin.yaml`. Requires Python 3.11 to 3.14 (from the package metadata); tested on 3.13.
+`cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing) under `python_dependencies` in the optional add-on's `plugins/metaskill-cisco/plugin.yaml`. Requires Python 3.11 to 3.14 (from the package metadata); tested on 3.13.
 
 Chosen because it installs as a normal pinned dependency, has a Python SDK (no subprocess or output parsing), accepts a skill directory or a directory of skills, and publishes accuracy numbers.
 
@@ -77,7 +77,9 @@ from skill_scanner import SkillScanner
 result = SkillScanner(analyzers=[...]).scan_skill("/path/to/skill")
 ```
 
-It is a required dependency of the plugin. Hermes installs it into its own environment when the plugin is enabled, after the user consents; declining leaves the plugin disabled. `pip install` does not reach that environment, which has no pip.
+It is an **optional add-on**, `metaskill-cisco` (`plugins/metaskill-cisco`), installed like the Laya add-on for generalize: `hermes plugins install <repo>#plugins/metaskill-cisco`. Hermes installs the scanner into its own environment when the add-on is installed, after the user consents; declining leaves metaskill working, without Cisco. `pip install` does not reach that environment, which has no pip. The add-on carries no code: the adapter (`cisco.py`) uses the scanner whenever it can be imported.
+
+It used to be a required dependency in metaskill's own `plugin.yaml` (decision 6 below, revised in MET-45): enabling metaskill then asked to install it, and declining left the whole plugin disabled, so `generalize` and `personalize` could not be used without a scanner only `evaluate` needs.
 
 If the scanner is still missing when evaluate runs, evaluation continues without Cisco. It does not fail.
 
@@ -274,6 +276,6 @@ Backend and unit tests in section 8 remain implementation tests. Reuse shared fi
 3. Decided: scores derive from CVSS v3.1 qualitative bands (cardinal) and the ordinal ranking from NIST FIPS-199 magnitude + recoverability. A full per-category rationale with CWE/OWASP tags, and a κ reproducibility check, are still owed. See [safety/severity-scale.md](safety/severity-scale.md). (5)
 4. Default token cap per scan; the per-scan cost is now measured. (4)
 5. Whether to add SkillSpector for `excess-scope`. (3.4)
-6. Decided: Cisco is a required dependency, declared in `plugin.yaml`. (3.1)
+6. Decided: Cisco is the optional `metaskill-cisco` add-on (revised in MET-45; it was a required dependency in `plugin.yaml`, which blocked the whole plugin when declined). Without it, safety is `partial` and the tool gives the install command. (3.1)
 7. Whether the `deep` review may ever make a result more lenient than the deterministic layers, by downgrading or clearing a finding. Example: Cisco's `DATA_EXFIL_NETWORK_REQUESTS` on `arxiv`'s requests to arXiv. If yes: which findings, by how much, keeping the original, and how to stop a skill talking the reviewer into it. Re-checking skipped warnings is not covered, because it can only add findings. See [safety/review.md](safety/review.md). (3.3)
 8. Whether a local warning (a delete that would hit important files on this machine only) should do more than warn: a per-machine verdict that `rank` uses for this user, or a confirmation before the skill is run or recommended here. The safety score stays the same on every machine either way. See [safety/local.md](safety/local.md), "Score and local warning".
