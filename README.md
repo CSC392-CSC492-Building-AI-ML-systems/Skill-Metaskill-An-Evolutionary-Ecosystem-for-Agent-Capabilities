@@ -17,7 +17,7 @@ New-Item -ItemType Junction -Path "$env:LOCALAPPDATA\hermes\plugins\metaskill" -
 hermes plugins enable metaskill
 ```
 
-Enabling installs nothing else. Cisco's skill scanner, for the Safety score, is the optional [metaskill-cisco](#optional-add-on-cisco-skill-scanner) add-on.
+Enabling installs nothing else. Cisco's skill scanner, for the Safety score, is the optional [metaskill-cisco](#optional-add-on-cisco-skill-scanner) add-on. If you are updating from an earlier metaskill, install the add-on to keep the scanner.
 
 Once `evaluate` runs test tasks, it also needs [Docker](https://docs.docker.com/get-started/get-docker/), installed and running, to run the agent's actions and task checks in a sandbox, and the sandbox image, pinned by digest:
 
@@ -67,6 +67,10 @@ Hermes asks before installing the scanner package; run it in a terminal and rest
 afterwards. Use this command rather than `pip install`, which would reach a different
 Python. Without the add-on, Safety is marked `partial` and the `evaluate` result says how to
 install it. Details in [plugins/metaskill-cisco](plugins/metaskill-cisco/README.md).
+
+**Upgrading from metaskill before MET-45:** metaskill used to install the scanner itself.
+Updating removes it, so install this add-on after `hermes plugins update metaskill` to keep
+the full Safety score.
 
 ### Optional add-on: Laya PII detection
 

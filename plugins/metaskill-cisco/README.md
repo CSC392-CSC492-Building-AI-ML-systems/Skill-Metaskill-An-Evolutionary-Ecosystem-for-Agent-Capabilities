@@ -21,8 +21,14 @@ Hermes asks before it installs the scanner package. Run the command in a termina
 restart Hermes if it was running. Use this rather than `pip install`, which would reach a
 different Python than Hermes'.
 
+**Upgrading from metaskill before MET-45:** metaskill used to install the scanner itself.
+Hermes builds its Python environment from the enabled plugins and removes packages that
+none of them declares, so after `hermes plugins update metaskill` the scanner is gone
+until you install this add-on, and Safety is `partial` in the meantime.
+
 Turn the add-on off with `hermes plugins disable metaskill-cisco`, or remove it with
-`hermes plugins remove metaskill-cisco`.
+`hermes plugins remove metaskill-cisco`. The scanner leaves Hermes' environment when
+Hermes next rebuilds it, so restart Hermes afterwards.
 
 ## Notes
 

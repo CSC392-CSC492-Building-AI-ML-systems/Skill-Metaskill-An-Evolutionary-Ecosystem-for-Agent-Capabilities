@@ -11,6 +11,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 from metaskill.evaluate.safety import cisco, missing_dependencies
 
 REPO = Path(__file__).resolve().parent.parent
@@ -23,8 +25,45 @@ def _dependencies(manifest: Path) -> list[str]:
     return re.findall(r'-\s*"([^"]+)"', block.group(1)) if block else []
 
 
+def declares_python_dependencies(text: str) -> bool:
+    """Whether a manifest declares Python packages in any way Hermes reads
+    (hermes_cli/plugins_loader._declared_requirements): either key, block or flow style, quoted
+    or not. Deliberately blunt: any such key counts unless its value is an empty list, so no
+    spelling of a list can slip past it, and no YAML parser (CI has only pytest) is needed."""
+    for match in re.finditer(r"^[ \t]*(?:python|pip)_dependencies[ \t]*:(.*)$", text, re.M):
+        if match.group(1).split("#")[0].strip() != "[]":
+            return True
+    return False
+
+
 def test_metaskill_itself_declares_no_python_dependencies():
-    assert _dependencies(REPO / "plugin.yaml") == []
+    assert not declares_python_dependencies((REPO / "plugin.yaml").read_text(encoding="utf-8"))
+    # An authored pyproject.toml takes precedence over the manifest in Hermes.
+    assert not (REPO / "pyproject.toml").exists()
+
+
+@pytest.mark.parametrize("text", [
+    'python_dependencies: ["cisco-ai-skill-scanner==2.2.1"]\n',
+    "python_dependencies:\n  - cisco-ai-skill-scanner==2.2.1\n",
+    "python_dependencies:\n  - \"cisco-ai-skill-scanner==2.2.1\"\n",
+    "pip_dependencies:\n  - cisco-ai-skill-scanner==2.2.1\n",
+    "python_dependencies: [cisco-ai-skill-scanner==2.2.1]  # the scanner\n",
+    "name: x\n  python_dependencies: [a]\n",
+], ids=["flow", "block unquoted", "block quoted", "pip_dependencies", "flow with comment", "indented"])
+def test_the_guard_sees_every_way_hermes_reads_a_dependency(text):
+    # The guard above is only as good as this: a reader that missed one of these would let the
+    # original bug (metaskill declaring the scanner) come back unnoticed.
+    assert declares_python_dependencies(text)
+
+
+@pytest.mark.parametrize("text", [
+    "name: metaskill\nversion: 0.2.0\n",
+    "python_dependencies: []\n",
+    "pip_dependencies: []  # none\n",
+    "# python_dependencies: [cisco]\n",
+], ids=["no key", "empty list", "empty list with comment", "commented out"])
+def test_the_guard_accepts_a_manifest_that_declares_nothing(text):
+    assert not declares_python_dependencies(text)
 
 
 def test_the_addon_pins_the_version_the_adapter_is_tested_with():
