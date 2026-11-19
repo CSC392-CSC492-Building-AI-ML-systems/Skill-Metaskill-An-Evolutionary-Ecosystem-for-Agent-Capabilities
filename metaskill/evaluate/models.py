@@ -623,6 +623,11 @@ class DimensionScore:
     detail: str = ""  # what was missing or went wrong, when status is not OK
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    # The model(s) an LLM judged this dimension with, as "provider/model" joined by ", ",
+    # and their tokens and calls ({input_tokens, output_tokens, calls}); empty when no model
+    # ran. Evaluate merges these into ReportMeta.judge_model/judge_usage (models.md).
+    judge_model: str = ""
+    judge_usage: dict[str, int] = field(default_factory=dict)
 
     def to_status(self) -> DimensionStatus:
         """The part of this result the report keeps per dimension."""
@@ -637,6 +642,8 @@ class DimensionScore:
             "detail": self.detail,
             "rubric": [r.to_dict() for r in self.rubric],
             "findings": [f.to_dict() for f in self.findings],
+            "judge_model": self.judge_model,
+            "judge_usage": dict(self.judge_usage),
         }
 
     @classmethod
@@ -649,6 +656,8 @@ class DimensionScore:
             detail=data.get("detail", ""),
             rubric=[RubricRating.from_dict(r) for r in data["rubric"]],
             findings=[Finding.from_dict(f) for f in data["findings"]],
+            judge_model=data.get("judge_model", ""),
+            judge_usage=dict(data.get("judge_usage") or {}),
         )
 
     def __post_init__(self) -> None:

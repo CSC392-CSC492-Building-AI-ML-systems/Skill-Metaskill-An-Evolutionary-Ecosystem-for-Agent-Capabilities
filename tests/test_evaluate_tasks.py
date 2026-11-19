@@ -310,6 +310,42 @@ def test_without_llm_checks_no_judge_is_recorded(tmp_path, harness):
     assert report(result).meta.judge_model == "" and report(result).meta.judge_usage == {}
 
 
+# --- Every judge reaches the report header (MET-51) ---------------------------------------
+
+
+OWN_JUDGE = (  # a dimension that builds a judge of its own and reports it on its score
+    "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+    "def score(skill, config, llm=None, **_):\n"
+    "    return DimensionScore(Dimension.CONFIG_CLEANLINESS, 0.8, judge_model='openai/rubric-model',\n"
+    "                          judge_usage={'input_tokens': 500, 'output_tokens': 50, 'calls': 1})\n")
+
+
+def test_every_judge_is_counted_once_in_the_header(tmp_path, harness, placeholder):
+    # Three sources, each once: the task runs' LLM checks (2 calls), the run's shared judge
+    # that Clarity uses (1 call; its reply does not fit the rubric, but the call was made),
+    # and a dimension with a judge of its own, reported on its score (1 call).
+    placeholder(Dimension.CONFIG_CLEANLINESS, OWN_JUDGE)
+    harness.tasks.write_text(json.dumps({"tasks": [{
+        "task_id": "report", "description": "d", "prompt": "write the report",
+        "checks": [{"judge": "llm", "checklist": ["says it wrote the report"]}]}]}))
+    reply = {"items": [{"item": 1, "met": True, "reason": "", "quote": "wrote the report to report.txt"}]}
+    harness.agent_act = writes_report_with_skill
+    harness.config.write_text(json.dumps({"runs_per_task": 1, "judge_retries": 0}))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks,
+                            ctx=SimpleNamespace(llm=FakeLlm(*[reply] * 8)))
+    meta = report(result).meta
+    assert meta.judge_model == "fake/judge-model, openai/rubric-model"
+    assert meta.judge_usage == {"input_tokens": 650, "output_tokens": 65, "calls": 4}
+
+
+def test_a_dimensions_own_judge_is_recorded_without_tasks(tmp_path, placeholder):
+    placeholder(Dimension.CONFIG_CLEANLINESS, OWN_JUDGE)
+    meta = report(evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")).meta
+    assert meta.judge_model == "openai/rubric-model"
+    assert meta.judge_usage == {"input_tokens": 500, "output_tokens": 50, "calls": 1}
+
+
 # --- Task dimensions get the planned task ids (for Quality's assess) ---------------------
 
 
