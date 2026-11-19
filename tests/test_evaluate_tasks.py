@@ -113,6 +113,10 @@ def test_tasks_run_once_per_skill_and_efficiency_scores_them(tmp_path, harness):
     assert skill.dimensions[Dimension.QUALITY].status is Status.OK and skill.scores.quality == 0.75
     assert skill.lift == 0.0
     assert report(result).meta.agent_model == "fake-model"
+    # Robustness scores the same runs: every with-skill run is identical, so it is 1.
+    robustness = skill.dimensions[Dimension.ROBUSTNESS]
+    assert robustness.status is Status.OK and skill.scores.robustness == 1.0
+    assert f"2 task(s), {RUNS} runs each" in robustness.reason
 
 
 def test_run_logs_go_into_this_calls_report_folder(tmp_path, harness):
@@ -134,6 +138,45 @@ def test_rank_runs_every_skill_on_the_same_tasks(tmp_path, harness):
         by_skill[call.skill] += 1
     assert by_skill == {"a": 2 * RUNS, "b": 2 * RUNS, None: 2 * 2 * RUNS}  # None: baselines
     assert result["task_runs"]["sessions"] == 2 * 2 * RUNS * 2
+
+
+def test_skills_with_the_same_name_keep_their_own_logs(tmp_path, harness, monkeypatch):
+    # A skill and its generalized copy share a frontmatter name. Logs were kept by name,
+    # so the second skill's runs replaced the first's, and the first's results pointed at
+    # the other skill's sessions. Names are set through Skill.load: frontmatter needs Hermes.
+    real_load = evaluate.Skill.load
+
+    def load(path):
+        skill = real_load(path)
+        skill.name = "same"
+        return skill
+    monkeypatch.setattr(evaluate.Skill, "load", staticmethod(load))
+    harness.agent_act = lambda prompt, skill, workdir: AgentRun(
+        output=f"from {Path(skill.path).name if skill else 'none'}", input_tokens=1, llm_calls=1)
+    result = rank_skills([make_skill(tmp_path, "original"), make_skill(tmp_path, "copy")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    run_dir = Path(result["artifacts"][0]).parent
+    logs = {folder: (run_dir / folder / "logs" / "t1-with_skill-r1.txt").read_text(encoding="utf-8")
+            for folder in ("same", "same-2")}
+    assert "from original" in logs["same"] and "from copy" in logs["same-2"]
+    # Each result names the log of its own session.
+    for skill in report(result).skills:
+        [test] = [t for t in skill.tests if (t.task_id, t.variant, t.run) == ("t1", Variant.WITH_SKILL, 1)]
+        folder = test.output.split("(full log: ")[1].split("/")[0]
+        assert test.output.split(" (full log")[0] in logs[folder]
+    assert any("more than one skill is named same" in w for w in result["warnings"])
+
+
+@pytest.mark.parametrize("names, folders", [
+    (["a", "b"], ["a", "b"]),
+    (["x", "x", "x"], ["x", "x-2", "x-3"]),
+    (["x", "x-2", "x"], ["x", "x-2", "x-3"]),  # a skill really named x-2 keeps its folder
+    (["Skill", "skill"], ["Skill", "skill-2"]),  # one folder on Windows and macOS
+])
+def test_each_skill_of_a_call_gets_its_own_log_folder(names, folders):
+    taken = set()
+    assert [evaluate._log_folder(name, taken) for name in names] == folders
 
 
 def test_a_relative_tasks_path_is_the_users_session_folder(tmp_path, harness):
@@ -183,6 +226,10 @@ def test_runs_the_runner_cannot_make_are_errors_not_scores(tmp_path, harness):
     # Quality cannot compare without runs, so lift stays None rather than an invented 0.
     assert skill.dimensions[Dimension.QUALITY].status is Status.ERROR and skill.lift is None
     assert "resolves the terminal backend" in efficiency.detail
+    # Robustness has no runs to compare either: an error naming the cause, not a skip.
+    robustness = skill.dimensions[Dimension.ROBUSTNESS]
+    assert robustness.status is Status.ERROR and skill.scores.robustness is None
+    assert "resolves the terminal backend" in robustness.detail
     assert skill.dimensions[Dimension.SAFETY].status is not Status.SKIPPED  # still scored
 
 
@@ -199,8 +246,9 @@ def test_an_agent_failing_a_task_is_a_scored_failure_not_an_error(tmp_path, harn
     skill = report(result).skills[0]
     with_skill = [t for t in skill.tests if t.variant is Variant.WITH_SKILL]
     assert with_skill and not any(t.passed for t in with_skill)
-    # Every with-skill run failed, so efficiency has nothing to credit (success-gated).
-    assert skill.dimensions[Dimension.EFFICIENCY].status is Status.SKIPPED
+    # Every with-skill run failed, so efficiency has nothing to credit (success-gated): 0.
+    assert skill.dimensions[Dimension.EFFICIENCY].status is Status.OK
+    assert skill.scores.efficiency == 0.0
 
 
 def test_a_skill_name_that_cannot_be_a_log_folder_still_gets_safety(tmp_path, harness, monkeypatch):
@@ -381,6 +429,51 @@ def test_a_skill_that_changes_the_outcome_gets_its_lift_and_quality(tmp_path, ha
     assert skill.dimensions[Dimension.QUALITY].status is Status.OK and skill.scores.quality == 1.0
     assert "1 task(s), 2 run(s) per task per condition" in skill.dimensions[Dimension.QUALITY].detail
 
+
+
+# --- Robustness scores the runs, and the ranking uses it ------------------------------------
+
+
+def flaky_for(name):
+    """The agent with skill `name` passes every run, but answers differently each time;
+    with any other skill, or none, it answers the same way every time. Pass rates, costs
+    and lift are equal, so only Robustness tells the two skills apart."""
+    seen = []
+
+    def act(prompt, skill, workdir):
+        tokens = dict(input_tokens=100, output_tokens=10, llm_calls=2, tool_calls=1)
+        if skill is not None and skill.name == name:
+            seen.append(prompt)
+            return AgentRun(output=f"answer {len(seen)}\nwritten another way {len(seen)}", **tokens)
+        return AgentRun(output="the answer", **tokens)
+    return act
+
+
+def test_rank_orders_a_consistent_skill_above_a_flaky_one_on_robustness(tmp_path, harness,
+                                                                        placeholder):
+    # Clarity needs a model and Config Cleanliness is not complete yet; fixed stand-ins let
+    # both skills be ranked, so robustness decides the order.
+    for dimension in (Dimension.CLARITY, Dimension.CONFIG_CLEANLINESS):
+        placeholder(dimension, (
+            "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+            "def score(skill, config, llm=None, **_):\n"
+            f"    return DimensionScore(Dimension.{dimension.name}, 0.5)\n"))
+    harness.agent_act = flaky_for("flaky")
+    result = rank_skills([make_skill(tmp_path, "flaky"), make_skill(tmp_path, "steady")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    assert result["counts"]["ranked"] == 2
+    steady, flaky = report(result).skills  # in ranking order
+    assert (steady.name, flaky.name) == ("steady", "flaky")
+    assert steady.scores.robustness == 1.0 and flaky.scores.robustness < 1.0
+    for dimension in Dimension:  # robustness is the only difference
+        if dimension is not Dimension.ROBUSTNESS:
+            assert getattr(steady.scores, dimension.value) == getattr(flaky.scores, dimension.value)
+    assert steady.scores.overall > flaky.scores.overall
+    assert "Use steady" in result["table"]
+    rows = [line for line in result["table"].splitlines() if line.startswith("| 1 ")
+            or line.startswith("| 2 ")]
+    assert rows[0].startswith("| 1 | steady | ") and " 1.00 " in rows[0]
 
 
 @pytest.mark.parametrize("dimension", sorted(evaluate.TASK_DIMENSIONS, key=lambda d: d.value),

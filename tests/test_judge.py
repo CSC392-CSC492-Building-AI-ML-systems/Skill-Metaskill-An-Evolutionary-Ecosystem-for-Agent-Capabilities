@@ -781,6 +781,21 @@ def test_file_exists_does_not_follow_links_out_of_the_run_folder(tmp_path):
     assert not verdict.passed and "does not exist" in verdict.reason
 
 
+@pytest.mark.parametrize("target", ["report.txt", "a", "a/inside.txt"])
+def test_a_link_loop_left_by_the_run_is_a_missing_file_not_an_error(tmp_path, target):
+    # `ln -s report.txt report.txt` or a -> b -> a: resolving raises (RuntimeError before
+    # Python 3.13). Raised, it escaped the runner and dropped the skill from the report.
+    try:
+        (tmp_path / "report.txt").symlink_to("report.txt")
+        (tmp_path / "a").symlink_to("b")
+        (tmp_path / "b").symlink_to("a")
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+    verdict = DeterministicJudge().judge(
+        TASK, deterministic(CheckKind.FILE_EXISTS, target), run_in(tmp_path))
+    assert not verdict.passed and "does not exist" in verdict.reason
+
+
 def host_runner(command, workdir, timeout):
     """Runs on this machine, so only for the tests' own commands, never a skill's."""
     try:

@@ -867,8 +867,15 @@ class DeterministicJudge:
             raise JudgeError(f"file_exists target {check.target} is outside the run folder")
         # A link the run made that leads out of the folder does not count as the file.
         root = run.workdir.resolve()
-        path = (root / target).resolve()
-        found = path.is_relative_to(root) and path.exists()
+        try:
+            path = (root / target).resolve()
+            found = path.is_relative_to(root) and path.exists()
+        except (OSError, RuntimeError):
+            # The run left a link loop (`ln -s a a`) or a path that cannot be read: there
+            # is no file there. RuntimeError is how Python before 3.13 reports a loop.
+            # Raising would turn the run's own doing into an error that leaves it unscored.
+            return _binary(False, f"{check.target} does not exist (a link loop or an "
+                                  "unreadable path)")
         return _binary(found, f"{check.target} {'exists' if found else 'does not exist'}")
 
     def _exit_code(self, check: Check, run: RunOutput) -> Verdict:

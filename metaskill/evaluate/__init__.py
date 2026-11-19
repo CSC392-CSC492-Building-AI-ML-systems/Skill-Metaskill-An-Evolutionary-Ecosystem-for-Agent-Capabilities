@@ -39,7 +39,8 @@ from pathlib import Path
 from typing import Any
 
 from .judge import (
-    MAX_REASON_CHARS, Judge, JudgeCallFailed, JudgeError, JudgeUnavailable, TokenUsage, clean)
+    JUDGE_TASK, MAX_REASON_CHARS, Judge, JudgeCallFailed, JudgeError, JudgeUnavailable,
+    TokenUsage, clean)
 from .models import (
     Dimension,
     DimensionScore,
@@ -54,8 +55,6 @@ from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
 from .runner import RunnerResult, report_dir, run_tasks, timestamp
 from .tasks import TaskError, load_tasks
-
-_log = logging.getLogger(__name__)
 
 _log = logging.getLogger(__name__)
 
@@ -75,6 +74,12 @@ TASK_DIMENSIONS = frozenset({Dimension.QUALITY, Dimension.ROBUSTNESS, Dimension.
 
 # Dimensions whose score() also takes judge=, the run's shared Judge.
 JUDGED = {Dimension.CLARITY}
+
+# Dimensions whose score() takes task=, the auxiliary task their own model calls go through
+# (safety's deep tier: the review's judge and Cisco's LLM analyzer). Given only where Hermes
+# registered it, as Judge.from_context does, so every judge of a call runs on the model the
+# user set for "Metaskill judge", not the deep tier alone on the main model.
+TASKED = {Dimension.SAFETY}
 
 # DimensionStatus.detail when the judge's provider did not answer (JudgeCallFailed).
 PROVIDER_FAILED = "failed: the judge model's provider did not answer"
@@ -156,10 +161,21 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     sessions = run_errors = 0
     judge_models: set[str] = set()
     judge_usage = TokenUsage()
+    folders: set[str] = set()  # log folders taken in this call
+    named: set[str] = set()  # names already warned about
     for path in paths:
         try:
-            result, runs, judged = _result(Skill.load(_folder(path)), config, llm, tasks, judge=judge,
-                                           agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx)
+            skill = Skill.load(_folder(path))
+            log_folder = _log_folder(skill.name, folders)
+            if log_folder != skill.name and skill.name not in named:
+                named.add(skill.name)
+                warnings.append(clean(
+                    f"more than one skill is named {skill.name}: the report has a row for "
+                    f"each, and each has its own run log folder ({skill.name}, "
+                    f"{log_folder}, ...)", MAX_REASON_CHARS))
+            result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
+                                           agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx,
+                                           log_folder=log_folder)
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))
@@ -220,6 +236,21 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     if tasks is not None:
         response["task_runs"] = {"tasks": len(tasks), "sessions": sessions, "errors": run_errors}
     return response
+
+
+def _log_folder(name: str, taken: set[str]) -> str:
+    """A run log folder for a skill named `name` that no other skill of this call has, and
+    mark it taken. Two skills can share a name (a skill and its generalized copy); the
+    second gets `name-2`, or the next free number if a skill is really named that. A name
+    that is not text is returned as it is: the runner refuses it (a ValueError)."""
+    if not isinstance(name, str):
+        return name
+    folder, n = name, 1
+    while folder.casefold() in taken:  # casefold: one folder on Windows and macOS
+        n += 1
+        folder = f"{name}-{n}"
+    taken.add(folder.casefold())
+    return folder
 
 
 def _config(config_path: str | Path | None, output_path: str | Path | None,
@@ -333,7 +364,7 @@ def _judge(ctx: Any, config: EvaluationConfig) -> Judge | None:
 
 def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None = None, *,
             judge: Judge | None = None, agent: Any = None, sandbox: Any = None,
-            run_dir: Path | None = None, ctx: Any = None,
+            run_dir: Path | None = None, ctx: Any = None, log_folder: str | None = None,
             ) -> tuple[SkillResult, RunnerResult | None, list[tuple[str, dict[str, int]]]]:
     """The skill's result, its task runs (None when no tasks ran), and the (judge_model,
     judge_usage) of every dimension that judged with a judge of its own. judge is the
@@ -344,11 +375,12 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
     if tasks is not None:
         try:
             runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
-                             sandbox=sandbox)
+                             sandbox=sandbox, log_folder=log_folder)
         except ValueError as e:  # a skill name that cannot be a log folder: no run made
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
                                 errors=[clean(str(e), MAX_REASON_CHARS)])
-    found = {d: _score(d, skill, config, llm, runs, judge) for d in Dimension}
+    task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
+    found = {d: _score(d, skill, config, llm, runs, judge, task) for d in Dimension}
     return SkillResult(
         name=skill.name,
         scores=make_scores(found, config),
@@ -377,7 +409,8 @@ def _lift(config: EvaluationConfig, runs: RunnerResult | None) -> float | None:
 
 
 def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
-           llm: Any, runs: RunnerResult | None = None, judge: Judge | None = None) -> DimensionScore:
+           llm: Any, runs: RunnerResult | None = None, judge: Judge | None = None,
+           task: str | None = None) -> DimensionScore:
     """The dimension's score from its module. Not built is `skipped`. A module that is
     there but fails is `error`, as a broken import must not pass for an unbuilt one. A
     task-based dimension gets the skill's runs, and is `skipped` when no tasks ran."""
@@ -395,7 +428,9 @@ def _score(dimension: Dimension, skill: Skill, config: EvaluationConfig,
                                       detail=f"{dimension.value} needs task runs; no tasks "
                                              "were given (tasks_path)")
             return scorer.score_runs(skill, config, runs)
-        extra = {"judge": judge} if dimension in JUDGED else {}
+        extra: dict[str, Any] = {"judge": judge} if dimension in JUDGED else {}
+        if dimension in TASKED and task:
+            extra["task"] = task
         return scorer.score(skill, config, llm=llm, **extra)
     except JudgeUnavailable:  # judge.md 3
         return DimensionScore(dimension, None, Status.SKIPPED, reason="Not scored",

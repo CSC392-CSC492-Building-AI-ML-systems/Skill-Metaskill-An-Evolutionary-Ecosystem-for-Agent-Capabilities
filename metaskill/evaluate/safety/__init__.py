@@ -15,7 +15,7 @@ from ..models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
 from . import local
 from .checks import CHECKS_VERSION, ChecksBackend, delete_targets
-from .cisco import ADDON, INSTALL_COMMAND, PACKAGE, CiscoBackend
+from .cisco import PACKAGE, CiscoBackend, not_installed_hint
 from .findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
 from .hermes_bridge import PluginLlm
@@ -48,9 +48,10 @@ def score(skill: Skill, config: EvaluationConfig,
     llm is Hermes's ctx.llm, needed for the deep tier's model calls. task is the registered
     auxiliary task to route those calls through; it defaults to None so a direct
     `score(skill, config, llm=ctx.llm)` never sends an unregistered task on an old Hermes.
-    The plugin should build backends with `backends_from_context(ctx, config)`, which sets
-    the task only where Hermes supports it (register_auxiliary_task), matching
-    Judge.from_context. backends defaults to the ones for config.safety_tier; tests pass fakes.
+    evaluate passes it (TASKED in evaluate/__init__.py) only where Hermes supports it
+    (register_auxiliary_task), matching Judge.from_context, so the deep tier runs on the
+    same model as every other judge. backends defaults to the ones for
+    config.safety_tier; tests pass fakes.
     """
     tier = config.safety_tier
     if backends is None:
@@ -171,9 +172,7 @@ def missing_dependencies() -> list[Dependency]:
         return []
     # No install_command: the scanner is the optional metaskill-cisco add-on, and Hermes asks
     # the user to consent to installing it, so the command needs the user's terminal.
-    return [Dependency(CiscoBackend.name, PACKAGE, "",
-                       reason=f"optional add-on {ADDON}: run `{INSTALL_COMMAND}` in a terminal, "
-                              "then restart Hermes")]
+    return [Dependency(CiscoBackend.name, PACKAGE, "", reason=not_installed_hint())]
 
 
 def versions() -> dict[str, str]:

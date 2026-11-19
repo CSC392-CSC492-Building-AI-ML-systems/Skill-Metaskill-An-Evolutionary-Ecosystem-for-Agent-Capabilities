@@ -198,6 +198,8 @@ When all runs pass but receive different partial-credit scores, agreement stays 
 
 **[OPEN]** Agreement and score spread overlap, particularly for binary scores. The proposed equal mixture is explicit and testable, but the team may choose a single consistency statistic or different weights.
 
+[evaluate-robustness.md](../evaluate-robustness.md) extends this formula, as implemented in `robustness.py`: two failures agree fully only when they fail the same way, and two further terms compare the runs' outputs (line diff) and methods. The examples above still hold.
+
 ## Clarity
 
 ### Rubric
@@ -286,6 +288,8 @@ Record raw measurements for every valid run regardless of the eventual method. D
 
 The selected method must specify resource weights, zero and missing measurements, failed tasks, task coverage, and cross-candidate comparability. Until that method is approved, this draft cannot prescribe a numeric Efficiency score or a definitive score for the all-failure case.
 
+**Interim implementation.** `evaluate` currently scores Efficiency `0` (status `ok`) when no task passes with the skill, and leaves it `skipped` only when there are no with-skill runs at all (see [evaluate-efficiency.md](../evaluate-efficiency.md)). A skipped dimension leaves a skill without an overall, so the worst skill would be listed as unranked instead of last. This is a stopgap that keeps such skills ranked, not the approved method: the team decision above still stands, and this behavior changes with it.
+
 ## Safety
 
 [The safety design, section 5](../evaluate-safety.md#5-data-model), owns how findings become a Safety score, including the provisional worst-finding mapping. Its categories, deduplication rules, backend handling, and validation cases remain maintained there. This document intentionally does not reproduce its severity-to-score table.
@@ -370,7 +374,7 @@ The other dimension values are illustrative outputs, not labels assigned to an a
 
 ### Consistent failure
 
-A skill fails every task on every repetition and receives task scores of zero. Under the proposed formulas, Quality is zero and Robustness is one. The Efficiency result is not determined by this draft because its success-conditioning policy remains open. If the eventual Efficiency method returns null, the skill is unranked; if it returns a valid numeric score and the other dimensions are numeric, an overall score can be calculated.
+A skill fails every task on every repetition and receives task scores of zero. Under the proposed formulas, Quality is zero and Robustness is one. The Efficiency result is not determined by this draft because its success-conditioning policy remains open. If the eventual Efficiency method returns null, the skill is unranked; if it returns a valid numeric score and the other dimensions are numeric, an overall score can be calculated. The current implementation returns `0` for this case (see the interim note under Efficiency), so the skill is ranked, last, and not unranked.
 
 This outcome exposes why Robustness must not be read as correctness.
 

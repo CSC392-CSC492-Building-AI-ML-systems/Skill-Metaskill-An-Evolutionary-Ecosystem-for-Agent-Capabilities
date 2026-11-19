@@ -45,6 +45,11 @@ Two ways the first prototype sent the agent's commands to **this machine** inste
 
 Either failing is a setup error, so no agent runs. The integration test probes both (section 5).
 
+Two more hold the agent to the container and to its own session:
+
+3. **The file tools go through the backend.** Hermes' file tools (`read_file`, `write_file`, `patch`, `search_files`) work on the host's files directly for a backend whose `uses_host_filesystem` is true (only its local one), and through the backend's commands otherwise. Our backend declares it false (and `is_local` false) itself rather than relying on `BaseEnvironment`'s default, so a Hermes that changed that default could not route them to this machine.
+4. **Nothing of the session outlives it** (`seal_agent`). After a turn, Hermes can fork the agent to review it and write memories or skills straight into the user's stores, and mirror the turn into an external memory provider; a skill under evaluation could steer either. Both are off today only indirectly (the agent has no `skill_manage` tool, and `skip_memory` leaves no memory provider), so the child also sets `skip_background_review` and refuses an agent that has a memory provider attached (a setup error).
+
 ## 3. The skill
 
 The skill is given the way `hermes -s <skill>` preloads one: the same activation note, the `SKILL.md` body, the skill directory, and the bundled files. Two things differ, because Hermes' own message points at the host:

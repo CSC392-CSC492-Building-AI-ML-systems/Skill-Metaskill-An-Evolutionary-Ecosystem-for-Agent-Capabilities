@@ -85,8 +85,10 @@ early and fails is cheap but worthless, so it earns no efficiency credit.
   (the agent loops until it hits a limit), so including them stops a cheap pass from hiding
   an expensive failure. Success decides whether a task counts; cost reflects what the skill
   actually spent.
-- If **no** with-skill run passed on any task, efficiency is `None` / `skipped` — there is
-  nothing to measure, and quality/robustness already record the failures.
+- If **no** with-skill run passed on any task, efficiency is `0` (`ok`): there is no
+  efficient success to credit. It used to be `None` / `skipped`, but a skipped dimension
+  leaves a skill without an `overall`, so the worst possible skill was listed as unranked
+  instead of last. With no with-skill runs at all it is still `skipped`.
 
 ## 4. Smoothing and missing baselines
 
