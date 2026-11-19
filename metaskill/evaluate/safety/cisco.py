@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import os
+import shutil
+import stat
+import tempfile
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
@@ -95,22 +99,42 @@ class CiscoBackend:
                     detail=(f"not run: the frontmatter expands to more than "
                             f"{MAX_FRONTMATTER_VALUES} values through YAML aliases, which "
                             "would stall the scanner"))
-            if tier is SafetyTier.DEEP:
-                if self.llm is None:
-                    result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)
-                    return _fell_back(result, "no Hermes LLM access (ctx.llm), so Cisco ran static only")
-                with self._route() as model:
-                    try:
-                        analyzers = self._build_deep_analyzers(model)
-                    except LLMSetupError as e:
-                        result = convert(self._run_scanner(skill.path, None), SafetyTier.STATIC)
-                        return _fell_back(result, str(e))
-                    return convert(self._run_scanner(skill.path, analyzers), tier)
-            return convert(self._run_scanner(skill.path, None), tier)
+            with tempfile.TemporaryDirectory(prefix="metaskill-cisco-") as tmp:
+                # The scanner reads the folder itself and, at the deep tier, sends what it
+                # reads to the model provider. A skill from git can hold a link such as
+                # notes.md -> ../../.hermes/.env, so it scans a copy without links, as the
+                # judge only reads files that are the skill's (judge.skill_sources).
+                # The folder keeps its name: the scanner may compare it with the frontmatter.
+                source = Path(skill.path)
+                copy, left_out = _without_links(source, Path(tmp) / (source.resolve().name or "skill"))
+                if "SKILL.md" in left_out:
+                    return BackendResult(
+                        self.name, BackendStatus.ERROR, tier,
+                        detail="not run: SKILL.md is a link or hard link, so it may be a "
+                               "file outside the skill")
+                result = self._scan_copy(copy, tier)
+            if left_out:
+                note = f"{len(left_out)} link(s) left out, not scanned: {', '.join(left_out[:5])}"
+                result.detail = "; ".join(p for p in (result.detail, note) if p)
+            return result
         except Exception as e:  # never raise into the caller
             return BackendResult(
                 self.name, BackendStatus.ERROR, tier,
                 detail=f"{type(e).__name__}: {e}")
+
+    def _scan_copy(self, path: Path, tier: SafetyTier) -> BackendResult:
+        if tier is SafetyTier.DEEP:
+            if self.llm is None:
+                result = convert(self._run_scanner(path, None), SafetyTier.STATIC)
+                return _fell_back(result, "no Hermes LLM access (ctx.llm), so Cisco ran static only")
+            with self._route() as model:
+                try:
+                    analyzers = self._build_deep_analyzers(model)
+                except LLMSetupError as e:
+                    result = convert(self._run_scanner(path, None), SafetyTier.STATIC)
+                    return _fell_back(result, str(e))
+                return convert(self._run_scanner(path, analyzers), tier)
+        return convert(self._run_scanner(path, None), tier)
 
     # --- The only methods that touch skill_scanner or LiteLLM. Tests replace them. ---
 
@@ -174,6 +198,35 @@ def convert(scan: dict[str, Any], tier: SafetyTier) -> BackendResult:
         reason = llm_errors[0] if llm_errors else "LLM analyzer did not run"
         return _fell_back(result, f"LLM analysis failed: {reason}")
     return result
+
+
+def _without_links(source: Path, dest: Path) -> tuple[Path, list[str]]:
+    """Copy the skill at source to dest without links: every regular file and folder,
+    hidden ones too (the scanner looks at those), but no symlink and no hard link, either
+    of which could be a file outside the skill. Returns dest and the paths left out,
+    relative to source with `/`, sorted."""
+    left_out: list[str] = []
+    dest.mkdir(parents=True)
+    for folder, dirs, files in os.walk(source, followlinks=False):
+        here = Path(folder)
+        rel = here.relative_to(source)
+        for name in list(dirs):
+            if (here / name).is_symlink():
+                dirs.remove(name)  # not descended into
+                left_out.append((rel / name).as_posix())
+            else:
+                (dest / rel / name).mkdir()
+        for name in files:
+            path = here / name
+            try:
+                info = path.lstat()
+            except OSError:
+                continue  # gone or unreadable: the scanner could not read it either
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                left_out.append((rel / name).as_posix())
+                continue
+            shutil.copyfile(path, dest / rel / name, follow_symlinks=False)
+    return dest, sorted(left_out)
 
 
 def _fell_back(result: BackendResult, reason: str) -> BackendResult:

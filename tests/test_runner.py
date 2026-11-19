@@ -646,6 +646,50 @@ def test_a_hard_linked_skill_md_is_a_run_error(skill, run_dir, tmp_path):
     assert all(w.closed for w in sandbox.opened) and len(agent.calls) == 1
 
 
+class RaisingJudge:
+    """A judge that raises `error`, as one did on a link loop the run left behind."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def judge(self, task, check, run):
+        raise self.error
+
+
+def test_a_check_that_raises_on_what_the_run_left_fails_the_run(skill, run_dir):
+    # Raised past the runner, it dropped the whole skill (safety included) from evaluate.
+    result = run_tasks(skill, [task()], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1), run_dir=run_dir, sandbox=FakeSandbox(),
+                       judges={JudgeType.DETERMINISTIC: RaisingJudge(RuntimeError("loop"))})
+    assert result.errors == []
+    assert [t.passed for t in result.tests] == [False, False]
+    assert all("could not be judged (RuntimeError)" in t.reason for t in result.tests)
+
+
+def test_a_judge_error_is_still_a_run_error(skill, run_dir):
+    result = run_tasks(skill, [task()], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1), run_dir=run_dir, sandbox=FakeSandbox(),
+                       judges={JudgeType.DETERMINISTIC: RaisingJudge(JudgeError("broken check"))})
+    assert result.tests == [] and len(result.errors) == 2
+
+
+def test_an_unexpected_failure_costs_that_run_only(skill, run_dir):
+    # Anything else that escapes a run (here an agent result the runner cannot use) is an
+    # error for that run; the other runs are still made and the call returns.
+    calls = []
+
+    def bad_once(prompt, skill, workdir):
+        calls.append(skill)
+        if len(calls) == 1:
+            return AgentRun(output=None)  # not text: the runner's _truncate raises TypeError
+        return writes_report_with_skill(prompt, skill, workdir)
+
+    result = run_tasks(skill, [task()], FakeAgent(bad_once), config=config(runs=2),
+                       run_dir=run_dir, sandbox=FakeSandbox())
+    assert len(result.errors) == 1 and "TypeError" in result.errors[0]
+    assert len(result.tests) == 3
+
+
 class BrokenWorkspace(FakeWorkspace):
     """A workspace whose `export` or `run_command` raises `error`."""
 

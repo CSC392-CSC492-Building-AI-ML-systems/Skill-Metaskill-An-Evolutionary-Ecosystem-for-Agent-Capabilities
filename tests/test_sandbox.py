@@ -25,6 +25,17 @@ from metaskill.evaluate.sandbox import (
     Streamed,
 )
 
+# The real version gate, for the tests of the gate itself; the fixture below replaces it.
+SAFE_TARFILE = sandbox_module._safe_tarfile
+
+
+@pytest.fixture(autouse=True)
+def _a_python_with_tarfile_fixed(monkeypatch):
+    """check() looks at this interpreter's version first, so on a Python older than
+    3.12.11 or 3.13.4 every Docker case here would report OLD_PYTHON instead. These tests
+    are about Docker; the gate has tests of its own, which set it explicitly."""
+    monkeypatch.setattr(sandbox_module, "_safe_tarfile", lambda version: True)
+
 
 def completed(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(["docker"], returncode, stdout, stderr)
@@ -569,7 +580,7 @@ def test_check_says_what_kind_of_problem(inspect, problem):
     ((3, 11, 9), False),
 ])
 def test_only_pythons_with_tarfile_fixed_are_safe(version, safe):
-    assert sandbox_module._safe_tarfile(version) is safe
+    assert SAFE_TARFILE(version) is safe
 
 
 def test_an_old_python_stops_runs_before_docker_is_asked(monkeypatch):

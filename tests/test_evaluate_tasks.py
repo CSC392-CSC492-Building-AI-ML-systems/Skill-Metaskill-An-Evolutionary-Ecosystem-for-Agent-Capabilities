@@ -140,6 +140,45 @@ def test_rank_runs_every_skill_on_the_same_tasks(tmp_path, harness):
     assert result["task_runs"]["sessions"] == 2 * 2 * RUNS * 2
 
 
+def test_skills_with_the_same_name_keep_their_own_logs(tmp_path, harness, monkeypatch):
+    # A skill and its generalized copy share a frontmatter name. Logs were kept by name,
+    # so the second skill's runs replaced the first's, and the first's results pointed at
+    # the other skill's sessions. Names are set through Skill.load: frontmatter needs Hermes.
+    real_load = evaluate.Skill.load
+
+    def load(path):
+        skill = real_load(path)
+        skill.name = "same"
+        return skill
+    monkeypatch.setattr(evaluate.Skill, "load", staticmethod(load))
+    harness.agent_act = lambda prompt, skill, workdir: AgentRun(
+        output=f"from {Path(skill.path).name if skill else 'none'}", input_tokens=1, llm_calls=1)
+    result = rank_skills([make_skill(tmp_path, "original"), make_skill(tmp_path, "copy")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    run_dir = Path(result["artifacts"][0]).parent
+    logs = {folder: (run_dir / folder / "logs" / "t1-with_skill-r1.txt").read_text(encoding="utf-8")
+            for folder in ("same", "same-2")}
+    assert "from original" in logs["same"] and "from copy" in logs["same-2"]
+    # Each result names the log of its own session.
+    for skill in report(result).skills:
+        [test] = [t for t in skill.tests if (t.task_id, t.variant, t.run) == ("t1", Variant.WITH_SKILL, 1)]
+        folder = test.output.split("(full log: ")[1].split("/")[0]
+        assert test.output.split(" (full log")[0] in logs[folder]
+    assert any("more than one skill is named same" in w for w in result["warnings"])
+
+
+@pytest.mark.parametrize("names, folders", [
+    (["a", "b"], ["a", "b"]),
+    (["x", "x", "x"], ["x", "x-2", "x-3"]),
+    (["x", "x-2", "x"], ["x", "x-2", "x-3"]),  # a skill really named x-2 keeps its folder
+    (["Skill", "skill"], ["Skill", "skill-2"]),  # one folder on Windows and macOS
+])
+def test_each_skill_of_a_call_gets_its_own_log_folder(names, folders):
+    taken = set()
+    assert [evaluate._log_folder(name, taken) for name in names] == folders
+
+
 def test_a_relative_tasks_path_is_the_users_session_folder(tmp_path, harness):
     ctx = SimpleNamespace(session_cwd=lambda: str(tmp_path))
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
@@ -207,8 +246,9 @@ def test_an_agent_failing_a_task_is_a_scored_failure_not_an_error(tmp_path, harn
     skill = report(result).skills[0]
     with_skill = [t for t in skill.tests if t.variant is Variant.WITH_SKILL]
     assert with_skill and not any(t.passed for t in with_skill)
-    # Every with-skill run failed, so efficiency has nothing to credit (success-gated).
-    assert skill.dimensions[Dimension.EFFICIENCY].status is Status.SKIPPED
+    # Every with-skill run failed, so efficiency has nothing to credit (success-gated): 0.
+    assert skill.dimensions[Dimension.EFFICIENCY].status is Status.OK
+    assert skill.scores.efficiency == 0.0
 
 
 def test_a_skill_name_that_cannot_be_a_log_folder_still_gets_safety(tmp_path, harness, monkeypatch):

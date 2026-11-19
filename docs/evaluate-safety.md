@@ -2,7 +2,7 @@
 
 Status: draft. Items marked **[OPEN]** need a decision before implementation. Items marked **[VERIFY]** are taken from a scanner's README or docs and have not been checked by running the tool.
 
-This expands section 3.6 of [evaluate.md](evaluate.md). Code lives in `metaskill/evaluate/safety/`; each file has its own document in [safety/](safety/README.md), which describes what was built. The `static` tier (Cisco and own checks) is implemented. The LLM review (`review.py`) is not built yet; `judge.py`, which it calls, is.
+This expands section 3.6 of [evaluate.md](evaluate.md). Code lives in `metaskill/evaluate/safety/`; each file has its own document in [safety/](safety/README.md), which describes what was built. The `static` tier (Cisco and own checks) is implemented, and so is the `deep` tier's LLM review (`review.py`, through `judge.py`), which `default_backends` adds at `safety_tier: deep`.
 
 ## 1. Purpose
 
