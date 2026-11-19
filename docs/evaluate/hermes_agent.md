@@ -93,14 +93,16 @@ None of these is a stable public API. A change breaks loudly, as a setup error o
 | `_create_environment`, `LocalEnvironment` (guard 2) | `tools/terminal_tool_backends.py`, `tools/environments/local.py` |
 | `build_profile_terminal_scope`, `set_terminal_scope` | `tools/terminal_scope.py` |
 | `_get_env_config` (guard 1) | `tools/terminal_tool.py` |
-| `load_config`, `_resolve_model_and_provider`, `resolve_runtime_with_fallback`, `AIAgent`, `run_conversation` | `hermes_cli/`, `run_agent.py` |
+| `load_config`, `resolve_runtime_with_fallback`, `AIAgent`, `run_conversation` | `hermes_cli/`, `run_agent.py` |
+| `model_switch.resolve_startup_model_route`, `direct_alias_runtime_request`, `DIRECT_ALIASES`; `models.detect_provider_for_model` (model and provider choice) | `hermes_cli/` |
+| `toolsets.resolve_toolset`, `tools.tool_search` (`ToolSearchConfig`, `load_config`), and the `version_info` module (the version in the transcript) | `toolsets.py`, `tools/`, `hermes_cli/` |
 
-Built and tested against Hermes 0.21.5; the version is recorded in each run's transcript.
+Built and tested against Hermes 0.21.5 and 0.23.2; the version is recorded in each run's transcript. Hermes 0.22 moved `hermes -z` behind its gateway and removed `hermes_cli.oneshot._resolve_model_and_provider`, so `hermes_child.py` has its own copy of that choice (the request's model and provider, else the configured ones), built on the helpers above. Hermes 0.22.2 itself was not tested here.
 
 ## 7. Limits and open questions
 
 - **Not wired into `evaluate` yet.** `evaluate_skill` does not run tasks; that is the next step, together with where a skill's tasks come from.
-- **The tool-search bridge.** Hermes may replace deferrable tools with `tool_search`/`tool_describe`/`tool_call`. It only searches the enabled tools (here `process_manage`, part of the terminal toolset), so it adds nothing outside `terminal` and `file`, but the model sees those three names.
+- **The tool-search bridge (Hermes 0.21.5 and 0.23.2 both have it).** Hermes puts `tool_search`/`tool_describe`/`tool_call` in front of the tools, and the bridge also reaches the user's connected apps (mail, calendars, issue trackers) and can install MCP servers, none of which runs in the sandbox. The child turns the bridge off for its process (`_turn_off_tool_search`), and `_check_tools` then compares the agent's tools with the terminal and file toolsets (`terminal`, `process_manage`, `read_file`, `write_file`, `patch`, `search_files` on 0.23.2). Any other tool is a setup error and nothing runs. An earlier version of this section said the bridge only searched the enabled tools; the connector and MCP paths show that was wrong.
 - **The user's own hooks and plugins** load in the child as in any Hermes session, and run on this machine. They are the user's configuration, as trusted as their Hermes; the skill's commands never reach them.
 - **Start-up cost.** Each run starts a Hermes process, about one to two seconds.
 - **Cost.** Every run is real model calls on the user's provider ([evaluate.md](../evaluate.md) 9).

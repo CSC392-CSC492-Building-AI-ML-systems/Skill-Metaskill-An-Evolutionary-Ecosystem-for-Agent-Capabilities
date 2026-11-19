@@ -282,6 +282,49 @@ def test_the_transcript_shows_calls_and_clips_long_results():
     assert len(hermes_child.transcript(huge)) <= hermes_child.MAX_TRANSCRIPT_CHARS + 50
 
 
+def test_tools_beyond_the_allowed_set_are_reported_by_name():
+    allowed = {"terminal", "read_file"}
+    defs = [{"function": {"name": "terminal"}}, {"function": {"name": "read_file"}}]
+    assert hermes_child.unexpected_tools(defs, allowed) == []
+    bridge = [{"function": {"name": n}} for n in ("tool_call", "tool_search", "terminal")]
+    assert hermes_child.unexpected_tools(bridge, allowed) == ["tool_call", "tool_search"]
+
+
+@pytest.mark.parametrize("shape", [{"name": "terminal"}, {"function": "terminal"}, {"function": {}}, "terminal"])
+def test_a_tool_definition_that_cannot_be_read_counts_as_unexpected(shape):
+    # A changed Hermes shape must fail closed, not pass as "nothing unexpected".
+    assert hermes_child.unexpected_tools([shape], {"terminal"}) != []
+
+
+def test_tool_search_is_turned_off_for_the_session(monkeypatch):
+    # Hermes puts a bridge in front of the tools that reaches connected apps
+    # and MCP installs; the session must not have it.
+    module = SimpleNamespace(
+        ToolSearchConfig=SimpleNamespace(from_raw=lambda raw: SimpleNamespace(enabled=raw["enabled"])),
+        load_config=lambda: SimpleNamespace(enabled="auto"),
+        load_config_readonly=lambda: SimpleNamespace(enabled="auto"))
+    monkeypatch.setitem(sys.modules, "tools", SimpleNamespace(tool_search=module))
+    hermes_child._turn_off_tool_search()
+    assert module.load_config().enabled == module.load_config_readonly().enabled == "off"
+
+
+def test_older_hermes_without_tool_search_needs_nothing_turned_off(monkeypatch):
+    monkeypatch.setitem(sys.modules, "tools", None)  # `from tools import ...` raises ImportError
+    hermes_child._turn_off_tool_search()
+
+
+def test_the_configured_model_is_used_when_none_is_named():
+    cfg = {"model": {"default": "cfg-model", "provider": "cfg-provider"}}
+    choice = hermes_child._resolve_model_and_provider(cfg, None, None)
+    assert (choice.model, choice.provider) == ("cfg-model", None)  # provider stays the configured one
+    assert hermes_child._resolve_model_and_provider({"model": "plain"}, "", "").model == "plain"
+
+
+def test_a_named_model_and_provider_are_used_as_given():
+    choice = hermes_child._resolve_model_and_provider({"model": {"default": "cfg"}}, " m1 ", " p1 ")
+    assert (choice.model, choice.provider) == ("m1", "p1")
+
+
 def test_a_request_from_another_version_is_refused_before_hermes_is_touched(tmp_path):
     request = {"protocol": 999, "result": str(tmp_path / "result.json")}
     (tmp_path / "request.json").write_text(json.dumps(request))
