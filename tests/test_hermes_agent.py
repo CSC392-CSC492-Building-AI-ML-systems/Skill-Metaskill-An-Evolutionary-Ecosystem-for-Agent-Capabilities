@@ -341,6 +341,16 @@ def test_an_unreadable_result_is_unavailable_not_a_failed_run(tmp_path, body):
         fake_agent(tmp_path, body).run("p", None, docker_workspace())
 
 
+def test_a_check_that_dies_keeps_its_stderr_off_the_message(tmp_path):
+    # evaluate shows check()'s message to the agent before any run; stderr can hold this
+    # machine's paths, so it travels on the exception instead.
+    agent = fake_agent(tmp_path, "sys.stderr.write('File \"/home/someone/.hermes/run_agent.py\"')\nsys.exit(1)\n")
+    with pytest.raises(HermesAgentUnavailable) as e:
+        agent.check(docker_workspace())
+    assert "exited 1 without a result" in str(e.value) and "/home/someone" not in str(e.value)
+    assert "/home/someone/.hermes/run_agent.py" in e.value.stderr
+
+
 def test_unmeasured_tool_calls_stay_none(tmp_path):
     result = dict(OK_RESULT, tool_calls=None)
     assert fake_agent(tmp_path, writes(result)).run("p", None, docker_workspace()).tool_calls is None

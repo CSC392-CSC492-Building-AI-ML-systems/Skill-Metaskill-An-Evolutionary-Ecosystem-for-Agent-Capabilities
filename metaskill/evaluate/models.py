@@ -198,6 +198,13 @@ class EvaluationConfig:
     # Size of each run's folder in the sandbox (runner.md 2.6); fixtures must fit too.
     sandbox_disk: str = "16m"
     output_dir: Path = Path("evaluation-reports")  # each run writes [timestamp]/ here
+    # The task file every skill of the call runs (evaluate.md 4.3); None runs no tasks, and
+    # the task-based dimensions are skipped. Giving it is the opt-in to task runs (agent
+    # sessions); dimensions an LLM judges still call the judge without it.
+    tasks_path: Path | None = None
+    # The Hermes model and provider the task runs use; empty is the user's default.
+    agent_model: str = ""
+    agent_provider: str = ""
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
@@ -221,10 +228,13 @@ class EvaluationConfig:
     def hash(self) -> str:
         """Hash of the settings that affect scores; becomes ReportMeta.config.
 
-        output_dir is left out, since where reports are written does not change them.
+        output_dir is left out, since where reports are written does not change them, and so
+        is where the task file is: the tasks themselves are what change scores, and the same
+        file read from another folder is the same tasks.
         """
         settings = self.to_dict()
         del settings["output_dir"]
+        del settings["tasks_path"]
         encoded = json.dumps(settings, sort_keys=True).encode()
         return hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -254,6 +264,9 @@ class EvaluationConfig:
             "output_max_chars": self.output_max_chars,
             "sandbox_disk": self.sandbox_disk,
             "output_dir": str(self.output_dir),
+            "tasks_path": str(self.tasks_path) if self.tasks_path is not None else None,
+            "agent_model": self.agent_model,
+            "agent_provider": self.agent_provider,
         }
 
     @classmethod
@@ -269,6 +282,9 @@ class EvaluationConfig:
             output_max_chars=data.get("output_max_chars", 2000),
             sandbox_disk=data.get("sandbox_disk", "16m"),
             output_dir=Path(data.get("output_dir", "evaluation-reports")),
+            tasks_path=Path(data["tasks_path"]) if data.get("tasks_path") else None,
+            agent_model=data.get("agent_model", ""),
+            agent_provider=data.get("agent_provider", ""),
         )
         if "weights" in data:
             config.weights = {
@@ -370,6 +386,10 @@ class ReportMeta:
     safety_tier: SafetyTier = SafetyTier.STATIC
     scanner_version: str = ""  # empty if the scanner did not run
     checks_version: str = ""  # version of our own safety rule set
+    # The model(s) that ran the task sessions, as Hermes reported them; empty if no task ran.
+    agent_model: str = ""
+    # Tokens and calls the judge used ({input_tokens, output_tokens, calls}); empty if none.
+    judge_usage: dict[str, int] = field(default_factory=dict)
     clarity_rubric_version: str = ""  # clarity.RUBRIC_VERSION; ratings across versions differ
 
     def to_dict(self) -> dict[str, Any]:
@@ -382,6 +402,8 @@ class ReportMeta:
             "safety_tier": self.safety_tier.value,
             "scanner_version": self.scanner_version,
             "checks_version": self.checks_version,
+            "agent_model": self.agent_model,
+            "judge_usage": dict(self.judge_usage),
             "clarity_rubric_version": self.clarity_rubric_version,
         }
 
@@ -397,6 +419,8 @@ class ReportMeta:
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             scanner_version=data.get("scanner_version", ""),
             checks_version=data.get("checks_version", ""),
+            agent_model=data.get("agent_model", ""),
+            judge_usage=dict(data.get("judge_usage") or {}),
             clarity_rubric_version=data.get("clarity_rubric_version", ""),
         )
 

@@ -16,7 +16,7 @@ result = run_skill(skill, "tasks.json", HermesAgent(), config=config, run_dir=ru
 | `timeout` | 600 s | A whole session; past it the session and everything it started are stopped |
 | `hermes` | `"hermes"` | The Hermes launcher, used to find Hermes' interpreter |
 
-It is not yet called by `evaluate` itself: wiring the runner into evaluate is a separate step ([evaluate.md](../evaluate.md) 3.5).
+Evaluate uses it for every task run when it is given a task file ([evaluate.md](../evaluate.md) 7), with `agent_model` and `agent_provider` from the config, and calls `check()` once first, so a Hermes that cannot be set up is one error before any run. `check()`'s message never holds the child's stderr, which can name this machine's paths; it is on the exception's `stderr`.
 
 ## 1. How a run works
 
@@ -115,7 +115,6 @@ Built and tested against Hermes 0.21.5 and 0.23.2; the version is recorded in ea
 
 ## 7. Limits and open questions
 
-- **Not wired into `evaluate` yet.** `evaluate_skill` does not run tasks; that is the next step, together with where a skill's tasks come from.
 - **The tool-search bridge (Hermes 0.21.5 and 0.23.2 both have it).** Hermes puts `tool_search`/`tool_describe`/`tool_call` in front of the tools, and the bridge also reaches the user's connected apps (mail, calendars, issue trackers) and can install MCP servers, none of which runs in the sandbox. The child turns the bridge off for its process (`_turn_off_tool_search`), and `_check_tools` then compares the agent's tools with the terminal and file toolsets (`terminal`, `process_manage`, `read_file`, `write_file`, `patch`, `search_files` on 0.23.2). Any other tool is a setup error and nothing runs. An earlier version of this section said the bridge only searched the enabled tools; the connector and MCP paths show that was wrong.
 - **Windows is not supported yet.** A timeout stops the child with `os.killpg` and a process group of its own, and Windows has neither, so the stop would fail and the Hermes child would keep calling the model until `max_iterations`. `run` and `check` raise `HermesAgentUnavailable` on Windows before anything starts (an error in the report, not a failed run). Supporting it is a separate piece of work: killing the child's process tree with `taskkill /F /T`, checking the `/root` working folder a reviewer saw on Windows, portable tests, and a Windows CI job.
 - **The user's own hooks and plugins** load in the child as in any Hermes session, and run on this machine. They are the user's configuration, as trusted as their Hermes; the skill's commands never reach them.

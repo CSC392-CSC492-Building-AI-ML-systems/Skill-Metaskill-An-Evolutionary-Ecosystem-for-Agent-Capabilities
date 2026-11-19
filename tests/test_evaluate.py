@@ -60,8 +60,9 @@ def out(tmp_path):
     return tmp_path / "reports"
 
 
-# Any dimension works with the placeholder fixture, built or not.
-PLACEHOLDER = Dimension.QUALITY
+# A dimension scored by plain score(), built or not. The task-based ones (TASK_DIMENSIONS) are
+# scored by score_runs, and only when a task file is given: tests/test_evaluate_tasks.py.
+PLACEHOLDER = Dimension.CONFIG_CLEANLINESS
 
 
 @pytest.fixture
@@ -107,7 +108,7 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
     assert "task runs" in efficiency.detail
     quality = skill.dimensions[Dimension.QUALITY]
     assert skill.scores.clarity is None and quality.status is Status.SKIPPED
-    assert "task" in quality.reason.lower()
+    assert "task" in (quality.reason + quality.detail).lower()  # evaluate skips it: detail
 
 
 @pytest.mark.parametrize("schema, expected_rule", [
@@ -183,7 +184,8 @@ def test_no_judge_is_a_skipped_dimension(tmp_path, out, placeholder):
     assert status.status is Status.SKIPPED and status.detail == "no judge model is available"
 
 
-@pytest.mark.parametrize("dimension", list(Dimension), ids=lambda d: d.value)
+@pytest.mark.parametrize("dimension", [d for d in Dimension if d not in evaluate.TASK_DIMENSIONS],
+                         ids=lambda d: d.value)
 def test_the_placeholder_replaces_built_modules_too(tmp_path, out, placeholder, dimension):
     placeholder(dimension, "from metaskill.evaluate.models import *\n"
                            "def score(skill, config, llm=None, **_):\n"

@@ -110,6 +110,7 @@ Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run]
 | Field | Description |
 |---|---|
 | `tests` | One `TestResult` per task, variant and run that could be judged, in run order. This is the per-skill `tests` list of the report (evaluate.md 2.1) |
+| `task_ids` | The planned tasks' `task_id`s, in order, whether or not any of their runs is in `tests`. A scorer needs them to count a task that never ran (Quality's `assess` does), rather than infer the plan from the runs that happened |
 | `errors` | `"[task_id] [variant] r[run]: [error]"` for every run left out of `tests` |
 | `judge_model` | `"provider/model"` of every LLM judge reply, for `ReportMeta.judge_model`; empty if no LLM check ran |
 | `judge_usage` | Tokens the LLM judge used (`TokenUsage`) |

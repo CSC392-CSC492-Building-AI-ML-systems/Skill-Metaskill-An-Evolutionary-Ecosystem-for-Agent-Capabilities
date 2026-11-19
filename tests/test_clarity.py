@@ -183,7 +183,22 @@ def test_evaluate_scores_clarity_and_records_the_judge_model(tmp_path):
     assert skill.dimensions[Dimension.CLARITY].status is Status.OK
     assert len(skill.rubric) == len(CRITERIA)
     assert report.meta.judge_model == "fake/judge-1"
+    assert report.meta.judge_usage == {"input_tokens": 10, "output_tokens": 5, "calls": 1}
     assert report.meta.clarity_rubric_version == RUBRIC_VERSION
+
+
+def test_the_header_totals_every_skills_clarity_calls(tmp_path):
+    # One judge serves the whole call, so its totals are the call's: two skills, two calls.
+    folders = []
+    for name in ("first", "second"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "SKILL.md").write_text(BODY, encoding="utf-8")
+        folders.append(folder)
+    ctx = SimpleNamespace(llm=FakeLlm(reply({n: 4 for n in NAMES}), reply({n: 2 for n in NAMES})))
+    result = rank_skills(folders, output_path=tmp_path / "reports", ctx=ctx)
+    meta = Report.from_dict(json.loads(Path(result["artifacts"][0]).read_text(encoding="utf-8"))).meta
+    assert meta.judge_usage == {"input_tokens": 20, "output_tokens": 10, "calls": 2}
 
 
 def test_a_provider_failure_is_named_in_the_status_and_warnings(tmp_path):

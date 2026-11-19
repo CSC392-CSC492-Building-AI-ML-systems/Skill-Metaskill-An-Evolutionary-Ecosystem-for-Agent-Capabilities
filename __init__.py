@@ -53,5 +53,5 @@ def register(ctx):
         "metaskill",
         handler=tools.make_command_handler(ctx),
         description="Evaluate, rank, generalize or personalize skills",
-        args_hint="evaluate|rank|generalize|personalize <skill> [--config FILE] | skills [text]",
+        args_hint="evaluate|rank|generalize|personalize <skill> [--config FILE] [--tasks FILE] | skills [text]",
     )

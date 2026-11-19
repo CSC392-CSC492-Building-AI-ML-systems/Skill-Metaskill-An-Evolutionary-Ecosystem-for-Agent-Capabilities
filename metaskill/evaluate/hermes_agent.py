@@ -43,7 +43,14 @@ _RUNTIME_TIMEOUT = 60  # seconds for `hermes --print-runtime-command`
 
 class HermesAgentUnavailable(JudgeError):
     """Hermes, the sandbox backend or the model provider failed the run: it was not set
-    up, or the provider could not serve it. Either way it tells nothing about the skill."""
+    up, or the provider could not serve it. Either way it tells nothing about the skill.
+
+    `stderr` is the tail of the Hermes process's error output when it died without a
+    result; it can hold this machine's paths, so check() keeps it out of the message."""
+
+    def __init__(self, message: str, stderr: str = ""):
+        super().__init__(message)
+        self.stderr = stderr
 
 
 @dataclass
@@ -55,6 +62,8 @@ class HermesAgent:
     max_iterations: int = 30      # model turns per session
     timeout: float = 600.0        # seconds for a whole session
     hermes: str = "hermes"        # the Hermes launcher
+    # The models sessions actually ran on, as Hermes resolved them (for the report header).
+    models_used: set[str] = field(default_factory=set, init=False)
     _argv: list[str] | None = field(default=None, init=False, repr=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
@@ -76,7 +85,10 @@ class HermesAgent:
                 raise HermesAgentUnavailable(
                     f"the Hermes session process exited {code} without a result: "
                     f"{clean(stderr[-_STDERR_TAIL:], _STDERR_TAIL)}")
-            return _agent_run(_read_result(result_path))
+            result = _read_result(result_path)
+            if isinstance(result.get("model"), str) and result["model"]:
+                self.models_used.add(result["model"])
+            return _agent_run(result)
 
     def check(self, workspace: Workspace) -> dict[str, Any]:
         """Without a model: set Hermes up for `workspace` and drive its real terminal and
@@ -92,8 +104,8 @@ class HermesAgent:
             code, stderr = _run_child([*self._runtime_argv(), str(Path(tmp) / "request.json")],
                                       self.timeout)
             if not result_path.exists():
-                raise HermesAgentUnavailable(
-                    f"the check exited {code}: {clean(stderr[-_STDERR_TAIL:], _STDERR_TAIL)}")
+                raise HermesAgentUnavailable(f"the Hermes check exited {code} without a result",
+                                             stderr=clean(stderr[-_STDERR_TAIL:], _STDERR_TAIL))
             result = _read_result(result_path)
             if result.get("status") != "ok":
                 raise HermesAgentUnavailable(str(result.get("error")))

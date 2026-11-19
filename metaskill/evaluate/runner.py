@@ -113,6 +113,9 @@ class RunnerResult:
     """Everything the runner produced for one skill."""
 
     tests: list[TestResult]  # the report's `tests` (evaluate.md 2.1)
+    # The planned tasks' ids, in order, whether or not any of their runs made it into
+    # `tests`, so a scorer can count a task that never ran (Quality's assess needs them).
+    task_ids: list[str] = field(default_factory=list)
     # Runs that could not be judged (judge unavailable or failed, or a broken check).
     # They are not in `tests`, so a missing judge does not count as a failed task.
     errors: list[str] = field(default_factory=list)
@@ -156,7 +159,7 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
         raise ValueError(f"skill name {skill.name!r} may only contain letters, digits, "
                          "'_', '.' and '-'")
     pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
-    result = RunnerResult(tests=[])
+    result = RunnerResult(tests=[], task_ids=[task.task_id for task in tasks])
     log_dir = run_dir / skill.name / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
