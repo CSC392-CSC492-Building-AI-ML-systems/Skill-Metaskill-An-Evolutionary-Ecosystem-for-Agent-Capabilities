@@ -8,7 +8,7 @@ import pytest
 from metaskill.evaluate.models import (
     Dimension, EvaluationConfig, JudgeType, Metrics, Skill, Status, TestResult, Variant)
 from metaskill.evaluate.robustness import (
-    score, score_from_runner, score_from_runs, task_consistency)
+    score, score_from_runner, score_from_runs, score_runs, task_consistency)
 from metaskill.evaluate.runner import RunnerResult
 
 CODE = "def total(xs):\n    return sum(xs)\n"
@@ -201,11 +201,11 @@ def test_scoring_is_reproducible_over_identical_evidence():
 
 
 def test_entry_point_without_runner_results_is_skipped(tmp_path):
-    # evaluate does not run tasks yet, so it calls score() without a RunnerResult.
+    # Without a task file evaluate skips task dimensions itself; score() is the plain skip.
     skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
     result = score(skill, EvaluationConfig())
     assert result.value is None and result.status is Status.SKIPPED
-    assert "task runs" in result.detail
+    assert "task runs" in result.detail and "no tasks were given" in result.detail
 
 
 def test_entry_point_scores_a_runner_result_with_its_plan_and_transcripts(tmp_path):
@@ -213,10 +213,56 @@ def test_entry_point_scores_a_runner_result_with_its_plan_and_transcripts(tmp_pa
     apart = {("a", 1): "read input.csv\nwrite out.csv",
              ("a", 2): "curl http://example.test\npip install pandas\nwrite out.csv"}
     result = RunnerResult(tests=[run(1), run(2)], task_ids=["a"], transcripts=apart)
-    scored = score(skill, EvaluationConfig(runs_per_task=2), runner=result)
+    scored = score_runs(skill, EvaluationConfig(runs_per_task=2), result)
     assert scored.status is Status.OK and scored.value < 1.0  # the transcripts differ
     assert "from transcripts" in scored.detail
     assert score_from_runner(result, EvaluationConfig(runs_per_task=2)) == scored
     # The config's runs_per_task is enforced: three runs were planned, two were made.
     missing = score_from_runner(result, EvaluationConfig(runs_per_task=3))
     assert missing.status is Status.ERROR and "incomplete run matrix" in missing.detail
+
+
+# --- Runs the runner could not make (score_runs, as evaluate calls it) -------------
+
+
+def test_runs_the_runner_could_not_make_are_an_error_naming_the_first(tmp_path):
+    skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
+    errors = ["a with_skill r2: JudgeError: docker went away"]
+    lost = RunnerResult(tests=[run(1)], task_ids=["a"], errors=errors)
+    scored = score_runs(skill, EvaluationConfig(runs_per_task=2), lost)
+    assert scored.status is Status.ERROR and scored.value is None
+    assert "incomplete run matrix" in scored.detail
+    assert "1 run(s) the runner could not make" in scored.detail
+    assert "docker went away" in scored.detail
+
+
+def test_no_run_made_at_all_is_an_error_not_a_skip(tmp_path):
+    skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
+    nothing = RunnerResult(tests=[], task_ids=["a"], errors=["a with_skill r1: setup failed"])
+    scored = score_runs(skill, EvaluationConfig(runs_per_task=2), nothing)
+    assert scored.status is Status.ERROR and "setup failed" in scored.detail
+
+
+def test_lost_baseline_runs_leave_the_with_skill_score_standing(tmp_path):
+    skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
+    runs = RunnerResult(tests=[run(1), run(2)], task_ids=["a"],
+                        errors=["a baseline r1: setup failed"])
+    scored = score_runs(skill, EvaluationConfig(runs_per_task=2), runs)
+    assert scored.status is Status.OK and scored.value == 1.0
+    assert "1 run(s) the runner could not make were left out (baseline only)" in scored.detail
+    assert "setup failed" not in scored.detail  # the cause did not cost the score
+
+
+def test_one_run_per_task_stays_skipped_when_only_a_baseline_run_was_lost(tmp_path):
+    skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
+    runs = RunnerResult(tests=[run(1)], task_ids=["a"], errors=["a baseline r1: setup failed"])
+    scored = score_runs(skill, EvaluationConfig(runs_per_task=1), runs)
+    assert scored.status is Status.SKIPPED and "at least two needed" in scored.detail
+
+
+def test_a_runner_error_in_the_detail_is_cleaned(tmp_path):
+    # Runner errors can carry text the skill shaped: no control characters in the report.
+    skill = Skill(path=Path(tmp_path), name="s", body="# s\n")
+    lost = RunnerResult(tests=[], task_ids=["a"], errors=["a: bad\x1b[31m\nline"])
+    detail = score_runs(skill, EvaluationConfig(runs_per_task=2), lost).detail
+    assert "\x1b" not in detail and "\n" not in detail

@@ -95,25 +95,38 @@ was used in `detail`.
     rule in §3 applies.
   - `task_consistency(runs, transcripts=None)` returns one task's four terms
     (`TaskConsistency`), for tests and diagnostics.
-  - `score(skill, config, llm=..., runner=None)` is the dimension entry point. Given the
-    skill's `RunnerResult` it calls `score_from_runner`. `evaluate` does **not run tasks
-    yet**, so it passes none, and in the live pipeline Robustness is `skipped`, as
-    efficiency is.
+  - `score_runs(skill, config, runs)` is evaluate's entry point when it ran a task file
+    (`TASK_DIMENSIONS` in `__init__.py`, [evaluate.md §6](evaluate.md)): the same
+    `RunnerResult` that Quality and Efficiency score, through `score_from_runner`. A run the
+    runner could not make (`runs.errors`) is missing from the matrix, so Robustness is
+    `error`, and its `detail` names the runner's first error; errors that cost only
+    baseline runs leave the score standing, with a count in `detail`.
+  - `score(skill, config, llm=...)` is the call without a task file: `skipped` ("no tasks
+    were given").
+- Ranking: [`rank.py`](../metaskill/evaluate/rank.py) needs nothing specific. The value
+  goes into `overall` with weight 3 (evaluate.md §5.1), and when `overall` and lift tie,
+  Robustness is the third dimension compared, after Safety and Quality (evaluate.md
+  §5.2). A skill whose Robustness is `skipped` (one run per task) or `error` (lost runs)
+  has no `overall` and is listed as unranked, with the reason, never ranked on the other
+  five.
 - Runner: [`metaskill/evaluate/runner.py`](../metaskill/evaluate/runner.py) records
   `RunnerResult.task_ids` and, for with-skill runs whose agent gave one,
   `RunnerResult.transcripts`.
 - Tests: [`tests/test_robustness.py`](../tests/test_robustness.py) on recorded results,
-  and [`tests/test_runner.py`](../tests/test_runner.py) from a fake agent's runs through
-  `score_from_runner`.
+  [`tests/test_runner.py`](../tests/test_runner.py) from a fake agent's runs through
+  `score_from_runner`, and [`tests/test_evaluate_tasks.py`](../tests/test_evaluate_tasks.py)
+  through `evaluate_skill` and `rank_skills`, where a skill that answers differently each
+  run ranks below one that does not, all else equal.
 
 ## 5. Open questions
 
 1. **Weights.** The four terms are equal. Outcome and score overlap for binary scores
    (scoring.md); output and method overlap when the output is the work itself.
 2. **Method without transcripts.** Call counts are a weak proxy: the same counts can hide
-   different tools. The runner now passes transcripts when the agent gives them, but the
-   Hermes usage file has none (`agent_run_from_hermes_usage`), so a real run falls back to
-   call counts until the agent records its session or a list of tool names per run.
+   different tools. `HermesAgent` now gives each session's transcript (messages, tool calls
+   and clipped tool results, [evaluate/hermes_agent.md](evaluate/hermes_agent.md)), so real
+   runs use transcripts; call counts remain the fallback for an agent that gives none.
+   Whether clipped tool results add noise to the method term is untested.
 3. **Long outputs.** A line diff of a long reply is slower and noisier than of a short
    one. Whether to compare only the files the run produced, or a normalised form of the
    output, is untested.

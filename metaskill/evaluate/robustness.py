@@ -21,13 +21,17 @@ A task's value is the unweighted mean of the four, each averaged over its run pa
 Robustness is the mean over tasks. `score_from_runs` holds the method. `score_from_runner`
 scores a runner.RunnerResult as it is: the planned tasks and runs per task, so a lost run
 is an error rather than a smaller denominator, and the with-skill transcripts for the
-method term. `score` is the dimension entry point the evaluator's SCORERS dispatch calls;
-given `runner=` it scores that, and without it, as in `evaluate` today, which does not run
-tasks yet (evaluate.md 3.2), it reports `skipped`, as efficiency does.
+method term.
+
+Evaluate's entry points (evaluate.md 6): `score_runs(skill, config, runs)` when it ran a
+task file, the same RunnerResult Quality and Efficiency score (TASK_DIMENSIONS); `score`
+without one, which is `skipped`. The overall score and the ranking then use the value like
+any other dimension's (rank.py).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -36,10 +40,11 @@ from itertools import combinations
 from statistics import mean
 from typing import TYPE_CHECKING, Any
 
+from .judge import MAX_REASON_CHARS, clean
 from .models import (
     Dimension, DimensionScore, EvaluationConfig, Metrics, Skill, Status, TestResult, Variant)
 
-if TYPE_CHECKING:  # runner imports the judge and the sandbox; scoring needs neither
+if TYPE_CHECKING:  # runner imports the sandbox; scoring does not need it
     from .runner import RunnerResult
 
 # The runner appends " (full log: <skill>/logs/<task>-<variant>-r<run>.txt)" to every
@@ -75,16 +80,35 @@ class TaskConsistency:
         return (self.outcome + self.score + self.output + self.method) / 4
 
 
-def score(skill: Skill, config: EvaluationConfig, llm: Any = None, *,
-          runner: RunnerResult | None = None) -> DimensionScore:
-    """Dimension entry point. `runner` is the skill's RunnerResult; the skill is not
-    re-read. `evaluate` does not run tasks yet, so it passes none, and this reports
-    skipped until it does."""
-    if runner is None:
-        return _unscored(Status.SKIPPED,
-                         "robustness needs repeated task runs; evaluate does not run "
-                         "tasks yet (evaluate.md 3.2)")
-    return score_from_runner(runner, config)
+def score(skill: Skill, config: EvaluationConfig, llm: Any = None) -> DimensionScore:
+    """Robustness without task runs: skipped. Evaluate calls score_runs when it ran tasks."""
+    return _unscored(Status.SKIPPED,
+                     "robustness needs task runs; no tasks were given (tasks_path)")
+
+
+def score_runs(skill: Skill, config: EvaluationConfig, runs: RunnerResult) -> DimensionScore:
+    """Robustness from one skill's task runs, as evaluate passes them; the skill is not
+    re-read.
+
+    A run the runner could not make (runs.errors: the sandbox or the agent's setup failed)
+    is missing from the run matrix, so it can only make Robustness an `error`, never a
+    score over fewer runs; the detail then names the runner's first error, which is the
+    cause. An error that cost only baseline runs leaves the with-skill result standing
+    (a score, or `skipped` for one run per task), and the detail says how many runs were
+    left out.
+    """
+    result = score_from_runner(runs, config)
+    if not runs.errors:
+        return result
+    count = f"{len(runs.errors)} run(s) the runner could not make"
+    made_with_skill = any(t.variant is Variant.WITH_SKILL for t in runs.tests)
+    if result.status is Status.ERROR or not made_with_skill:
+        return _unscored(Status.ERROR, clean(
+            f"{result.detail}; {count}; first: {runs.errors[0]}", MAX_REASON_CHARS))
+    # The with-skill matrix is complete (score_from_runner checked it), so only baseline
+    # runs were lost.
+    return dataclasses.replace(result, detail=f"{result.detail}; {count} were left out "
+                                              "(baseline only)")
 
 
 def score_from_runner(result: RunnerResult, config: EvaluationConfig) -> DimensionScore:

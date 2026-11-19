@@ -113,6 +113,10 @@ def test_tasks_run_once_per_skill_and_efficiency_scores_them(tmp_path, harness):
     assert skill.dimensions[Dimension.QUALITY].status is Status.OK and skill.scores.quality == 0.75
     assert skill.lift == 0.0
     assert report(result).meta.agent_model == "fake-model"
+    # Robustness scores the same runs: every with-skill run is identical, so it is 1.
+    robustness = skill.dimensions[Dimension.ROBUSTNESS]
+    assert robustness.status is Status.OK and skill.scores.robustness == 1.0
+    assert f"2 task(s), {RUNS} runs each" in robustness.reason
 
 
 def test_run_logs_go_into_this_calls_report_folder(tmp_path, harness):
@@ -183,6 +187,10 @@ def test_runs_the_runner_cannot_make_are_errors_not_scores(tmp_path, harness):
     # Quality cannot compare without runs, so lift stays None rather than an invented 0.
     assert skill.dimensions[Dimension.QUALITY].status is Status.ERROR and skill.lift is None
     assert "resolves the terminal backend" in efficiency.detail
+    # Robustness has no runs to compare either: an error naming the cause, not a skip.
+    robustness = skill.dimensions[Dimension.ROBUSTNESS]
+    assert robustness.status is Status.ERROR and skill.scores.robustness is None
+    assert "resolves the terminal backend" in robustness.detail
     assert skill.dimensions[Dimension.SAFETY].status is not Status.SKIPPED  # still scored
 
 
@@ -381,6 +389,51 @@ def test_a_skill_that_changes_the_outcome_gets_its_lift_and_quality(tmp_path, ha
     assert skill.dimensions[Dimension.QUALITY].status is Status.OK and skill.scores.quality == 1.0
     assert "1 task(s), 2 run(s) per task per condition" in skill.dimensions[Dimension.QUALITY].detail
 
+
+
+# --- Robustness scores the runs, and the ranking uses it ------------------------------------
+
+
+def flaky_for(name):
+    """The agent with skill `name` passes every run, but answers differently each time;
+    with any other skill, or none, it answers the same way every time. Pass rates, costs
+    and lift are equal, so only Robustness tells the two skills apart."""
+    seen = []
+
+    def act(prompt, skill, workdir):
+        tokens = dict(input_tokens=100, output_tokens=10, llm_calls=2, tool_calls=1)
+        if skill is not None and skill.name == name:
+            seen.append(prompt)
+            return AgentRun(output=f"answer {len(seen)}\nwritten another way {len(seen)}", **tokens)
+        return AgentRun(output="the answer", **tokens)
+    return act
+
+
+def test_rank_orders_a_consistent_skill_above_a_flaky_one_on_robustness(tmp_path, harness,
+                                                                        placeholder):
+    # Clarity needs a model and Config Cleanliness is not complete yet; fixed stand-ins let
+    # both skills be ranked, so robustness decides the order.
+    for dimension in (Dimension.CLARITY, Dimension.CONFIG_CLEANLINESS):
+        placeholder(dimension, (
+            "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+            "def score(skill, config, llm=None, **_):\n"
+            f"    return DimensionScore(Dimension.{dimension.name}, 0.5)\n"))
+    harness.agent_act = flaky_for("flaky")
+    result = rank_skills([make_skill(tmp_path, "flaky"), make_skill(tmp_path, "steady")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    assert result["counts"]["ranked"] == 2
+    steady, flaky = report(result).skills  # in ranking order
+    assert (steady.name, flaky.name) == ("steady", "flaky")
+    assert steady.scores.robustness == 1.0 and flaky.scores.robustness < 1.0
+    for dimension in Dimension:  # robustness is the only difference
+        if dimension is not Dimension.ROBUSTNESS:
+            assert getattr(steady.scores, dimension.value) == getattr(flaky.scores, dimension.value)
+    assert steady.scores.overall > flaky.scores.overall
+    assert "Use steady" in result["table"]
+    rows = [line for line in result["table"].splitlines() if line.startswith("| 1 ")
+            or line.startswith("| 2 ")]
+    assert rows[0].startswith("| 1 | steady | ") and " 1.00 " in rows[0]
 
 
 @pytest.mark.parametrize("dimension", sorted(evaluate.TASK_DIMENSIONS, key=lambda d: d.value),

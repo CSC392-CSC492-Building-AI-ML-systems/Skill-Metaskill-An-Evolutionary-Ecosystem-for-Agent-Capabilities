@@ -263,8 +263,8 @@ def test_runner_results_feed_the_robustness_scorer(skill, run_dir):
     assert dimension.status is Status.OK and dimension.value == 1.0
     assert "from transcripts" in dimension.detail
     assert "baseline outcome agreement 1.00" in dimension.detail  # context only
-    # The dimension entry point scores the same runner result when it is given one.
-    assert robustness.score(skill, config(runs=3), runner=result) == dimension
+    # Evaluate's entry point (score_runs) scores the same runner result.
+    assert robustness.score_runs(skill, config(runs=3), result) == dimension
 
 
 def test_a_task_that_lost_every_run_is_a_robustness_error(skill, run_dir):
