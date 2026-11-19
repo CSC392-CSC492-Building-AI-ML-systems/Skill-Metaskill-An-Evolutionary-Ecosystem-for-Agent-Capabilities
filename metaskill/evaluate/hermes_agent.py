@@ -22,6 +22,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,6 +58,7 @@ class HermesAgent:
     _argv: list[str] | None = field(default=None, init=False, repr=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
+        _require_supported_os()
         container, docker = _container(workspace)
         argv = self._runtime_argv()
         with tempfile.TemporaryDirectory(prefix="metaskill-agent-") as tmp:
@@ -80,6 +82,7 @@ class HermesAgent:
         """Without a model: set Hermes up for `workspace` and drive its real terminal and
         file tools once each. Returns what they returned; raises HermesAgentUnavailable
         if the setup refuses. For integration tests and a pre-flight check."""
+        _require_supported_os()
         container, docker = _container(workspace)
         with tempfile.TemporaryDirectory(prefix="metaskill-agent-") as tmp:
             result_path = Path(tmp) / "result.json"
@@ -148,6 +151,21 @@ def skill_message(skill: Skill, workspace: Workspace | None = None) -> str:
         parts.append(f"\nRead any of these with the file tools, or run scripts directly by "
                      f"absolute path (e.g. `{skill_dir}/scripts/foo.sh`).")
     return "\n".join(parts)
+
+
+def _windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _require_supported_os() -> None:
+    """Windows is not supported yet: a timeout stops the child with os.killpg and a process
+    group of its own, which Windows does not have. The timeout would raise, and the Hermes
+    child would go on calling the model until max_iterations. Refuse before anything starts,
+    with no model call and no child left behind."""
+    if _windows():
+        raise HermesAgentUnavailable(
+            "HermesAgent does not support Windows yet: a session that times out could not be "
+            "stopped (docs/evaluate/hermes_agent.md, section 7)")
 
 
 def check_problems(check: Any, workdir: str) -> list[str]:

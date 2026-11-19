@@ -32,6 +32,13 @@ OK_RESULT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _not_windows(monkeypatch):
+    # HermesAgent refuses Windows outright. These tests drive the adapter itself (with a fake
+    # child, or the integration tests), so they run as on Linux; the refusal has its own test.
+    monkeypatch.setattr(hermes_agent, "_windows", lambda: False)
+
+
 def make_skill(tmp_path, files=None):
     folder = tmp_path / "csv-total"
     folder.mkdir()
@@ -291,6 +298,20 @@ def test_check_is_unavailable_when_the_tools_failed_even_though_setup_succeeded(
 def test_check_returns_the_result_when_the_tools_worked(tmp_path):
     result = {"status": "ok", "check": GOOD_CHECK, "hermes_version": "9.9"}
     assert fake_agent(tmp_path, writes(result)).check(docker_workspace())["hermes_version"] == "9.9"
+
+
+def test_windows_is_refused_before_anything_starts(tmp_path, monkeypatch):
+    # No process group to kill on a timeout there, so the child could outlive it and keep calling
+    # the model. Refused up front: no child is started, no model is called.
+    monkeypatch.setattr(hermes_agent, "_windows", lambda: True)
+    marker = tmp_path / "started"
+    agent = fake_agent(tmp_path, f"open({str(marker)!r}, 'w').close()\n")
+    with pytest.raises(HermesAgentUnavailable, match="does not support Windows yet") as e:
+        agent.run("p", None, docker_workspace())
+    assert isinstance(e.value, JudgeError)  # the runner records it as an error, not a failed run
+    with pytest.raises(HermesAgentUnavailable, match="does not support Windows yet"):
+        agent.check(docker_workspace())
+    assert not marker.exists()
 
 
 def test_a_child_that_dies_without_a_result_is_unavailable(tmp_path):
