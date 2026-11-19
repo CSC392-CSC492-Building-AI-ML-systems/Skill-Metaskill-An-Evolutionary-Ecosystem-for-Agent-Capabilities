@@ -29,11 +29,16 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-# Built dimensions; Safety, Efficiency and Quality have separate assertions below, and
-# Clarity is skipped without a judge (test_clarity_without_model_access_is_skipped).
+# Implemented dimensions have separate assertions.
 NOT_BUILT = [
     d for d in Dimension
-    if d not in (Dimension.SAFETY, Dimension.CLARITY, Dimension.EFFICIENCY, Dimension.QUALITY)
+    if d not in (
+        Dimension.SAFETY,
+        Dimension.CLARITY,
+        Dimension.EFFICIENCY,
+        Dimension.QUALITY,
+        Dimension.CONFIG_CLEANLINESS,
+    )
 ]
 
 
@@ -103,6 +108,31 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
     quality = skill.dimensions[Dimension.QUALITY]
     assert skill.scores.clarity is None and quality.status is Status.SKIPPED
     assert "task" in quality.reason.lower()
+
+
+@pytest.mark.parametrize("schema, expected_rule", [
+    (None, None),
+    ("{broken", None),
+    ('{"required":["org"],"properties":{"org":{"description":"Organization"}}}', None),
+    ('{"required":["org"],"properties":{"org":{}}}', "missing-required-description"),
+])
+def test_config_cleanliness_reports_findings_without_a_score(tmp_path, out, schema, expected_rule):
+    folder = make_skill(tmp_path, "config-example")
+    if schema is not None:
+        (folder / "config.schema.json").write_text(schema, encoding="utf-8")
+
+    result = evaluate_skill(folder, output_path=out)
+    [skill] = load(result).skills
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    assert skill.scores.config_cleanliness is None
+    assert status.status is Status.SKIPPED
+    assert "incomplete coverage" in status.reason
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
+    assert [f.rule for f in findings] == ([expected_rule] if expected_rule else [])
+    if expected_rule:
+        report = next(p for p in result["artifacts"] if p.endswith(".md"))
+        assert "config.schema.json#/properties/org" in Path(report).read_text(encoding="utf-8")
 
 
 def test_no_tasks_means_no_lift(tmp_path, out):
@@ -337,6 +367,32 @@ def test_importing_this_package_does_not_import_safety():
             "sys.exit('metaskill.evaluate.safety' in sys.modules)")
     root = Path(__file__).resolve().parent.parent
     assert subprocess.run([sys.executable, "-c", code], cwd=root).returncode == 0
+
+
+@pytest.mark.parametrize("variant, expected", [
+    ("reference", []),
+    ("undocumented", ["missing-required-description"]),
+    ("hardcoded", ["fixed-profile-setting"]),
+    ("unused", ["unused-pilot-setting"]),
+])
+def test_config_cleanliness_reports_pilot_evidence(out, variant, expected):
+    folder = (Path(__file__).resolve().parents[1]
+              / "metaskill/evaluate/golden/synthetic/ticket-summary/skills" / variant)
+    [skill] = load(evaluate_skill(folder, output_path=out)).skills
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    if variant == "reference":
+        assert skill.scores.config_cleanliness == 1.0
+        assert status.status is Status.OK
+    elif variant == "hardcoded":
+        assert skill.scores.config_cleanliness == 0.0
+        assert status.status is Status.OK
+        assert "Separation failure" in status.reason
+    else:
+        assert skill.scores.config_cleanliness is None
+        assert status.status is Status.SKIPPED
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
+    assert [f.rule for f in findings] == expected
 
 
 def test_a_clarity_module_that_does_not_import_leaves_the_rubric_version_empty(monkeypatch):

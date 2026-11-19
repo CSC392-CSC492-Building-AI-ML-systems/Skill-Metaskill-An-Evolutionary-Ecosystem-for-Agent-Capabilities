@@ -49,6 +49,31 @@ def test_benign_example_does_not_match_the_reviewed_instruction():
     assert check_configuration(skill_text=text, fixed_settings=[FIXED_ORGANIZATION]) == []
 
 
+def test_necessary_setup_golden_cases():
+    def schema(*required):
+        return {
+            "required": list(required),
+            "properties": {
+                "organization": {"description": "Organization label in the output."},
+                "legacy_region": {"description": "Legacy region label."},
+            },
+        }
+
+    consumed = frozenset({"organization"})
+    assert check_configuration(schema=schema("organization"), usage_complete=True, consumed_settings=consumed) == []
+    [finding] = check_configuration(
+        schema=schema("organization", "legacy_region"), usage_complete=True, consumed_settings=consumed,
+    )
+    assert finding.category == "necessary-setup"
+    assert finding.rule == "unused-required-setting"
+    assert finding.location == "config.schema.json#/properties/legacy_region"
+    assert check_configuration(schema=schema("organization", "legacy_region")) == []
+
+    [finding] = check_configuration(
+        schema=schema("organization"), usage_complete=True, consumed_settings=frozenset(),
+    )
+    assert finding.location == "config.schema.json#/properties/organization"
+
 def test_indirect_descriptions_are_left_unassessed():
     for keyword in ("$ref", "allOf", "oneOf", "anyOf"):
         definition = {"$ref": "#/$defs/label"} if keyword == "$ref" else {
@@ -94,3 +119,17 @@ def test_distinct_settings_on_same_line_have_distinct_messages():
     )
     assert len(findings) == 2
     assert findings[0].message != findings[1].message
+
+
+def test_partial_usage_inventory_cannot_prove_a_setting_unused():
+    schema = {"required": ["organization"], "properties": {"organization": {
+        "description": "Organization label",
+    }}}
+    assert check_configuration(schema=schema, consumed_settings=frozenset()) == []
+
+
+def test_complete_usage_claim_requires_an_inventory():
+    import pytest
+
+    with pytest.raises(ValueError, match="requires an inventory"):
+        check_configuration(usage_complete=True)
