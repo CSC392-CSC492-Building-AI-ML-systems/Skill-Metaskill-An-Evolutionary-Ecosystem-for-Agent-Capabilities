@@ -92,6 +92,10 @@ Once installed it runs on every `generalize`; disable it with
 result tells the agent it exists and to ask you before suggesting it. Settings, speed
 and accuracy figures are in [plugins/metaskill-laya](plugins/metaskill-laya/README.md).
 
+What `generalize` finds and misses, its edge cases, security risks and limitations are
+in [docs/generalize-report.md](docs/generalize-report.md). A clean result does not prove
+a skill is free of personal data; review it before sharing.
+
 ## Layout
 
 | Path | Purpose |
