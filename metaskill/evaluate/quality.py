@@ -43,6 +43,23 @@ def _unscored(status: Status, reason: str, detail: str = "") -> QualityAssessmen
     ))
 
 
+def _runner_hint(error: str) -> str:
+    # Runner entries start with a task/variant/run label. Report fixed messages,
+    # never Docker stderr, provider replies, or candidate-controlled exception text.
+    _, _, cause = error.partition(": ")
+    if cause.startswith("SandboxUnavailable:"):
+        if "the sandbox image is not pulled" in cause:
+            return "Sandbox image missing; pull the runner's pinned Docker image."
+        if "is too old:" in cause:
+            return "Hermes is running a Python version too old for the sandbox."
+        if "Docker is not installed" in cause:
+            return "Hermes could not find Docker; check the gateway's PATH."
+        return "Sandbox unavailable; check Docker from the Hermes gateway."
+    if cause.startswith("JudgeError: Quality pilot completion unavailable"):
+        return "Model completion unavailable or provider/model changed during the pilot."
+    return "Runner failed before producing a judged result."
+
+
 def assess(results: Iterable[TestResult], *, task_ids: Iterable[str],
            runs_per_task: int, runner_errors: Iterable[str] = ()) -> QualityAssessment:
     """Validate the planned evidence and return a score plus pass rates and lift.
@@ -62,12 +79,14 @@ def assess(results: Iterable[TestResult], *, task_ids: Iterable[str],
     planned = tuple(sorted(planned))
     records, errors = tuple(results), tuple(runner_errors)
     if errors:
+        hints = " ".join(dict.fromkeys(_runner_hint(error) for error in errors))
         return _unscored(Status.ERROR, "Quality unavailable: runner reported errors.",
-                         f"{len(errors)} runner error(s); see runner diagnostics and logs.")
+                         f"{len(errors)} runner error(s). {hints}")
     if not planned:
         if records:
             return _unscored(Status.ERROR, "Recorded runs have no planned tasks.")
-        return _unscored(Status.SKIPPED, "Quality skipped: no tasks were configured.")
+        return _unscored(Status.SKIPPED, "Quality skipped: no tasks were configured.",
+                         "Quality requires evaluation tasks and a compatible agent")
     if not records:
         return _unscored(Status.SKIPPED, "Quality skipped: no recorded runs.",
                          "Both with-skill and baseline evidence are required.")

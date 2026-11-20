@@ -42,6 +42,41 @@ QualityAssessment is an evaluator-side helper, not a new serialized report field
 
 The standard evaluator skips Quality when no tasks are configured. With a task file it calls `score_runs` with the skill's runs, and copies the same assessment's lift into `SkillResult.lift` (`_lift` in evaluate's `__init__.py`). Both QualityAssessment and SkillResult represent unavailable lift as None.
 
+### Hermes smoke test
+
+Run `/metaskill quality-pilot` in Hermes. It makes six text-only completions
+(three with the bundled reference instructions and three without), using the
+active Hermes provider and model. It sends only the bundled synthetic task,
+inputs, and profile, with the reference instructions included only in the
+with-skill runs. The evaluator keeps expected answers local and judges the
+returned JSON deterministically. Provider failures or a change of provider
+or model during the comparison leave Quality and lift unscored.
+
+This requires Hermes plugin completion access and the runner's Docker setup.
+It measures text-only completion behaviour, not a Hermes session with tools.
+Reports use the normal evaluation report directory. To opt in from
+`evaluate` itself, run:
+
+```text
+/metaskill evaluate tests/fixtures/hermes-skills/email/himalaya --quality-pilot
+```
+
+Himalaya's pilot uses three draft scenarios: paginated envelope listing,
+a folder name containing spaces, and interpretation of a simulated
+authentication failure. It makes 18 text-only completions (three per scenario
+and condition). It does not execute Himalaya or access a mailbox. The Markdown
+report shows per-task pass counts and observed improvements or regressions;
+these comparisons do not change the provisional Quality formula. The flag uses
+fixed settings and only accepts the bundled Himalaya and ticket-summary
+reference fixtures. Without tasks or the pilot flag, task-based dimensions stay
+unscored. Arbitrary skills can use `--tasks <file>` with the shared Hermes agent
+for tool-using evaluation; the pilot remains restricted to its bundled fixtures.
+
+The pilot supplies a temporary task file, an explicit completion agent, and its
+deterministic judge through the shared evaluator. Agent input/output token counts
+and LLM calls are recorded on each TestResult. The report header's judge_usage
+records judging costs, including Clarity, separately from task-agent usage.
+
 ## Evidence validation
 
 A complete comparison requires each planned task to have exactly one record for every run index from 1 through runs_per_task, for both with_skill and baseline.
@@ -106,3 +141,9 @@ These checks verify arithmetic and evidence handling, not live skill performance
 - Agree on shared coverage and retry rules with the Efficiency owner before accepting partial Quality evidence. Scores based on different surviving tasks can be incomparable.
 - Review the numeric Quality definition and replace the placeholder after discussion.
 - Independently review gold expectations, then run a small controlled live experiment when the Agent adapter is available.
+
+
+MET-57 uses the shared task runner and its `score_runs` entry points for Quality,
+Robustness and Efficiency. It does not supply a separate Quality task table:
+MET-49 (#52) owns the shared per-skill task table and baseline comparison labels.
+The pilot's JSON report retains every individual run independently of that table.
