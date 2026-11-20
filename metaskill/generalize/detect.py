@@ -698,6 +698,15 @@ _GENERIC_VALUES = frozenset({
     "postgres", "default", "guest", "test", "demo", "sample",
     "__token__",  # the username PyPI expects with an API token
 })
+# Public mail endpoints from provider setup guides. Every user of the provider has the same
+# host, so a template keeps it; which provider a user picks is a separate value, if any.
+_PROVIDER_HOSTS = frozenset({
+    "imap.gmail.com", "smtp.gmail.com", "pop.gmail.com",
+    "imap.mail.me.com", "smtp.mail.me.com",
+    "outlook.office365.com", "smtp.office365.com", "imap-mail.outlook.com",
+    "smtp-mail.outlook.com", "imap.mail.yahoo.com", "smtp.mail.yahoo.com",
+    "imap.fastmail.com", "smtp.fastmail.com", "imap.zoho.com", "smtp.zoho.com",
+})
 _LOCAL_HOST = re.compile(
     r"(?:[a-z][a-z0-9+.-]*://(?:[^\s/@]+@)?)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:/\S*)?")
 _ABSOLUTE_PATH = re.compile(r"/|[A-Za-z]:[\\/]|\\\\")
@@ -819,6 +828,7 @@ def _looks_like_config(value: str, words: list[str]) -> bool:
         or value.startswith(("~", "/dev/"))
         or value.lower() in _TYPE_NAMES
         or value.lower() in _GENERIC_VALUES
+        or value.lower() in _PROVIDER_HOSTS
         or _LOCAL_HOST.fullmatch(value)
         or _is_relative_path(value)
     )
