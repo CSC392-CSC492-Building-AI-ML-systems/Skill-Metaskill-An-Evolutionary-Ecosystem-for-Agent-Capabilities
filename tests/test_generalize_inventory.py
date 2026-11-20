@@ -5,6 +5,7 @@ import os
 import pytest
 
 from metaskill.generalize.inventory import InventoryError, SkipReason, SkippedFile, load_inventory
+from skill_fixtures import symlink
 
 
 def write(root, files: dict[str, bytes | str]):
@@ -76,8 +77,8 @@ def test_ignores_version_control_and_cache_directories(tmp_path):
 def test_symlinks_are_skipped_not_followed(tmp_path):
     outside = write(tmp_path / "outside", {"secret.md": "jayant@company.com"})
     skill = write(tmp_path / "skill", {"SKILL.md": "# s"})
-    os.symlink(outside / "secret.md", skill / "linked.md")
-    os.symlink(outside, skill / "linked_dir")
+    symlink(outside / "secret.md", skill / "linked.md")
+    symlink(outside, skill / "linked_dir")
     inventory = load_inventory(skill)
     assert [f.path for f in inventory.files] == ["SKILL.md"]
     assert {(s.path, s.reason) for s in inventory.skipped} == {
