@@ -2,7 +2,7 @@
 
 The only module that imports skill_scanner (docs/safety/cisco.md). It runs the
 scanner on one skill and translates the result into our BackendResult. Behaviour
-was verified against version 2.2.1.
+was verified against version 2.2.1 and pinned to 2.1.0 (see TESTED_VERSION).
 
 At the deep tier, Cisco's LLM analyzer reaches the model through Hermes's
 `ctx.llm` (hermes_bridge.py), never with a key of its own.
@@ -27,7 +27,12 @@ from .hermes_bridge import PLACEHOLDER_KEY, LlmUsage, PluginLlm, routed
 
 PACKAGE = "cisco-ai-skill-scanner"
 # Pinned in plugins/metaskill-cisco/plugin.yaml too; change both together.
-TESTED_VERSION = "2.2.1"
+# 2.1.0 and not the newer 2.2.x: from 2.2.0 the scanner needs pyjwt>=2.15.0, and Hermes pins
+# pyjwt[crypto]==2.13.0, so `hermes plugins enable metaskill-cisco` fails with a dependency
+# conflict. On MaliciousSkillBench samples and the fixtures in tests/safety/fixtures/malicious,
+# 2.1.0 catches as many malicious skills as 2.2.1 and flags about twice as many benign ones
+# (docs/safety/cisco.md, issue #54).
+TESTED_VERSION = "2.1.0"
 ADDON = "metaskill-cisco"
 # The scanner is the optional metaskill-cisco add-on: installing it makes Hermes install the
 # scanner into its own environment, after the user consents. pip would reach another Python:
@@ -162,16 +167,21 @@ class CiscoBackend:
         return routed(self.llm, self.task, self.provider, self.model, usage=self.llm_usage)
 
     def _build_deep_analyzers(self, model: str) -> list[Any]:
-        from skill_scanner.core.analyzer_factory import (
-            AnalyzerConfigurationError, build_analyzers)
         from skill_scanner.core.scan_policy import ScanPolicy
 
+        analyzer_factory = importlib.import_module("skill_scanner.core.analyzer_factory")
+
+        # Scanner 2.2.0 added AnalyzerConfigurationError. 2.1.0 has no such class: it logs
+        # "Could not load LLM analyzer" and returns the static analyzers only, which convert()
+        # reports as an LLM analyzer that did not run (llm-unavailable). An empty tuple catches
+        # nothing.
+        configuration_error = getattr(analyzer_factory, "AnalyzerConfigurationError", ())
         try:
             # The model name routes every request to ctx.llm. The key is a placeholder
             # Cisco requires; no real key is ever given to Cisco or read from the environment.
-            return build_analyzers(
+            return analyzer_factory.build_analyzers(
                 ScanPolicy.default(), use_llm=True, llm_model=model, llm_api_key=PLACEHOLDER_KEY)
-        except AnalyzerConfigurationError as e:
+        except configuration_error as e:
             raise LLMSetupError(str(e)) from e
 
     def _run_scanner(self, path: Path, analyzers: list[Any] | None) -> dict[str, Any]:

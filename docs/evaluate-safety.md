@@ -34,7 +34,7 @@ Every category a finding can have. A finding from our own checks or the LLM revi
 
 ### 2.2 Scanner categories
 
-The complete list from Cisco skill-scanner 2.2.1, read from the installed package.
+The complete list from Cisco skill-scanner 2.2.1, read from the installed package. The pinned 2.1.0 has no rules for the analyzers 2.2.x added, so some categories below may never fire.
 
 | Category | What is flagged | Scored under safety |
 |---|---|---|
@@ -66,7 +66,7 @@ The scanner's own diagnostic notices (`LLM_ANALYSIS_FAILED`, `LLM_CONTEXT_BUDGET
 
 ### 3.1 Cisco skill-scanner (primary)
 
-`cisco-ai-skill-scanner`, pinned to an exact version (2.2.1 at time of writing) under `python_dependencies` in the optional add-on's `plugins/metaskill-cisco/plugin.yaml`. Requires Python 3.11 to 3.14 (from the package metadata); tested on 3.13.
+`cisco-ai-skill-scanner`, pinned to an exact version (2.1.0 at time of writing: 2.2.x needs a newer `pyjwt` than Hermes allows, see [safety/cisco.md](safety/cisco.md)) under `python_dependencies` in the optional add-on's `plugins/metaskill-cisco/plugin.yaml`. Requires Python 3.11 to 3.14 (from the package metadata); tested on 3.13.
 
 Chosen because it installs as a normal pinned dependency, has a Python SDK (no subprocess or output parsing), accepts a skill directory or a directory of skills, and publishes accuracy numbers.
 

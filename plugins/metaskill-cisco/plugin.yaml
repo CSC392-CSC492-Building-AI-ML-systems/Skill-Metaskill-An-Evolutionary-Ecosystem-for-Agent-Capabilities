@@ -8,4 +8,4 @@ requires_plugins:
 # Pinned to the version metaskill's adapter is tested with (metaskill/evaluate/safety/cisco.py
 # TESTED_VERSION); change both together, after rerunning tests/safety with the scanner.
 python_dependencies:
-  - "cisco-ai-skill-scanner==2.2.1"
+  - "cisco-ai-skill-scanner==2.1.0"
