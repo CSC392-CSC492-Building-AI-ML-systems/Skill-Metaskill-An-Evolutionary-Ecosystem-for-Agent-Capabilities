@@ -8,6 +8,10 @@ yet, so nothing is created under output_path and the skill is never modified.
 Until then the status is "partial", so the tool reports success: false: a caller that
 checks only that flag must not tell the user the skill was generalized.
 
+The optional classifier (classify.py) runs only when a caller passes one, after every
+detector, on the findings left for review. The result always says whether it ran, and
+how many candidates it was sent, since those leave the machine (docs/generalize/classify.md).
+
 The result goes into the agent's context, so it carries counts only, never a
 detected value.
 """
@@ -18,7 +22,8 @@ import time
 from collections import Counter
 
 from . import extras
-from .detect import Finding, detect_file_with_claims
+from .classify import Classifier, classify
+from .detect import Finding, ScanResult, detect_file_with_claims
 from .inventory import InventoryError, load_inventory
 
 ADDON_INSTALL = (
@@ -35,8 +40,12 @@ ADDON_NOTE = (
 )
 
 
-def generalize_skill(skill_path: str, output_path: str) -> dict:
-    """Detect personal and configuration values across *skill_path* and report counts."""
+def generalize_skill(skill_path: str, output_path: str,
+                     classifier: Classifier | None = None) -> dict:
+    """Detect personal and configuration values across *skill_path* and report counts.
+
+    *classifier* opts in to the semantic stage; without one nothing leaves the machine.
+    """
     try:
         inventory = load_inventory(skill_path)
     except InventoryError as exc:  # the message names the limit, never file content
@@ -62,6 +71,14 @@ def generalize_skill(skill_path: str, output_path: str) -> dict:
         reasons = Counter(s.reason.value for s in inventory.skipped)
         warnings.append("skipped files: " + ", ".join(f"{n} {r}" for r, n in sorted(reasons.items())))
 
+    classification: dict = {"used": False}
+    if classifier is not None:
+        classified = classify(
+            ScanResult(inventory.root, inventory.files, inventory.skipped, findings), classifier)
+        classification = classified.summary()
+        if classified.error:
+            warnings.append(classified.error)
+
     result = {
         "status": "partial",
         "message": ("detection only: the skill was NOT generalized. Placeholders and the "
@@ -77,6 +94,7 @@ def generalize_skill(skill_path: str, output_path: str) -> dict:
             "by_category": dict(sorted(Counter(f.category.value for f in findings).items())),
             "by_detector": dict(sorted(Counter(f.detector for f in findings).items())),
         },
+        "classification": classification,
         "unresolved": [],
         "warnings": warnings,
     }

@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +15,24 @@ from skill_fixtures import secrets as fake_secrets
 collect_ignore_glob = ["fixtures/*", "*/fixtures/*"]
 
 SECRETS = [v for k, v in vars(fake_secrets).items() if k.isupper() and isinstance(v, str)]
+
+# Tests marked `llm` call a real model: they cost money, need a provider set up and are
+# not deterministic, so normal runs and CI skip them (docs/generalize/classify.md).
+LLM_ENV = "METASKILL_RUN_LLM"
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", f"llm: calls a real LLM provider; set {LLM_ENV}=1 to include")
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get(LLM_ENV) == "1":
+        return
+    skip_llm = pytest.mark.skip(reason=f"needs {LLM_ENV}=1 (calls a real LLM)")
+    for item in items:
+        if item.get_closest_marker("llm"):
+            item.add_marker(skip_llm)
 
 
 def pytest_make_parametrize_id(config, val, argname):
