@@ -119,6 +119,19 @@ def test_symlink_followed_by_the_delete(tmp_path):
     assert w.reasons[0].startswith(f"is a link to `{tmp_path / 'thesis'}`")
 
 
+@pytest.mark.parametrize("raw, shown", [
+    ("\\\\?\\C:\\Users\\me\\thesis", "C:\\Users\\me\\thesis"),       # how os.readlink reads it
+    ("\\\\?\\UNC\\server\\share\\x", "\\\\server\\share\\x"),        # a network target
+    ("C:\\Users\\me\\thesis", "C:\\Users\\me\\thesis"),               # already plain
+    ("..\\thesis", "..\\thesis"),                                     # relative: no prefix
+])
+def test_a_windows_link_target_is_shown_without_the_extended_prefix(raw, shown):
+    # Windows' os.readlink returns absolute targets as \\?\C:\...; the warning shows the path
+    # as people write it, as realpath does for the second path in the same message.
+    from metaskill.evaluate.safety.checks import without_extended_prefix
+    assert without_extended_prefix(raw) == shown
+
+
 def test_symlink_not_followed_removes_only_the_link(tmp_path):
     (tmp_path / "thesis").mkdir()
     symlink(tmp_path / "thesis", tmp_path / "build")

@@ -39,6 +39,8 @@ PROTOCOL = 1  # hermes_child.PROTOCOL
 _HERMES_MAIN = "runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
 _STDERR_TAIL = 1500
 _RUNTIME_TIMEOUT = 60  # seconds for `hermes --print-runtime-command`
+_TASKKILL_TIMEOUT = 30  # seconds for `taskkill` to stop a timed-out session on Windows
+_CREATE_SUSPENDED = 0x00000004  # winjob.CREATE_SUSPENDED; winjob is imported on Windows only
 
 
 class HermesAgentUnavailable(JudgeError):
@@ -67,7 +69,6 @@ class HermesAgent:
     _argv: list[str] | None = field(default=None, init=False, repr=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
-        _require_supported_os()
         container, docker = _container(workspace)
         argv = self._runtime_argv()
         with tempfile.TemporaryDirectory(prefix="metaskill-agent-") as tmp:
@@ -94,7 +95,6 @@ class HermesAgent:
         """Without a model: set Hermes up for `workspace` and drive its real terminal and
         file tools once each. Returns what they returned; raises HermesAgentUnavailable
         if the setup refuses. For integration tests and a pre-flight check."""
-        _require_supported_os()
         container, docker = _container(workspace)
         with tempfile.TemporaryDirectory(prefix="metaskill-agent-") as tmp:
             result_path = Path(tmp) / "result.json"
@@ -169,17 +169,6 @@ def _windows() -> bool:
     return sys.platform == "win32"
 
 
-def _require_supported_os() -> None:
-    """Windows is not supported yet: a timeout stops the child with os.killpg and a process
-    group of its own, which Windows does not have. The timeout would raise, and the Hermes
-    child would go on calling the model until max_iterations. Refuse before anything starts,
-    with no model call and no child left behind."""
-    if _windows():
-        raise HermesAgentUnavailable(
-            "HermesAgent does not support Windows yet: a session that times out could not be "
-            "stopped (docs/evaluate/hermes_agent.md, section 7)")
-
-
 def check_problems(check: Any, workdir: str) -> list[str]:
     """What is wrong in the result of the child's check mode, one short reason each; an empty
     list means the file tool wrote into `workdir`, the terminal ran there as exit 0, the file
@@ -230,21 +219,75 @@ def _container(workspace: Workspace) -> tuple[str, str]:
 
 
 def _run_child(argv: list[str], timeout: float) -> tuple[int | None, str]:
-    """Run the child in its own process group, so a timeout stops it and every `docker exec`
-    it started; the commands themselves stop with the container."""
+    """Run the child so that a timeout stops it and every `docker exec` it started; the
+    commands themselves stop with the container. Stopping only the child is not enough:
+    communicate() would wait on the `docker exec` processes, which hold its stderr open.
+
+    POSIX: a session (process group) of its own. Windows: a Job Object (winjob.py), with
+    `taskkill /T` if Windows refuses one. The child starts suspended and runs only once it
+    is in the job, so nothing it starts can be outside it."""
+    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED}
+             if _windows() else {"start_new_session": True})
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE, text=True, errors="replace",
-                            start_new_session=True)
+                            stderr=subprocess.PIPE, text=True, errors="replace", **group)
+    job = _contain(proc) if _windows() else None
     try:
         _, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        _kill_tree(proc, job)
+        proc.communicate()
+        raise TimeoutError(f"the Hermes session ran past {timeout:g} s") from None
+    finally:
+        if job is not None:
+            job.close()  # kills anything the child left running, as a session's end should
+    return proc.returncode, stderr or ""
+
+
+def _contain(proc: subprocess.Popen):
+    """Put the suspended `proc` in a new Job Object and let it run. Returns the job, or None
+    if Windows refuses one (taskkill is then used). Raises HermesAgentUnavailable, with the
+    child killed, if it cannot be resumed: it would never run."""
+    from . import winjob
+
+    try:
+        job = winjob.contain(proc.pid)
+    except OSError:
+        job = None
+    try:
+        winjob.resume(proc.pid)
+    except OSError as e:
+        if job is not None:
+            job.close()
+        proc.kill()
+        proc.communicate()
+        raise HermesAgentUnavailable(f"the Hermes session process could not be started: {e}") from e
+    return job
+
+
+def _kill_tree(proc: subprocess.Popen, job=None) -> None:
+    """Kill `proc` and every process it started. POSIX: its process group. Windows: both
+    ways there are, as each misses what the other finds:
+    - `taskkill /T` walks parent links from the child (still running here). It misses a
+      process whose parent has already exited.
+    - The job holds everything started inside it, orphans too. It misses a process Windows
+      starts on the caller's behalf outside it, e.g. a Microsoft Store Python's interpreter,
+      which app activation starts.
+    taskkill goes first, while the tree's links are whole. If both fail, the child alone."""
+    if not _windows():
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        proc.communicate()
-        raise TimeoutError(f"the Hermes session ran past {timeout:g} s") from None
-    return proc.returncode, stderr or ""
+        return
+    try:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=_TASKKILL_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if job is not None:
+        job.kill()
+    if proc.poll() is None:
+        proc.kill()
 
 
 def _read_result(path: Path) -> dict[str, Any]:
