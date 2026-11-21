@@ -43,6 +43,7 @@ TASK_FAILURES = frozenset({
     "context_overflow", "truncated", "content_policy_blocked",
     "context_compression_exhausted", "context_compression_timeout",
 })
+WINDOWS_MIN_HERMES = (0, 23)  # the first Hermes whose backends can name their default_cwd
 MAX_TRANSCRIPT_CHARS = 200_000
 MAX_TOOL_TEXT_CHARS = 2_000
 
@@ -61,6 +62,33 @@ def docker_argv(docker: str, container: str, workdir: str, command: str, *,
     return [docker, "exec", *(["-i"] if stdin else []), "--workdir", workdir, container,
             "timeout", "-s", "KILL", str(int(timeout) + KILL_GRACE),
             "bash", *(["-l"] if login else []), "-c", command]
+
+
+def windows_version_problem(version: str, platform: str) -> str | None:
+    """Why this Hermes cannot run on `platform`, or None. On Windows the backend's working
+    folder needs Hermes 0.23 or later (its `default_cwd`; hermes_agent.md 4). A version that
+    cannot be read is let through: the pre-flight check still refuses tools that miss /work."""
+    if platform != "win32":
+        return None
+    def leading_int(text: str) -> int:  # "22rc1" -> 22, "23+381" -> 23
+        digits = ""
+        for c in text:
+            if not c.isdigit():
+                break
+            digits += c
+        return int(digits)
+
+    parts = version.split(".")
+    try:
+        found = (leading_int(parts[0]), leading_int(parts[1]))
+    except (IndexError, ValueError):
+        return None
+    if found == (0, 0):  # an install stamp without version info (_hermes_version), not a version
+        return None
+    if found < WINDOWS_MIN_HERMES:
+        need = ".".join(map(str, WINDOWS_MIN_HERMES))
+        return f"Hermes {version} is too old for Windows: the evaluate agent needs {need} or later there"
+    return None
 
 
 def failure_status(result: dict[str, Any]) -> str:
@@ -138,6 +166,14 @@ def _register_backend(docker: str, container: str, workdir: str) -> None:
         @property
         def name(self) -> str:
             return BACKEND
+
+        @property
+        def default_cwd(self) -> str:
+            # Hermes drops a TERMINAL_CWD that os.path.isabs rejects and uses the backend's
+            # default, "/root" unless the backend names one. On Windows, Python 3.13 and later
+            # (Hermes ships 3.14) do not count "/work" as absolute, so without this every tool
+            # ran in /root there. As the default, the workdir is kept as is.
+            return workdir
 
         def is_available(self) -> bool:
             return True
@@ -412,8 +448,12 @@ def _probe_guards() -> dict[str, str]:
 def run(request: dict[str, Any]) -> dict[str, Any]:
     if request.get("protocol") != PROTOCOL:
         raise SetupError(f"request protocol {request.get('protocol')!r}, expected {PROTOCOL}")
+    version = _hermes_version()
+    problem = windows_version_problem(version, sys.platform)
+    if problem:
+        raise SetupError(problem)
     _setup(request)
-    out: dict[str, Any] = {"hermes_version": _hermes_version()}
+    out: dict[str, Any] = {"hermes_version": version}
     if request.get("check"):
         out.update(status="ok", check=_check_mode(request))
         return out
