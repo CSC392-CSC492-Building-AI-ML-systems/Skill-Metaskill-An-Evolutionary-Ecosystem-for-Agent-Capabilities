@@ -185,6 +185,10 @@ def test_skills_with_the_same_name_keep_their_own_logs(tmp_path, harness, monkey
         folder = test.output.split("(full log: ")[1].split("/")[0]
         assert test.output.split(" (full log")[0] in logs[folder]
     assert any("more than one skill is named same" in w for w in result["warnings"])
+    # The Markdown points each skill at the folder its runs went to, not at "same" twice.
+    [markdown] = [a for a in result["artifacts"] if str(a).endswith(".md")]
+    text = Path(markdown).read_text(encoding="utf-8")
+    assert text.count("Logs: same/logs/") == 1 and text.count("Logs: same-2/logs/") == 1
 
 
 @pytest.mark.parametrize("names, folders", [

@@ -176,6 +176,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
             result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                            agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx,
                                            log_folder=log_folder)
+            result.log_folder = log_folder
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))

@@ -807,6 +807,10 @@ class SkillResult:
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
+    # The folder, inside the report's folder, that holds this skill's run logs. It is not the
+    # name when skills share one (same, same-2), so the report reads it from here. Not in
+    # to_dict(): the JSON report names the log in each run's output.
+    log_folder: str | None = None
 
     def __post_init__(self) -> None:
         # Also refuses NaN, which would make the ranking's order depend on input order.
