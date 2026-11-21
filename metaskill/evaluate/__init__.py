@@ -383,7 +383,7 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
     found = {d: _score(d, skill, config, llm, runs, judge, task) for d in Dimension}
     return SkillResult(
         name=skill.name,
-        scores=make_scores(found, config),
+        scores=make_scores(found, config, runs.tests if runs else ()),
         lift=_lift(config, runs),
         dimensions={d: score.to_status() for d, score in found.items()},
         tests=runs.tests if runs else [],

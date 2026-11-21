@@ -169,10 +169,18 @@ def test_no_with_skill_runs_is_skipped():
     ([run(1), run(2), run(1, task="b")], {}),                    # a run of b went missing
     ([run(1), run(2)], {"runs_per_task": 3}),                     # fewer than planned
     ([run(1), run(1), run(2)], {}),                               # duplicate identity
+    ([run(1), run(3)], {"runs_per_task": 2}),                     # run 2 lost, 3 unplanned
 ])
 def test_incomplete_or_inconsistent_evidence_is_an_error_not_a_score(runs, kwargs):
     result = score_from_runs(runs, **kwargs)
     assert result.value is None and result.status is Status.ERROR
+
+
+def test_the_right_count_of_runs_with_a_gap_is_an_error():
+    result = score_from_runs([run(1), run(3), run(1, task="b"), run(2, task="b")],
+                             runs_per_task=2)
+    assert result.value is None and result.status is Status.ERROR
+    assert "task a has run(s) 1, 3, expected 1 to 2" in result.detail
 
 
 def test_a_planned_task_with_no_runs_is_an_error_not_a_smaller_mean():

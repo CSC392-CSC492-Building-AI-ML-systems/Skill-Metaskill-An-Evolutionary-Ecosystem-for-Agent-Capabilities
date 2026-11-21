@@ -317,7 +317,10 @@ Code: `rank.py`, documented in [evaluate/rank.md](evaluate/rank.md).
 
 ```
 overall = sum(weight[d] * score[d]) / sum(weight[d])     # divided by 15 with the defaults
+score[robustness] = robustness × with-skill pass rate     # in overall only (MET-60)
 ```
+
+Robustness measures consistency, not correctness: a skill that fails every run the same way scores Robustness `1.0`. With the same weight as Quality, that would outweigh Quality's penalty, and a skill that never works could rank above one that works most of the time. So in `overall`, Robustness counts scaled by the share of with-skill runs that passed: consistency only earns ranking credit for runs that work. The report's `robustness` score, and the tie-break on it (5.2), stay the plain consistency measure, and a ranked skill whose credit was reduced gets a note saying so. With no with-skill runs there is no pass rate, and Robustness counts as it is; it cannot have been scored then.
 
 The weights are relative, not fractions: they are divided by their sum, so only their ratios matter. They live in `EvaluationConfig.weights` and are part of the config hash, so a report records which weights produced it. Both `rank.make_scores`, which writes `overall` into the report, and `rank.rank`, which orders the skills, take the config and read its weights, so the stored `overall` and the order always come from the same weights.
 
