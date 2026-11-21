@@ -20,6 +20,8 @@ TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
 # A size Docker's tmpfs takes, e.g. 16m. Nothing else: it goes into the mount's options,
 # so a comma would add options of its own.
 DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
+DEFAULT_AGENT_MAX_ITERATIONS = 30  # model turns per task session
+DEFAULT_AGENT_TIMEOUT = 600.0  # seconds per task session
 SANDBOX_MEMORY = "512m"  # the sandbox's memory limit, which its run folder counts against
 
 
@@ -205,6 +207,10 @@ class EvaluationConfig:
     # The Hermes model and provider the task runs use; empty is the user's default.
     agent_model: str = ""
     agent_provider: str = ""
+    # The task agent's limits per session (hermes_agent.md): model turns, and seconds for the
+    # whole session. They change what an agent can finish, so they are part of the hash.
+    agent_max_iterations: int = DEFAULT_AGENT_MAX_ITERATIONS
+    agent_timeout: float = DEFAULT_AGENT_TIMEOUT
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
@@ -223,6 +229,17 @@ class EvaluationConfig:
             # The folder is in memory, so a larger one could never be filled.
             raise ValueError(f"sandbox_disk must be under the sandbox's memory limit of "
                              f"{SANDBOX_MEMORY}, got {self.sandbox_disk}")
+        if (isinstance(self.agent_max_iterations, bool)
+                or not isinstance(self.agent_max_iterations, int)
+                or self.agent_max_iterations < 1):
+            raise ValueError(
+                f"agent_max_iterations must be an integer >= 1, got {self.agent_max_iterations!r}")
+        if (isinstance(self.agent_timeout, bool) or not isinstance(self.agent_timeout, (int, float))
+                or not 0 < self.agent_timeout < math.inf):  # False for NaN too
+            raise ValueError(
+                f"agent_timeout must be a number of seconds > 0, got {self.agent_timeout!r}")
+        # 600 and 600.0 are the same limit, so they must be the same in the hash.
+        self.agent_timeout = float(self.agent_timeout)
         check_weights(self.weights)
 
     def hash(self) -> str:
@@ -267,6 +284,8 @@ class EvaluationConfig:
             "tasks_path": str(self.tasks_path) if self.tasks_path is not None else None,
             "agent_model": self.agent_model,
             "agent_provider": self.agent_provider,
+            "agent_max_iterations": self.agent_max_iterations,
+            "agent_timeout": self.agent_timeout,
         }
 
     @classmethod
@@ -285,6 +304,8 @@ class EvaluationConfig:
             tasks_path=Path(data["tasks_path"]) if data.get("tasks_path") else None,
             agent_model=data.get("agent_model", ""),
             agent_provider=data.get("agent_provider", ""),
+            agent_max_iterations=data.get("agent_max_iterations", DEFAULT_AGENT_MAX_ITERATIONS),
+            agent_timeout=data.get("agent_timeout", DEFAULT_AGENT_TIMEOUT),
         )
         if "weights" in data:
             config.weights = {
@@ -786,6 +807,10 @@ class SkillResult:
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
+    # The folder, inside the report's folder, that holds this skill's run logs. It is not the
+    # name when skills share one (same, same-2), so the report reads it from here. Not in
+    # to_dict(): the JSON report names the log in each run's output.
+    log_folder: str | None = None
 
     def __post_init__(self) -> None:
         # Also refuses NaN, which would make the ranking's order depend on input order.
