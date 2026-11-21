@@ -156,6 +156,16 @@ def score_from_runs(results: Iterable[TestResult], *, runs_per_task: int | None 
         return _unscored(Status.ERROR,
                          f"incomplete run matrix: expected {runs_per_task} with-skill "
                          f"run(s) per task, found {_counts(by_task)}")
+    if runs_per_task is not None:
+        # The right count of runs can still hide a lost one: runs 1 and 3 of 2 planned
+        # mean run 2 is missing and run 3 is not this plan's.
+        expected = set(range(1, runs_per_task + 1))
+        for task_id, runs in sorted(by_task.items()):
+            if (numbers := {r.run for r in runs}) != expected:
+                return _unscored(Status.ERROR,
+                                 f"incomplete run matrix: task {task_id} has run(s) "
+                                 f"{', '.join(map(str, sorted(numbers)))}, expected "
+                                 f"1 to {runs_per_task}")
     if max(counts) < 2:
         return _unscored(Status.SKIPPED,
                          "one run per task cannot measure consistency; at least two needed")

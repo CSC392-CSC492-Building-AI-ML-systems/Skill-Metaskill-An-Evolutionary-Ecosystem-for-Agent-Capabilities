@@ -309,8 +309,11 @@ Critical findings do not independently remove a skill from ranking under the cur
 Overall is the weighted mean of [the evaluation design](../evaluate.md), section 5.1, implemented in [`rank.py`](../evaluate/rank.md). **[OPEN]** The current weights set the priority safety > quality and robustness > clarity and efficiency > configuration cleanliness, and may still change:
 
 ```text
-Overall = (4S + 3Q + 3R + 2C + 2E + K) / 15
+Overall = (4S + 3Q + 3R' + 2C + 2E + K) / 15
+R'      = R × with-skill pass rate
 ```
+
+Robustness measures consistency, not correctness, so in Overall it counts scaled by the with-skill pass rate (MET-60). Unscaled, a skill that fails every run the same way (Robustness 1) would gain as much from Robustness as it loses on Quality, and could rank above a skill that works most of the time. The reported Robustness score is unchanged.
 
 The weights are relative: they are divided by their sum, so only their ratios matter. They live in `EvaluationConfig.weights` and are part of the config hash, so a report records which weights produced it. Always display the six component scores, pass rate, lift, and dimension statuses.
 
@@ -364,10 +367,11 @@ Suppose a run yields:
 Then:
 
 ```text
-Overall = (4 × 0.90 + 3 × 0.68 + 3 × 0.90 + 2 × 0.80 + 2 × 0.60 + 0.75) / 15
-        = 11.89 / 15
-        = 0.792666...
-Displayed overall = 0.793
+R'      = 0.90 × 0.8 = 0.72
+Overall = (4 × 0.90 + 3 × 0.68 + 3 × 0.72 + 2 × 0.80 + 2 × 0.60 + 0.75) / 15
+        = 11.35 / 15
+        = 0.756666...
+Displayed overall = 0.757
 ```
 
 The other dimension values are illustrative outputs, not labels assigned to an actual skill.
@@ -376,7 +380,7 @@ The other dimension values are illustrative outputs, not labels assigned to an a
 
 A skill fails every task on every repetition and receives task scores of zero. Under the proposed formulas, Quality is zero and Robustness is one. The Efficiency result is not determined by this draft because its success-conditioning policy remains open. If the eventual Efficiency method returns null, the skill is unranked; if it returns a valid numeric score and the other dimensions are numeric, an overall score can be calculated. The current implementation returns `0` for this case (see the interim note under Efficiency), so the skill is ranked, last, and not unranked.
 
-This outcome exposes why Robustness must not be read as correctness.
+This outcome exposes why Robustness must not be read as correctness. In Overall, Robustness is scaled by the with-skill pass rate, here `0`, so the skill's perfect Robustness adds nothing to its Overall and cannot outweigh its Quality of zero. Without that scaling, with Robustness and Quality weighted equally, such a skill could rank above one that passes two runs in three (MET-60).
 
 ### Unavailable judge
 
