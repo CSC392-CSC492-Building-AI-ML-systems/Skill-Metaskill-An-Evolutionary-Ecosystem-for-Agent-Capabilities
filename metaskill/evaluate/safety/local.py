@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from ..models import LocalWarning, Skill
-from .checks import DeleteTarget, is_system_path
+from .checks import DeleteTarget, is_system_path, link_text
 
 MANY_FILES = 100
 RECENT_DAYS = 7
@@ -130,7 +130,7 @@ def _reasons(path: Path, follows_links: bool, home: Path, deadline: float) -> li
         if not follows_links:
             return []  # the delete removes only the link
         real = os.path.realpath(path)
-        return [f"is a link to `{os.readlink(path)}`; deleting through it removes `{real}`"]
+        return [f"is a link to `{link_text(path)}`; deleting through it removes `{real}`"]
 
     reasons = []
     if path == home:

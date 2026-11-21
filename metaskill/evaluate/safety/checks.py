@@ -1401,8 +1401,26 @@ def _bundle_symlinks(skill: Skill) -> list[tuple[str, str]]:
                 except ValueError:  # different drives on Windows
                     inside = False
                 if not inside:
-                    found.append((path.relative_to(root).as_posix(), os.readlink(path)))
+                    found.append((path.relative_to(root).as_posix(), link_text(path)))
     return found
+
+
+def without_extended_prefix(target: str) -> str:
+    """A Windows link target as people write it. os.readlink returns an absolute target
+    with the extended-length prefix (`\\\\?\\C:\\x`, `\\\\?\\UNC\\server\\share`), which
+    realpath drops, so a message would otherwise show one path two ways."""
+    if target.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + target[len("\\\\?\\UNC\\"):]
+    if target.startswith("\\\\?\\"):
+        return target[len("\\\\?\\"):]
+    return target
+
+
+def link_text(path: Path | str) -> str:
+    """What the link at `path` points to, as written, for a message. On Windows without the
+    extended-length prefix; elsewhere exactly as written, as `\\\\?\\` is an ordinary name there."""
+    target = os.readlink(path)
+    return without_extended_prefix(target) if os.name == "nt" else target
 
 
 def _normalize(target: str) -> str:
