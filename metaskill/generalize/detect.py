@@ -43,6 +43,8 @@ class Category(StrEnum):
     # A reference to a variable by name, e.g. os.getenv("API_KEY"). It is already a
     # configuration interface, so it is reported but not replaced (design.md, section 3.2).
     ENVIRONMENT_VARIABLE = "environment_variable"
+    # Candidate personal information detected by the optional Laya model.
+    PERSONAL_DATA = "personal_data"
 
 
 class Action(StrEnum):
@@ -59,6 +61,8 @@ REPLACE_THRESHOLD = 0.9
 def action_for(category: Category, confidence: float) -> Action:
     if category is Category.ENVIRONMENT_VARIABLE:
         return Action.KEEP
+    if category is Category.PERSONAL_DATA:
+        return Action.REVIEW
     if category is Category.CREDENTIAL or confidence >= REPLACE_THRESHOLD:
         return Action.REPLACE
     return Action.REVIEW
@@ -103,7 +107,7 @@ class Finding:
 
     @property
     def sensitive(self) -> bool:
-        return self.category is Category.CREDENTIAL
+        return self.category in {Category.CREDENTIAL, Category.PERSONAL_DATA}
 
     def to_dict(self) -> dict[str, Any]:
         return {

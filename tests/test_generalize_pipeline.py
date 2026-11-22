@@ -1,6 +1,7 @@
 """End-to-end coverage for config templates and the generalization pipeline."""
 
 import json
+import os
 
 import pytest
 
@@ -198,7 +199,7 @@ def test_report_has_safe_review_details_and_residuals(tmp_path):
     assert response["unresolved"]
     assert report["unresolved_review_findings"][0]["status"] == "review"
     assert report["residual_findings"]
-    assert report["residual_findings"][0]["status"] == "residual"
+    assert report["residual_findings"][0]["status"] == "expected_review"
     assert report["residual_findings"][0]["confidence"] == 0.6
     assert report["findings"][0]["action"] == "review"
 
@@ -275,15 +276,235 @@ def test_unscanned_files_are_reported_but_never_copied(tmp_path):
     ]
 
 
-def test_existing_undefined_placeholder_fails_output_validation(tmp_path):
+def test_existing_placeholders_are_preserved_and_defined_without_key_collisions(tmp_path):
     skill = write_skill(tmp_path / "skill", {
-        "SKILL.md": "Use the existing {{config.unlisted_value}} setting.\n"
+        "SKILL.md": "Use {{config.contact_email}} and contact user@company.ca.\n"
     })
     output = tmp_path / "result"
 
-    with pytest.raises(ValueError, match="placeholder without a config schema"):
+    generalize_skill(skill, output_path=output)
+
+    generalized = (output / "generalized-skill/SKILL.md").read_text(encoding="utf-8")
+    assert "{{config.contact_email}}" in generalized
+    assert "{{config.contact_email_2}}" in generalized
+    schema = json.loads((output / "config.schema.json").read_text(encoding="utf-8"))
+    example = json.loads((output / "config.example.json").read_text(encoding="utf-8"))
+    assert set(schema["properties"]) == {"contact_email", "contact_email_2"}
+    assert example == {"contact_email": "", "contact_email_2": ""}
+
+    rerun_output = tmp_path / "rerun"
+    generalize_skill(output / "generalized-skill", output_path=rerun_output)
+    rerun_schema = json.loads(
+        (rerun_output / "config.schema.json").read_text(encoding="utf-8")
+    )
+    assert set(rerun_schema["properties"]) == {"contact_email", "contact_email_2"}
+
+
+def test_output_scan_uses_expanded_limits_for_larger_placeholders(tmp_path):
+    skill = write_skill(tmp_path / "skill", {"SKILL.md": "contact: a@b.co\n"})
+    output = tmp_path / "result"
+
+    response = generalize_skill(
+        skill, output_path=output, max_file_bytes=17, max_total_bytes=17
+    )
+
+    report = json.loads((output / "findings.json").read_text(encoding="utf-8"))
+    assert "{{config.contact_email}}" in (
+        output / "generalized-skill/SKILL.md").read_text(encoding="utf-8")
+    assert report["validation"]["residual_detection_ran"] is True
+    assert response["counts"]["residual_findings"] == 0
+
+
+def test_same_value_in_skipped_finding_does_not_flag_replaced_span(tmp_path):
+    skill = write_skill(tmp_path / "skill", {
+        "settings.yaml": "project_id: shared-42\naccount_id: shared-42\n"
+    })
+    findings = scan_skill(skill).findings
+    project = next(item for item in findings if item.name == "project_id")
+    decisions = tmp_path / "decisions.json"
+    decisions.write_text(json.dumps({project.id: "approve"}), encoding="utf-8")
+    output = tmp_path / "result"
+
+    response = generalize_skill(skill, output_path=output, decisions_path=decisions)
+
+    report = json.loads((output / "findings.json").read_text(encoding="utf-8"))
+    assert response["counts"]["approved_values_remaining"] == 0
+    assert report["validation"]["approved_values_replaced"] is True
+
+
+def test_skipped_reviews_are_not_double_counted_as_unexpected_residuals(tmp_path):
+    skill = write_skill(tmp_path / "skill", {"settings.yaml": "project_id: project-42\n"})
+    [finding] = scan_skill(skill).findings
+    decisions = tmp_path / "decisions.json"
+    decisions.write_text(json.dumps({finding.id: "skip"}), encoding="utf-8")
+    output = tmp_path / "result"
+
+    response = generalize_skill(skill, output_path=output, decisions_path=decisions)
+
+    assert response["counts"]["unexpected_residual_findings"] == 0
+    assert not any(warning["reason"] == "residual_candidates" for warning in response["warnings"])
+
+
+def test_single_file_input_allows_sibling_output_directory(tmp_path):
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("A safe standalone skill.\n", encoding="utf-8")
+    output = tmp_path / "out"
+
+    generalize_skill(skill_file, output_path=output)
+
+    assert (output / "generalized-skill/SKILL.md").is_file()
+    assert skill_file.read_text(encoding="utf-8") == "A safe standalone skill.\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="executable bits are POSIX-specific")
+def test_generated_bundle_preserves_executable_mode(tmp_path):
+    import stat
+
+    skill = write_skill(tmp_path / "skill", {
+        "SKILL.md": "Run scripts/run.sh.\n",
+        "scripts/run.sh": "#!/bin/sh\necho ready\n",
+    })
+    script = skill / "scripts/run.sh"
+    script.chmod(0o755)
+    output = tmp_path / "result"
+
+    generalize_skill(skill, output_path=output)
+
+    mode = stat.S_IMODE((output / "generalized-skill/scripts/run.sh").stat().st_mode)
+    assert mode & stat.S_IXUSR
+    assert mode == stat.S_IMODE(script.stat().st_mode)
+
+
+def test_laya_findings_are_reviewed_and_reported_without_values(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    text = "Contact Alex Rivera for support.\n"
+    skill = write_skill(tmp_path / "skill", {"SKILL.md": text})
+    calls = []
+
+    def scan(contents, *, model_path=""):
+        calls.append(model_path)
+        start = contents.find("Alex Rivera")
+        if start < 0:
+            return []
+        return [{"start": start, "end": start + len("Alex Rivera"),
+                 "label": "person name", "score": 0.87}]
+
+    monkeypatch.setitem(sys.modules, "laya_pii", SimpleNamespace(scan=scan))
+    output = tmp_path / "result"
+    response = generalize_skill(
+        skill, output_path=output, use_laya=True, laya_model_path="/models/laya"
+    )
+
+    report_text = (output / "findings.json").read_text(encoding="utf-8")
+    report = json.loads(report_text)
+    assert "Alex Rivera" not in report_text
+    assert "laya" in response["detectors"]
+    assert calls == ["/models/laya"] * 2
+    [finding] = [row for row in report["findings"] if row["detector"] == "laya"]
+    assert finding["rule"] == "laya:person_name"
+    assert finding["action"] == "review"
+    assert finding["status"] == "review"
+
+    decisions = tmp_path / "decisions.json"
+    decisions.write_text(json.dumps({finding["id"]: "approve"}), encoding="utf-8")
+    approved_output = tmp_path / "approved"
+    generalize_skill(
+        skill,
+        output_path=approved_output,
+        decisions_path=decisions,
+        use_laya=True,
+        laya_model_path="/models/laya",
+    )
+    approved_text = (approved_output / "generalized-skill/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "{{config.person_name}}" in approved_text
+    approved_schema = json.loads(
+        (approved_output / "config.schema.json").read_text(encoding="utf-8")
+    )
+    assert approved_schema["properties"]["person_name"]["sensitive"] is True
+    assert calls == ["/models/laya"] * 4
+
+
+def test_laya_unavailable_returns_next_step_and_runs_regex_pipeline(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    class LayaUnavailable(RuntimeError):
+        next_step = "Install the Laya companion and restart Hermes."
+
+    def scan(_contents):
+        raise LayaUnavailable("model details must not be exposed")
+
+    monkeypatch.setitem(
+        sys.modules, "laya_pii", SimpleNamespace(scan=scan, LayaUnavailable=LayaUnavailable)
+    )
+    skill = write_skill(tmp_path / "skill", {"SKILL.md": "Contact user@company.ca.\n"})
+    output = tmp_path / "result"
+
+    response = generalize_skill(skill, output_path=output, use_laya=True)
+
+    assert response["next_step"] == "Install the Laya companion and restart Hermes."
+    assert "laya" not in response["detectors"]
+    assert "user@company.ca" not in (output / "findings.json").read_text(encoding="utf-8")
+
+
+def test_rule_finding_wins_when_laya_reports_the_same_span(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    # example.com is intentionally ignored as a placeholder by the rule detector.
+    email = "user@company.ca"
+    skill = write_skill(tmp_path / "skill", {"SKILL.md": f"Contact {email}.\n"})
+
+    def scan(contents):
+        start = contents.find(email)
+        if start < 0:
+            return []
+        return [{"start": start, "end": start + len(email),
+                 "label": "person name", "score": 0.99}]
+
+    monkeypatch.setitem(sys.modules, "laya_pii", SimpleNamespace(scan=scan))
+    output = tmp_path / "result"
+    generalize_skill(skill, output_path=output, use_laya=True)
+    report = json.loads((output / "findings.json").read_text(encoding="utf-8"))
+
+    assert len(report["findings"]) == 1
+    assert report["findings"][0]["category"] == "email"
+
+
+def test_interruption_removes_staging_and_new_parent_directories(tmp_path, monkeypatch):
+    from metaskill.generalize import pipeline
+
+    skill = write_skill(tmp_path / "skill", {"SKILL.md": "A safe skill.\n"})
+    output = tmp_path / "new-parent" / "nested" / "result"
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pipeline, "_copy_inventory", interrupt)
+    with pytest.raises(KeyboardInterrupt):
         generalize_skill(skill, output_path=output)
-    assert not output.exists()
+
+    assert not output.parent.parent.exists()
+    assert not list(tmp_path.glob(".result-*"))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="directory modes are POSIX-specific")
+def test_staging_output_permissions_follow_umask(tmp_path):
+    import stat
+
+    skill = write_skill(tmp_path / "skill", {"SKILL.md": "A safe skill.\n"})
+    output = tmp_path / "result"
+    old_umask = os.umask(0o027)
+    try:
+        generalize_skill(skill, output_path=output)
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(output.stat().st_mode) == 0o750
 
 
 def test_pipeline_rejects_symlink_output_path(tmp_path):

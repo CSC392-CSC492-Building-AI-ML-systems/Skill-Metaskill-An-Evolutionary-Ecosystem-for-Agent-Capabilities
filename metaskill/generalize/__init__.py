@@ -1,4 +1,4 @@
-"""Skill generalization. Only deterministic detection exists so far."""
+"""Skill inventory, detection, and generalization pipeline."""
 
 from .detect import (
     Action,
@@ -11,7 +11,6 @@ from .detect import (
     scan_skill,
 )
 from .inventory import InventoryError, load_inventory
-
 from .pipeline import generalize_skill
 
 __all__ = [
@@ -23,7 +22,7 @@ __all__ = [
     "detect",
     "detect_file",
     "load_inventory",
+    "generalize_skill",
     "redact",
     "scan_skill",
-    "generalize_skill"
 ]
