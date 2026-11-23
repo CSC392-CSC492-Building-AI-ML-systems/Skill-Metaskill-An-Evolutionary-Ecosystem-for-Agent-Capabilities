@@ -176,6 +176,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
             result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                            agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx,
                                            log_folder=log_folder)
+            result.log_folder = log_folder
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))
@@ -318,7 +319,8 @@ def _make_agent(config: EvaluationConfig) -> Any:
     """The agent the task runs use: a Hermes session (hermes_agent.py); replaced in tests."""
     from .hermes_agent import HermesAgent
 
-    return HermesAgent(model=config.agent_model or None, provider=config.agent_provider or None)
+    return HermesAgent(model=config.agent_model or None, provider=config.agent_provider or None,
+                       max_iterations=config.agent_max_iterations, timeout=config.agent_timeout)
 
 
 def _task_files_in_skills(tasks_path: Path, tasks: list, skill_paths: list[str | Path]) -> str:
