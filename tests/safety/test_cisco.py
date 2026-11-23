@@ -152,6 +152,28 @@ def test_deep_scan_without_llm_analyzer_is_not_reported_as_deep():
     assert result.tier is SafetyTier.STATIC
 
 
+def test_llm_failure_during_the_scan_without_analyzers_failed_is_llm_unavailable():
+    """Scanner 2.1.0 output: the analyzer loaded, so it is in analyzers_used, and it failed
+    during the scan, which only the LLM_ANALYSIS_FAILED diagnostic says."""
+    scan = copy.deepcopy(fixture("p5js-deep-llm-failed"))
+    del scan["analyzers_failed"]
+    assert "llm_analyzer" in scan["analyzers_used"]
+    result = convert(scan, SafetyTier.DEEP)
+    assert result.status is BackendStatus.LLM_UNAVAILABLE
+    assert result.tier is SafetyTier.STATIC
+    # The static findings stay, and the diagnostic itself is not counted against the skill.
+    assert [f.rule for f in result.findings] == ["COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR"]
+    assert "Connection error" in result.detail
+
+
+def test_llm_failure_diagnostic_is_ignored_at_the_static_tier():
+    scan = copy.deepcopy(fixture("p5js-deep-llm-failed"))
+    del scan["analyzers_failed"]
+    result = convert(scan, SafetyTier.STATIC)
+    assert result.status is BackendStatus.OK
+    assert result.tier is SafetyTier.STATIC
+
+
 # --- scan() -------------------------------------------------------------------
 
 

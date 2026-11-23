@@ -48,6 +48,7 @@ LLM_ANALYZER = "llm_analyzer"
 # of any large skill, or of any skill scanned while the API is down.
 SCANNER_NOTICES = {"LLM_ANALYSIS_FAILED", "LLM_CONTEXT_BUDGET_EXCEEDED"}
 _BUDGET_NOTICE = "LLM_CONTEXT_BUDGET_EXCEEDED"
+_FAILED_NOTICE = "LLM_ANALYSIS_FAILED"
 
 # These are not about harm to the user, so they are kept as evidence under
 # Configuration Cleanliness and not scored here (docs/safety/cisco.md).
@@ -223,8 +224,13 @@ def convert(scan: dict[str, Any], tier: SafetyTier) -> BackendResult:
     result = BackendResult(
         CiscoBackend.name, BackendStatus.OK, tier, findings, "; ".join(notes))
     llm_missing = LLM_ANALYZER not in scan.get("analyzers_used", [])
-    if tier is SafetyTier.DEEP and (llm_errors or llm_missing):
-        reason = llm_errors[0] if llm_errors else "LLM analyzer did not run"
+    # Scanner 2.1.0 has no analyzers_failed list: an analyzer that loads and then fails during
+    # the scan stays in analyzers_used and is reported only by this diagnostic finding.
+    run_failures = [(f.get("metadata") or {}).get("error") or f.get("description") or ""
+                    for f in notices if f.get("rule_id") == _FAILED_NOTICE]
+    if tier is SafetyTier.DEEP and (llm_errors or llm_missing or run_failures):
+        reason = (llm_errors[0] if llm_errors else run_failures[0] if run_failures
+                  else "LLM analyzer did not run")
         return _fell_back(result, f"LLM analysis failed: {reason}")
     return result
 
