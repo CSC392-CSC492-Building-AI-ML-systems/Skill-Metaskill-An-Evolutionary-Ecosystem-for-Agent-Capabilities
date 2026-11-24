@@ -22,6 +22,10 @@ TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
 DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
 DEFAULT_AGENT_MAX_ITERATIONS = 30  # model turns per task session
 DEFAULT_AGENT_TIMEOUT = 600.0  # seconds per task session
+# Task sessions run at once (runner.md 2.7). Small, so a first run does not open many
+# containers or hit a provider's rate limit; the runner also caps it at what Docker can hold.
+DEFAULT_MAX_PARALLEL_RUNS = 2
+MAX_PARALLEL_RUNS = 16
 SANDBOX_MEMORY = "512m"  # the sandbox's memory limit, which its run folder counts against
 
 
@@ -211,6 +215,9 @@ class EvaluationConfig:
     # whole session. They change what an agent can finish, so they are part of the hash.
     agent_max_iterations: int = DEFAULT_AGENT_MAX_ITERATIONS
     agent_timeout: float = DEFAULT_AGENT_TIMEOUT
+    # Task sessions of one skill run at once (runner.md 2.7). The results are the same as one
+    # at a time, so it is not part of the hash.
+    max_parallel_runs: int = DEFAULT_MAX_PARALLEL_RUNS
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
@@ -240,6 +247,10 @@ class EvaluationConfig:
                 f"agent_timeout must be a number of seconds > 0, got {self.agent_timeout!r}")
         # 600 and 600.0 are the same limit, so they must be the same in the hash.
         self.agent_timeout = float(self.agent_timeout)
+        if (isinstance(self.max_parallel_runs, bool) or not isinstance(self.max_parallel_runs, int)
+                or not 1 <= self.max_parallel_runs <= MAX_PARALLEL_RUNS):
+            raise ValueError(f"max_parallel_runs must be an integer from 1 to "
+                             f"{MAX_PARALLEL_RUNS}, got {self.max_parallel_runs!r}")
         check_weights(self.weights)
 
     def hash(self) -> str:
@@ -247,11 +258,13 @@ class EvaluationConfig:
 
         output_dir is left out, since where reports are written does not change them, and so
         is where the task file is: the tasks themselves are what change scores, and the same
-        file read from another folder is the same tasks.
+        file read from another folder is the same tasks. max_parallel_runs is left out too:
+        it changes how long the runs take, not what they give.
         """
         settings = self.to_dict()
         del settings["output_dir"]
         del settings["tasks_path"]
+        del settings["max_parallel_runs"]
         encoded = json.dumps(settings, sort_keys=True).encode()
         return hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -286,6 +299,7 @@ class EvaluationConfig:
             "agent_provider": self.agent_provider,
             "agent_max_iterations": self.agent_max_iterations,
             "agent_timeout": self.agent_timeout,
+            "max_parallel_runs": self.max_parallel_runs,
         }
 
     @classmethod
@@ -306,6 +320,7 @@ class EvaluationConfig:
             agent_provider=data.get("agent_provider", ""),
             agent_max_iterations=data.get("agent_max_iterations", DEFAULT_AGENT_MAX_ITERATIONS),
             agent_timeout=data.get("agent_timeout", DEFAULT_AGENT_TIMEOUT),
+            max_parallel_runs=data.get("max_parallel_runs", DEFAULT_MAX_PARALLEL_RUNS),
         )
         if "weights" in data:
             config.weights = {

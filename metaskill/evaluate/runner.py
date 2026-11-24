@@ -16,13 +16,16 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from .backoff import Backoff
 from .judge import (
     MAX_REASON_CHARS,
     DeterministicJudge,
@@ -176,33 +179,60 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     log_dir = run_dir / folder / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    for task in tasks:
-        for variant in VARIANTS:
-            for n in range(1, config.runs_per_task + 1):
-                label = f"{task.task_id} {variant.value} r{n}"
-                unavailable = pool.unavailable(task)
-                if unavailable:
-                    # Not worth an agent session that cannot be judged.
-                    result.errors.append(clean(f"{label}: {unavailable}", MAX_REASON_CHARS))
-                    continue
-                try:
-                    test, transcript = _run_once(
-                        skill, task, variant, n, agent, pool, config, run_dir, folder)
-                    result.tests.append(test)
-                    if transcript and variant is Variant.WITH_SKILL:
-                        result.transcripts[(task.task_id, n)] = transcript
-                # JudgeError also covers a workspace that could not be made, or Docker
-                # failing. OSError: writing the log failed. Either costs this run, not
-                # the runs already made.
-                except (JudgeError, JudgeUnavailable, OSError) as e:
-                    result.errors.append(
-                        clean(f"{label}: {type(e).__name__}: {e}", MAX_REASON_CHARS))
-                except Exception as e:
-                    # Unexpected, so likely a bug of ours: it costs this run (an error, not
-                    # a score), never the skill's other runs or its other dimensions.
-                    _log.warning("metaskill: run %s of %s failed unexpectedly", label,
-                                 clean(skill.name, MAX_REASON_CHARS), exc_info=True)
-                    result.errors.append(clean(f"{label}: {type(e).__name__}", MAX_REASON_CHARS))
+    # Every run, in the order the results are reported: task, variant, run number. Runs may
+    # finish in any order (max_parallel_runs), so each outcome is kept at its place in the
+    # plan, and the result is put together from the plan, as a sequential run gives it.
+    plan = [_Planned(task, variant, n) for task in tasks for variant in VARIANTS
+            for n in range(1, config.runs_per_task + 1)]
+    outcomes: list[_Outcome | None] = [None] * len(plan)
+    todo = []
+    for index, planned in enumerate(plan):
+        # Asked here, once and in order, before any session: the same errors in the same
+        # order as a sequential run, and the LLM judge is built before the workers share it.
+        unavailable = pool.unavailable(planned.task)
+        if unavailable:
+            # Not worth an agent session that cannot be judged.
+            outcomes[index] = _Outcome(
+                error=clean(f"{planned.label}: {unavailable}", MAX_REASON_CHARS))
+        else:
+            todo.append(index)
+
+    def attempt(index: int) -> _Outcome:
+        return _attempt(plan[index], skill, agent, pool, config, run_dir, folder)
+
+    stopped: list[bool] = []
+
+    def stop() -> None:
+        # Interrupted (Ctrl-C) or failed past every run's own handling: no new session
+        # starts, every container still open is removed, and the agent stops what it runs.
+        # Once: the parallel path stops before it waits for its threads, then re-raises here.
+        if stopped:
+            return
+        stopped.append(True)
+        pool.stop()
+        cancel = getattr(agent, "cancel", None)
+        if callable(cancel):
+            cancel()
+
+    workers = pool.workers(config.max_parallel_runs, len(todo))
+    try:
+        if workers <= 1:
+            for index in todo:
+                outcomes[index] = attempt(index)
+        else:
+            _run_parallel(todo, workers, attempt, outcomes, stop)
+    except BaseException:
+        stop()
+        raise
+
+    for planned, outcome in zip(plan, outcomes):
+        assert outcome is not None  # every planned run was decided above
+        if outcome.error:
+            result.errors.append(outcome.error)
+            continue
+        result.tests.append(outcome.test)
+        if outcome.transcript and planned.variant is Variant.WITH_SKILL:
+            result.transcripts[(planned.task.task_id, planned.n)] = outcome.transcript
 
     if pool.llm is not None:
         result.judge_model = pool.llm.judge_model
@@ -210,12 +240,91 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     return result
 
 
+@dataclass(frozen=True)
+class _Planned:
+    """One run of the plan."""
+
+    task: Task
+    variant: Variant
+    n: int
+
+    @property
+    def label(self) -> str:
+        return f"{self.task.task_id} {self.variant.value} r{self.n}"
+
+
+@dataclass
+class _Outcome:
+    """What one planned run gave: a result and its transcript, or an error."""
+
+    test: TestResult | None = None
+    transcript: str = ""
+    error: str = ""
+
+
+def _attempt(planned: _Planned, skill: Skill, agent: Agent, pool: _Judges,
+             config: EvaluationConfig, run_dir: Path, folder: str) -> _Outcome:
+    """One planned run, made again if the provider rate-limited its session (backoff.py).
+    Never raises an Exception: whatever goes wrong costs this run only."""
+    backoff, label = pool.backoff, planned.label
+    for attempt in range(1, backoff.attempts + 1):
+        if pool.stopping:
+            return _Outcome(error=f"{label}: the evaluation was stopped before this run")
+        backoff.wait()
+        try:
+            test, transcript = _run_once(skill, planned.task, planned.variant, planned.n,
+                                         agent, pool, config, run_dir, folder)
+        # JudgeError also covers a workspace that could not be made, or Docker failing.
+        # OSError: writing the log failed. Either costs this run, not the runs already made.
+        except (JudgeError, JudgeUnavailable, OSError) as e:
+            # The agent's provider throttled the session (HermesAgentUnavailable says so):
+            # wait, with every other worker, and make the run again in a fresh workspace.
+            if (getattr(e, "rate_limited", False) is True and attempt < backoff.attempts
+                    and not pool.stopping):
+                delay = backoff.limited()
+                _log.info("metaskill: run %s was rate-limited; trying again in %.0f s",
+                          label, delay)
+                continue
+            return _Outcome(error=clean(f"{label}: {type(e).__name__}: {e}", MAX_REASON_CHARS))
+        except Exception as e:
+            # Unexpected, so likely a bug of ours: it costs this run (an error, not a
+            # score), never the skill's other runs or its other dimensions.
+            _log.warning("metaskill: run %s of %s failed unexpectedly", label,
+                         clean(skill.name, MAX_REASON_CHARS), exc_info=True)
+            return _Outcome(error=clean(f"{label}: {type(e).__name__}", MAX_REASON_CHARS))
+        backoff.succeeded()
+        return _Outcome(test=test, transcript=transcript)
+    raise AssertionError("unreachable")  # the last attempt returns
+
+
+def _run_parallel(todo: list[int], workers: int, attempt: Callable[[int], _Outcome],
+                  outcomes: list[_Outcome | None], stop: Callable[[], None]) -> None:
+    """Run the planned runs `todo` on `workers` threads, each outcome at its index. The wait
+    wakes up regularly, so Ctrl-C reaches it even on Windows, where a blocking wait on a lock
+    cannot be interrupted. Interrupted, it calls `stop` (no new runs, every container
+    removed, the agent's sessions stopped) before waiting for the threads, which then end
+    quickly, and no thread outlives the call."""
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="metaskill-run")
+    futures = {executor.submit(attempt, index): index for index in todo}
+    try:
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+            for future in done:
+                outcomes[futures[future]] = future.result()
+    except BaseException:
+        stop()
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+    executor.shutdown(wait=True)
+
+
 def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
               pool: _Judges, config: EvaluationConfig,
               run_dir: Path, folder: str) -> tuple[TestResult, str]:
     """One session in a fresh workspace, judged against every check of the task. Returns
     the result and the agent's transcript ("" if it gave none)."""
-    workspace = pool.sandbox.open(task.fixtures)
+    workspace = pool.open(task.fixtures)
     left_out: list[str] = []
     run, failure = AgentRun(output=""), ""
     try:
@@ -242,7 +351,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         else:
             verdict = _judge(task, run, workspace, pool)
     finally:
-        workspace.close()
+        pool.close(workspace)
 
     log = f"{folder}/logs/{task.task_id}-{variant.value}-r{n}.txt"
     metrics = Metrics(
@@ -364,9 +473,11 @@ def _combine(verdicts: list[Verdict]) -> Verdict:
 
 
 class _Judges:
-    """The judges for one runner call. The LLM judge is built once, and only if a task
+    """The judges and sandbox for one runner call, shared by its runs, which may run on
+    several threads at once (runner.md 2.7). The LLM judge is built once, and only if a task
     needs it, so its record of models and tokens covers every run. The sandbox is asked
-    once whether it can run, since every run happens in it."""
+    once whether it can run, since every run happens in it. Every workspace open now is
+    known, so stop() can remove them all."""
 
     def __init__(self, ctx: Any, config: EvaluationConfig,
                  given: Mapping[JudgeType, TaskJudge] | None, sandbox: Sandbox):
@@ -375,28 +486,92 @@ class _Judges:
         self.llm: Judge | None = None
         self.llm_error = ""
         self.sandbox_error: str | None = None  # None until the sandbox is asked
-        self.workspace: Workspace | None = None  # the run being judged
+        # One pause for every session and LLM check of the call, after a rate limit.
+        self.backoff = Backoff()
+        self.stopping = False
+        self._lock = threading.Lock()
+        self._open: dict[int, Workspace] = {}  # by id(): a workspace need not be hashable
+        # The run being judged is per thread: an `exit_code` check runs in its own run's
+        # workspace, whichever other runs are being judged at the same time.
+        self._local = threading.local()
+
+    @property
+    def workspace(self) -> Workspace | None:
+        """The workspace of the run this thread is judging, if any."""
+        return getattr(self._local, "workspace", None)
+
+    @workspace.setter
+    def workspace(self, workspace: Workspace | None) -> None:
+        self._local.workspace = workspace
 
     def run_command(self, command: str, workdir: Path,
                     timeout: float) -> tuple[int | None, str]:
         """judge.CommandRunner for `exit_code` checks: runs the command in the workspace
         of the run being judged, not in workdir, the copy the other checks read."""
-        if self.workspace is None:
+        workspace = self.workspace
+        if workspace is None:
             raise JudgeError("an exit_code check ran outside a run")
-        result = self.workspace.run_command(command, timeout)
+        result = workspace.run_command(command, timeout)
         return result.exit_code, result.stderr
 
     def get(self, judge_type: JudgeType) -> TaskJudge:
-        if judge_type not in self.judges:
-            if judge_type is JudgeType.DETERMINISTIC:
-                self.judges[judge_type] = DeterministicJudge(run_command=self.run_command)
-            else:
-                self.judges[judge_type] = make_judge(judge_type, ctx=self.ctx,
-                                                     config=self.config)
-        judge = self.judges[judge_type]
-        if isinstance(judge, Judge):
-            self.llm = judge
-        return judge
+        with self._lock:
+            if judge_type not in self.judges:
+                if judge_type is JudgeType.DETERMINISTIC:
+                    self.judges[judge_type] = DeterministicJudge(run_command=self.run_command)
+                else:
+                    built = make_judge(judge_type, ctx=self.ctx, config=self.config)
+                    if isinstance(built, Judge):
+                        built.backoff = self.backoff  # rate limits pause every run
+                    self.judges[judge_type] = built
+            judge = self.judges[judge_type]
+            if isinstance(judge, Judge):
+                self.llm = judge
+            return judge
+
+    def workers(self, requested: int, runs: int) -> int:
+        """Sessions to run at once: `requested` (max_parallel_runs), no more than there are
+        runs, and no more than the sandbox can hold (DockerSandbox.capacity)."""
+        limit = max(1, min(requested, runs))
+        capacity = getattr(self.sandbox, "capacity", None)
+        if limit > 1 and callable(capacity):
+            room = capacity()
+            if isinstance(room, int) and 1 <= room < limit:
+                _log.info("metaskill: running %d sessions at once, not %d: the sandbox has "
+                          "room for %d", room, limit, room)
+                limit = room
+        return limit
+
+    def open(self, fixtures: list[Path]) -> Workspace:
+        """A new workspace from the sandbox, known until close(); none once stopping."""
+        if self.stopping:
+            raise JudgeError("the evaluation was stopped")
+        workspace = self.sandbox.open(fixtures)
+        with self._lock:
+            self._open[id(workspace)] = workspace
+            stopped = self.stopping
+        if stopped:  # stop() ran while this one was being made: it missed it
+            self.close(workspace)
+            raise JudgeError("the evaluation was stopped")
+        return workspace
+
+    def close(self, workspace: Workspace) -> None:
+        with self._lock:
+            self._open.pop(id(workspace), None)
+        workspace.close()
+
+    def stop(self) -> None:
+        """No new workspace, and every open one removed, with whatever still runs in it.
+        A run whose workspace goes ends with an error, which the caller no longer reads."""
+        with self._lock:
+            self.stopping = True
+            still_open = list(self._open.values())
+        for workspace in still_open:
+            try:
+                self.close(workspace)
+            except Exception:  # one that will not close must not keep the others open
+                _log.warning("metaskill: a sandbox workspace could not be removed",
+                             exc_info=True)
 
     def unavailable(self, task: Task) -> str:
         """Why the task cannot be run in the sandbox or judged, or "" if it can."""
