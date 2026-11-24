@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from . import cancel
 from .backoff import Backoff
 from .threads import submit
 from .judge import (
@@ -208,14 +209,17 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
         return _attempt(plan[index], skill, agent, pool, config, run_dir, folder)
 
     stopped: list[bool] = []
+    stop_lock = threading.Lock()
 
     def stop() -> None:
-        # Interrupted (Ctrl-C) or failed past every run's own handling: no new session
-        # starts, every container still open is removed, and the agent stops what it runs.
-        # Once: the parallel path stops before it waits for its threads, then re-raises here.
-        if stopped:
-            return
-        stopped.append(True)
+        # Interrupted (Ctrl-C), stopped (/metaskill stop, cancel.py) or failed past every
+        # run's own handling: no new session starts, every container still open is removed,
+        # and the agent stops what it runs. Once, under a lock: the stop watcher's thread
+        # and this one can both get here.
+        with stop_lock:
+            if stopped:
+                return
+            stopped.append(True)
         pool.stop()
         cancel = getattr(agent, "cancel", None)
         if callable(cancel):
@@ -225,17 +229,28 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     # An agent that can start its sessions' processes ahead (HermesAgent.prewarm) keeps one
     # ready per worker, so a session does not wait for Hermes to start.
     prewarm = getattr(agent, "prewarm", None)
+    cancel.check()  # stopped before this skill's runs began
     if callable(prewarm) and todo:
         prewarm(workers)
+    # Ctrl-C does not reach an evaluation Hermes runs in its gateway: /metaskill stop, or
+    # Hermes interrupting the turn, is seen by this watcher, which stops the runs as Ctrl-C
+    # would. Its own thread: every runner thread may be blocked in a session.
+    watcher = cancel.watch(stop)
     try:
         if workers <= 1:
             for index in todo:
+                cancel.check()
                 outcomes[index] = attempt(index)
         else:
             _run_parallel(todo, workers, attempt, outcomes, stop)
+        # The runs a stop cut short ended as errors; they are not a result to report.
+        cancel.check()
     except BaseException:
         stop()
         raise
+    finally:
+        if watcher is not None:
+            watcher.close()
 
     for planned, outcome in zip(plan, outcomes):
         assert outcome is not None  # every planned run was decided above
@@ -326,6 +341,7 @@ def _run_parallel(todo: list[int], workers: int, attempt: Callable[[int], _Outco
             done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
             for future in done:
                 outcomes[futures[future]] = future.result()
+            cancel.check()  # stopped: the except below stops the runs and waits for them
     except BaseException:
         stop()
         executor.shutdown(wait=True, cancel_futures=True)

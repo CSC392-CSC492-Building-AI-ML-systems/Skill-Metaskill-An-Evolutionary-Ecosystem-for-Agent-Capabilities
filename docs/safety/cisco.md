@@ -128,7 +128,8 @@ Called directly, Cisco asks the provider to enforce its JSON schema while the mo
 
 So the adapter:
 
-- sends the schema as guidance inside the instructions and asks `ctx.llm` for plain JSON mode, so Hermes does not fail the call;
+- sends the schema as guidance inside the instructions and asks for one JSON object in the text. It does not use `ctx.llm`'s JSON mode: Hermes turns that into the schema `{"type": "object"}`, which the Anthropic API rejects with a 400 (`additionalProperties` must be set to false), so on Anthropic every deep scan's LLM analysis failed, both Cisco's structured try and its plain-JSON retry ([judge.md](../evaluate/judge.md) 2.4 has the same rule);
+- reads the JSON object from the reply's text (`judge.parse_json_reply`) and hands Cisco that object alone, so prose around it cannot break Cisco's parse;
 - checks the reply against the schema itself (`jsonschema`, which LiteLLM depends on) and, if it does not fit, asks once more, listing what was wrong (`MAX_RETRIES = 1`);
 - returns a reply that still does not fit, for Cisco to reject; the scan then falls back to static, as for any other LLM failure.
 

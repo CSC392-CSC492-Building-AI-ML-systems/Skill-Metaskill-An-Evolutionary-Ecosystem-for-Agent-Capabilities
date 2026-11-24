@@ -192,16 +192,18 @@ class HermesAgent:
                 if self._cancelled or len(self._idle) + self._starting >= self._target:
                     return
                 self._starting += 1
-            warm = None
+            warm, keep = None, False
             try:
                 warm = _Warm.start([*self._runtime_argv(), WARM_FLAG])
             except Exception:  # no Hermes, or Windows refusing: sessions start cold
                 _log.debug("metaskill: a warm Hermes child could not be started", exc_info=True)
-            with self._lock:
-                self._starting -= 1
-                keep = warm is not None and not self._cancelled and self._target > 0
-                if keep:
-                    self._idle.append(warm)
+            finally:
+                # Also on an interrupt, or the count would block every later refill.
+                with self._lock:
+                    self._starting -= 1
+                    keep = warm is not None and not self._cancelled and self._target > 0
+                    if keep:
+                        self._idle.append(warm)
             if not keep:
                 if warm is not None:
                     warm.discard()
@@ -401,8 +403,18 @@ class _Warm:
             return ""
 
     def discard(self) -> None:
-        """Stop it unused (the evaluation ended or stopped): its whole tree, then reaped."""
-        _kill(self.proc, self.job)
+        """Stop it unused (the evaluation ended or stopped), then reap it. It has run no
+        session, so it started nothing: its Job Object (Windows) or process group (POSIX)
+        holds it all, and `taskkill /T` is not needed. That takes 0.3 s per child, and
+        close() stops up to max_parallel_runs of them before evaluate returns. One that has
+        already exited is left alone: on POSIX its pid may be another process's by now."""
+        if self.proc.poll() is None:
+            if self.job is not None and self.job.kill():
+                pass
+            elif _windows():
+                self.proc.kill()
+            else:
+                _kill(self.proc)
         try:
             self.proc.communicate(timeout=_REAP_TIMEOUT)
         except BaseException:
@@ -527,7 +539,11 @@ def _kill_tree(proc: subprocess.Popen, job=None) -> None:
 
 def _kill(proc: subprocess.Popen, job: Any = None) -> None:
     """_kill_tree for cleanup (an interrupt, HermesAgent.cancel): never raises, as the
-    process may already be gone or no longer ours to signal."""
+    process may already be gone or no longer ours to signal. A POSIX child already reaped
+    (its session ended as cancel() came) is left alone: its pid, the group's id, is free for
+    another process. On Windows the pid stays ours while proc holds its handle."""
+    if not _windows() and getattr(proc, "returncode", None) is not None:
+        return
     try:
         _kill_tree(proc, job)
     except (ProcessLookupError, PermissionError, OSError):
