@@ -108,6 +108,17 @@ def test_runner_error_without_results_is_error_not_skip():
     assert result.dimension_score.status is Status.ERROR
 
 
+def test_runner_diagnostics_explain_failure_without_echoing_raw_error():
+    errors = [
+        "normal baseline r1: SandboxUnavailable: the sandbox image is not pulled; private text",
+        "normal with_skill r1: JudgeError: Quality pilot completion unavailable (RuntimeError)",
+    ]
+    result = assess([], task_ids=["normal"], runs_per_task=1, runner_errors=errors)
+    detail = result.dimension_score.detail
+    assert "Sandbox image missing" in detail and "Model completion unavailable" in detail
+    assert "private text" not in detail
+
+
 @pytest.mark.parametrize("runs", [0, -1, True, 1.5])
 def test_invalid_planned_repetition_count_is_caller_error(runs):
     with pytest.raises(ValueError):

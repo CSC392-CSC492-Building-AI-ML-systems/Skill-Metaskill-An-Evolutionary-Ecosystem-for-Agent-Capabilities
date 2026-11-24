@@ -1,0 +1,50 @@
+{
+  "review_status": "draft",
+  "cases": [
+    {
+      "id": "himalaya-sent-envelopes",
+      "description": "Normal: paginated listing",
+      "prompt": "Construct a Himalaya command to list envelope metadata from Sent, page 1, with 20 results per page and JSON output. Do not run it. Return only a JSON object with an argv array of strings, starting with the executable. Put folder, page, page size, and output flags in that order after the subcommand.",
+      "expected": {
+        "argv": [
+          "himalaya",
+          "envelope",
+          "list",
+          "--folder",
+          "Sent",
+          "--page",
+          "1",
+          "--page-size",
+          "20",
+          "--output",
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "himalaya-folder-spaces",
+      "description": "Edge: folder name with spaces",
+      "prompt": "Construct a Himalaya command to list envelope metadata from the fictional folder Project Updates with JSON output. Do not run it. Return only a JSON object with an argv array of strings, starting with the executable. Place the folder flag and its value before the output flag; preserve the entire folder name as one argument.",
+      "expected": {
+        "argv": [
+          "himalaya",
+          "envelope",
+          "list",
+          "--folder",
+          "Project Updates",
+          "--output",
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "himalaya-auth-failure",
+      "description": "Failure: simulated authentication rejected",
+      "prompt": "A fictional Himalaya envelope listing returned exit code 1 and 'IMAP authentication failed: credentials rejected'. Explain why the listing failed and whether any messages were retrieved, using only JSON fields reason and messages_retrieved. Set reason to one of authentication_failed, folder_missing, or success, and messages_retrieved to a boolean.",
+      "expected": {
+        "reason": "authentication_failed",
+        "messages_retrieved": false
+      }
+    }
+  ]
+}

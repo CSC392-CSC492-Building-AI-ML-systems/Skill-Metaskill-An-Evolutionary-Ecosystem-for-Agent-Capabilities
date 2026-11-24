@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .judge import JudgeError, clean
-from .models import Skill
+from .models import DEFAULT_AGENT_MAX_ITERATIONS, DEFAULT_AGENT_TIMEOUT, Skill
 from .runner import AgentRun, Workspace, agent_run_from_hermes_usage, copied
 from .sandbox import SKILL_DIR
 
@@ -61,8 +61,8 @@ class HermesAgent:
 
     model: str | None = None      # None: the user's configured Hermes model
     provider: str | None = None   # None: the model's configured provider
-    max_iterations: int = 30      # model turns per session
-    timeout: float = 600.0        # seconds for a whole session
+    max_iterations: int = DEFAULT_AGENT_MAX_ITERATIONS  # model turns per session
+    timeout: float = DEFAULT_AGENT_TIMEOUT  # seconds for a whole session
     hermes: str = "hermes"        # the Hermes launcher
     # The models sessions actually ran on, as Hermes resolved them (for the report header).
     models_used: set[str] = field(default_factory=set, init=False)
