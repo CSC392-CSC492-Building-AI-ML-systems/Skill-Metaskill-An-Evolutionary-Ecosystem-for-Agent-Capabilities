@@ -1,0 +1,9 @@
+Services Agreement between Acme Ltd (the Customer) and Brightway Inc (the Supplier), dated 2026-10-01.
+
+1. The Supplier must deliver the first release by 2026-12-15.
+2. The Supplier should provide a progress report every week.
+3. The Customer may terminate this agreement with 30 days' written notice.
+4. The Customer shall pay each invoice within 30 days of receipt.
+5. Either party may propose changes to the schedule in writing.
+
+Signatures: [unsigned]

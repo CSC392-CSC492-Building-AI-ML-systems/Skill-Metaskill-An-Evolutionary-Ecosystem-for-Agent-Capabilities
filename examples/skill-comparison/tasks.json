@@ -1,0 +1,60 @@
+{
+  "tasks": [
+    {
+      "task_id": "meeting-notes",
+      "description": "Turn meeting notes into action items without inventing owners or committing a proposal",
+      "prompt": "meeting-notes.txt holds the notes of a team meeting. Turn them into action items and write them to actions.md.",
+      "fixtures": [
+        "meeting-notes.txt"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "expected": "0",
+          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"pricing\" in l];assert p, \"no pricing item\";assert not [l for l in p if re.search(r\"ana|ben|chris|dana\", l)], \"invented an owner\";assert [l for l in p if re.search(r\"unresolved|unassigned|tbd|no owner|not assigned|unknown|nobody|none|needs an owner|open\", l)], \"owner not marked missing\"'"
+        },
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "expected": "0",
+          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"weekly\" in l];assert all(re.search(r\"may|might|consider|optional|option|right|permitted|can |proposal|proposed|undecided|no decision|not decided|not committed|idea|suggest|open question|if \", l) for l in p), \"a proposal listed as a commitment\"'"
+        },
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "expected": "0",
+          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];assert [l for l in L if \"release notes\" in l and \"ana\" in l and \"2026-11-20\" in l], \"explicit owner and date lost\"'"
+        }
+      ]
+    },
+    {
+      "task_id": "services-agreement",
+      "description": "Turn a contract into action items without hardening may and should into must",
+      "prompt": "services-agreement.txt is a short contract. Turn it into action items and write them to actions.md.",
+      "fixtures": [
+        "services-agreement.txt"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "expected": "0",
+          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];assert [l for l in L if \"2026-12-15\" in l], \"the delivery deadline is missing\"'"
+        },
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "expected": "0",
+          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"terminat\" in l];assert p, \"no termination item\";assert all(re.search(r\"may|option|right|permitted|can \", l) for l in p), \"a right listed as an obligation\"'"
+        },
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "expected": "0",
+          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"report\" in l];assert p, \"no report item\";assert all(re.search(r\"should|recommend|expected|not mandatory|not binding|soft\", l) for l in p), \"should hardened into must\"'"
+        }
+      ]
+    }
+  ]
+}
