@@ -510,7 +510,9 @@ def test_with_skill_runs_get_the_skill_in_skill_dir_and_baselines_none(skill, ru
     sandbox = FakeSandbox()
     run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
               sandbox=sandbox)
-    with_skill, baseline = sandbox.opened
+    # Both runs start at once (max_parallel_runs), so either may open its workspace first.
+    [with_skill] = [w for w in sandbox.opened if w.skill]
+    [baseline] = [w for w in sandbox.opened if w is not with_skill]
     skill_md = (skill.path / "SKILL.md").read_bytes()
     assert with_skill.skill == {
         "/tmp/skill": {"SKILL.md": skill_md, "notes.md": b"\x00binary"},
@@ -570,7 +572,8 @@ def test_links_in_the_skill_are_not_copied(skill, run_dir, tmp_path, make_link):
     sandbox = FakeSandbox()
     run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
               sandbox=sandbox)
-    assert sandbox.opened[0].skill == {
+    [with_skill] = [w for w in sandbox.opened if w.skill]  # runs open in either order
+    assert with_skill.skill == {
         "/tmp/skill": {"SKILL.md": (skill.path / "SKILL.md").read_bytes()}}
     # The log says what was left out, so a run that needed it is not a mystery.
     logs = run_dir / "cleanup" / "logs"

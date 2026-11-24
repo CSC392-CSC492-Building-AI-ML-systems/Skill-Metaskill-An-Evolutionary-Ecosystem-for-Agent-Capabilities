@@ -27,7 +27,8 @@ SKILL_HELP = (
 USAGE = (
     "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
     "generalize <skill> | "
-    f"personalize <skill> --config <file> | skills [text] | quality-pilot\n{SKILL_HELP}"
+    f"personalize <skill> --config <file> | skills [text] | quality-pilot | "
+    f"stop (stops running evaluations; Ctrl-C does not)\n{SKILL_HELP}"
 )
 
 # operation -> (module, entry point)
@@ -459,6 +460,20 @@ def _duration(seconds):
     return f"{hours}h {minutes:02d}m {secs:02d}s" if hours else f"{minutes}m {secs:02d}s"
 
 
+def _stop_evaluations():
+    """/metaskill stop: Ctrl-C does not reach an evaluation, which Hermes runs in its gateway
+    (metaskill/evaluate/cancel.py). This stops the ones this Hermes profile is running."""
+    module = "metaskill.evaluate.cancel"
+    if __package__:
+        module = f"{__package__}.{module}"
+    stopped = importlib.import_module(module).stop_all()
+    if not stopped:
+        return "No metaskill evaluation is running."
+    return (f"Stopping {stopped} running evaluation(s): no new task session starts, their "
+            "containers are removed and their Hermes sessions stopped. The command that started "
+            "each one returns once it has stopped, with no report.")
+
+
 def make_command_handler(ctx):
     """Build the /metaskill handler.
 
@@ -482,6 +497,10 @@ def make_command_handler(ctx):
             if not request:
                 return f"{USAGE}\n{where}"
             command, _, rest = request.partition(" ")
+            if command == "stop":
+                if rest.strip():
+                    return "Usage: /metaskill stop (stops this profile's running evaluations)"
+                return _stop_evaluations()
             if command == "skills":
                 return _list_skills(rest, cwd or os.getcwd())
             if command == "quality-pilot":

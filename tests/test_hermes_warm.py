@@ -235,3 +235,53 @@ def test_evaluate_closes_its_agent_however_it_ends(tmp_path, monkeypatch):
     with pytest.raises(ZeroDivisionError):
         evaluate.evaluate_skill(tmp_path)
     assert closed == [True]
+
+
+# --- Fixes from the review ------------------------------------------------------------
+
+
+def test_closing_many_waiting_children_is_quick(agent):
+    # close() runs before evaluate returns, inside its "Took" time. Each discard ran
+    # `taskkill /T` (0.3 s on Windows): 16 children cost 4.9 s.
+    agent.prewarm(8)
+    assert wait_for(lambda: len(warm_pids(agent)) == 8)
+    pids = warm_pids(agent)
+    start = time.monotonic()
+    agent.close()
+    assert time.monotonic() - start < 2
+    assert wait_for(lambda: not any(alive(p) for p in pids))
+
+
+def test_an_exited_child_is_not_signalled_again(monkeypatch):
+    # On POSIX a reaped child's pid, its group's id, can be another process's.
+    signalled = []
+    monkeypatch.setattr(hermes_agent, "_kill_tree", lambda proc, job=None: signalled.append(proc))
+    monkeypatch.setattr(hermes_agent, "_windows", lambda: False)
+    hermes_agent._kill(SimpleNamespace(returncode=0, pid=4242))
+    assert signalled == []
+    running = SimpleNamespace(returncode=None, pid=4243)
+    hermes_agent._kill(running)
+    assert signalled == [running]
+
+    class Exited:
+        pid, returncode = 4244, 0
+
+        def poll(self):
+            return 0
+
+        def communicate(self, timeout=None):
+            return None, None
+
+    warm = hermes_agent._Warm(Exited(), None, SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(hermes_agent, "_kill", lambda *a: signalled.append("kill"))
+    warm.discard()
+    assert signalled == [running]  # discard() left it alone too
+
+
+def test_an_interrupted_refill_gives_its_slot_back(agent, monkeypatch):
+    def interrupted(argv):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(hermes_agent._Warm, "start", staticmethod(interrupted))
+    with pytest.raises(KeyboardInterrupt):
+        agent.prewarm(2)
+    assert agent._starting == 0  # or every later refill would think one was on its way

@@ -55,6 +55,7 @@ from .models import (
 # Under another name: `rank` here would hide the rank module.
 from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
+from . import cancel
 from .runner import RunnerResult, report_dir, run_tasks, timestamp
 from .tasks import TaskError, load_tasks
 from .threads import submit
@@ -115,8 +116,17 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     (HermesAgent.prewarm) and not used are stopped however the call ends."""
     used: list[Any] = []
     try:
-        return _evaluate_once(paths, config_path, output_path, tasks_path, ctx, agent,
-                              sandbox, judges, used)
+        # Registered while it runs, so /metaskill stop (or Hermes interrupting the turn)
+        # can stop it: Ctrl-C does not reach a command Hermes runs in its gateway (cancel.py).
+        with cancel.running():
+            return _evaluate_once(paths, config_path, output_path, tasks_path, ctx, agent,
+                                  sandbox, judges, used)
+    except cancel.EvaluationStopped as e:
+        # Every container is removed and every Hermes session stopped (runner.stop); the
+        # runs it cut short are not a result, so no report is written. Logs already
+        # written are kept.
+        return {"status": "error", "stopped": True,
+                "error": f"the evaluation was stopped ({e}); no report was written"}
     finally:
         for made in used:
             close = getattr(made, "close", None)
@@ -213,6 +223,7 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
                                               task_name)
     try:
         for i, (path, skill) in enumerate(zip(paths, loaded)):
+            cancel.check()  # stopped: no later skill starts
             try:
                 if isinstance(skill, Exception):
                     raise skill
@@ -228,6 +239,8 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
                                                log_folder=log_folder,
                                                static=static[i].result if i in static else None)
                 result.log_folder = log_folder
+            except cancel.EvaluationStopped:
+                raise  # the whole call stops, not this skill alone
             except Exception as e:  # one bad skill must not stop the others
                 warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                       MAX_REASON_CHARS))

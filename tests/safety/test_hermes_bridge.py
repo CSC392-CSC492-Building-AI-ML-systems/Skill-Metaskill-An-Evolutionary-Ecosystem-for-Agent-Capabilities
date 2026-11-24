@@ -31,13 +31,29 @@ def test_schema_is_guidance_not_strict_validation():
     kwargs = translate([{"role": "user", "content": "x"}],
                        {"response_format": {"type": "json_schema", "json_schema": {"schema": SCHEMA}}})
     assert "json_schema" not in kwargs
-    assert kwargs["json_mode"] is True
     assert '"required": ["verdict"]' in kwargs["instructions"]
 
 
-def test_json_object_format_becomes_json_mode():
-    kwargs = translate([{"role": "user", "content": "x"}], {"response_format": {"type": "json_object"}})
-    assert kwargs["json_mode"] is True
+@pytest.mark.parametrize("response_format", [
+    {"type": "json_schema", "json_schema": {"schema": SCHEMA}}, {"type": "json_object"}])
+def test_json_output_is_asked_for_in_the_text_never_with_json_mode(response_format):
+    # Hermes turns json_mode into the schema {"type": "object"}, which Anthropic rejects with
+    # a 400 ("additionalProperties must be explicitly set to false"): every deep scan's LLM
+    # analysis failed, both Cisco's structured try and its plain-JSON retry.
+    kwargs = translate([{"role": "user", "content": "x"}], {"response_format": response_format})
+    assert "json_mode" not in kwargs and "json_schema" not in kwargs
+    assert "Reply with one JSON object only." in kwargs["instructions"]
+
+
+def test_a_text_reply_is_parsed_for_the_retry_and_for_cisco():
+    pytest.importorskip("jsonschema")
+    text = 'Here is my analysis:\n```json\n{"verdict": "SAFE"}\n```'
+    llm = ScriptedText(text)
+    result, _ = hermes_bridge.complete_with_retry(llm, BASE, SCHEMA)
+    assert len(llm.calls) == 1  # it fits once parsed from the text: no retry
+    response = hermes_bridge._response(
+        lambda **kw: kw, result, (1, 1), SCHEMA)
+    assert json.loads(response["choices"][0]["message"]["content"]) == {"verdict": "SAFE"}
 
 
 def test_list_content_with_text_parts():
@@ -118,7 +134,7 @@ def test_cisco_llm_analyzer_runs_through_ctx_llm(tiny_skill):
     assert result.tier is SafetyTier.DEEP
     [call] = llm.calls
     assert call["instructions"] and call["input"]
-    assert call["json_mode"] is True
+    assert "json_mode" not in call  # Anthropic rejects what Hermes makes of it
     assert call["purpose"] == hermes_bridge.PURPOSE
 
 
@@ -209,7 +225,19 @@ class ScriptedLlm:
         return FakeResult(parsed=self.replies.pop(0), usage=FakeUsage(1000, 100))
 
 
-BASE = {"instructions": "Audit this.", "input": [{"type": "text", "text": "skill"}], "json_mode": True}
+class ScriptedText:
+    """Returns text replies, with no `parsed`, as Hermes does when no JSON output is asked."""
+
+    def __init__(self, *texts):
+        self.texts = list(texts)
+        self.calls = []
+
+    def complete_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        return FakeResult(parsed=None, text=self.texts.pop(0), usage=FakeUsage(1000, 100))
+
+
+BASE = {"instructions": "Audit this.", "input": [{"type": "text", "text": "skill"}]}
 
 
 def test_valid_reply_is_not_retried():
