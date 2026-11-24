@@ -22,9 +22,12 @@ TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
 DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
 DEFAULT_AGENT_MAX_ITERATIONS = 30  # model turns per task session
 DEFAULT_AGENT_TIMEOUT = 600.0  # seconds per task session
-# Task sessions run at once (runner.md 2.7). Small, so a first run does not open many
-# containers or hit a provider's rate limit; the runner also caps it at what Docker can hold.
-DEFAULT_MAX_PARALLEL_RUNS = 2
+# Task sessions run at once (runner.md 2.7). A session is mostly waiting on the model (about
+# 21 s of work per run, ~1 s of it Docker), so this sets the wall time. Runs finish in
+# waves of this many, each as long as its slowest run: 30 runs took 668 s one at a time,
+# 308 s at 2 and 85 s at 10 (3 waves); 16 makes that 2 waves. A rate limit pauses and
+# retries, and the runner caps it at what Docker can hold.
+DEFAULT_MAX_PARALLEL_RUNS = 16
 MAX_PARALLEL_RUNS = 16
 SANDBOX_MEMORY = "512m"  # the sandbox's memory limit, which its run folder counts against
 

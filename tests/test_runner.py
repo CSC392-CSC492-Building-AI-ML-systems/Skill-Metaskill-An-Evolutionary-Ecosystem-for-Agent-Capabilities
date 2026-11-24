@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -223,12 +224,16 @@ def test_a_task_that_lost_every_run_is_a_robustness_error(skill, run_dir):
 
 
 def test_one_lost_run_is_a_robustness_error(skill, run_dir):
-    calls = []
+    with_skill, lock = [], threading.Lock()
 
     def fails_once(prompt, skill, workdir):
-        calls.append(skill)
-        if skill is not None and len(calls) == 2:  # the second with_skill run
-            raise JudgeError("docker went away")
+        # The second with_skill session to start, whatever order parallel runs start in.
+        if skill is not None:
+            with lock:
+                with_skill.append(skill)
+                second = len(with_skill) == 2
+            if second:
+                raise JudgeError("docker went away")
         return writes_report_with_skill(prompt, skill, workdir)
 
     result = run_tasks(skill, [task()], FakeAgent(fails_once), config=config(runs=3),
