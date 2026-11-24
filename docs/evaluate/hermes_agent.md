@@ -89,6 +89,12 @@ If Windows refuses a job, `taskkill` alone is used. If both fail, the child is k
 
 **Parallel runs** ([runner.md](runner.md) 2.7). One `HermesAgent` serves every run of a call, from several threads: its runtime command and `models_used` are kept under a lock, and it knows the Hermes processes running now, each with its Job Object on Windows. `cancel()`, which the runner calls when it stops early, stops each of their trees as a timeout does and refuses any session after. A session the provider throttled (`failure_reason` `rate_limit` or `overloaded`) raises `HermesAgentUnavailable` with `rate_limited` set, and the runner waits and runs it again; other provider failures do not.
 
+**Warm start** (`prewarm_agents`, on by default). Starting a child costs about 3.5 s before the session does anything, about 2 s of it importing Hermes. So `HermesAgent.prewarm(n)` keeps `n` children started with `--warm`: each imports the modules a session uses (`hermes_child._PRELOAD`), then waits for its request file's path on stdin. A session hands its path to one (`_Warm`) and a replacement starts at once. Each child still serves one session and exits, and everything request-specific (the backend, the guards, the scope, the agent) happens after the hand-off, so the guards check each session as before; Hermes works out the terminal backend when asked, not at import. Measured with the real child in check mode on Windows 11: 2.4 s instead of 3.6 s after the hand-off, every guard and tool check passing. A real session saves more, as check mode does not import Hermes' agent module.
+- The runner asks for one per worker; `evaluate` asks before its pre-flight check, so the first ones import while the check runs, and calls `close()` when it ends, which stops those still waiting. `cancel()` stops them too.
+- A waiting child is in its Job Object (Windows) or session (POSIX) from the start, and its stderr goes to a temporary file, as nobody reads a pipe while it waits. The session's timeout counts from the hand-off.
+- It exits on its own when stdin closes (the parent died) or after 15 minutes unused. One that has exited is skipped, and a child that cannot be started leaves sessions to start cold.
+- It costs memory: up to `max_parallel_runs` idle Hermes processes beside the running ones. `prewarm_agents: false` turns it off.
+
 ## 5. Tests
 
 `tests/test_hermes_agent.py`. The unit tests need neither Hermes nor Docker: a fake child process stands in for the session.

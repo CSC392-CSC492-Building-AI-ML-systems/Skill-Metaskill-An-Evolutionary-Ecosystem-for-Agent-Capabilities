@@ -497,7 +497,54 @@ def run(request: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# Warm start (hermes_agent.py's pool): the modules a session imports, loaded before its
+# request is known. Imports only: nothing here reads the request, binds a scope or makes a
+# backend, so the guards (_check_backend, _refuse_other_backends) still run per session.
+# Hermes resolves the backend when asked (_get_env_config), not at import.
+_PRELOAD = (
+    "run_agent", "hermes_cli.config", "hermes_cli.runtime_provider", "hermes_cli.model_switch",
+    "hermes_cli.models", "toolsets", "tools.terminal_tool", "tools.file_tools",
+    "tools.terminal_scope", "tools.terminal_tool_backends", "tools.environments.base",
+    "tools.environments.local", "agent.terminal_env_registry", "agent.terminal_env_provider",
+)
+WARM = "--warm"
+WARM_IDLE = 900  # seconds a warm child waits for a request before it exits on its own
+
+
+def preload() -> None:
+    """Import what a session needs. A module that will not import is skipped: the session
+    imports it again and reports the failure as a setup error, as without a warm start."""
+    import importlib
+
+    for name in _PRELOAD:
+        try:
+            importlib.import_module(name)
+        except Exception:
+            pass
+
+
+def wait_for_request(stream=None, idle: float = WARM_IDLE) -> str | None:
+    """The request file's path, as one line on stdin, or None: stdin closed (the evaluation
+    ended, or the parent died) or nothing came within `idle` seconds. Read on a thread, as
+    a pipe cannot be waited on with a timeout on Windows."""
+    import threading
+
+    stream = stream if stream is not None else sys.stdin
+    got: list[str] = []
+    reader = threading.Thread(target=lambda: got.append(stream.readline()), daemon=True)
+    reader.start()
+    reader.join(idle)
+    line = got[0].strip() if got else ""
+    return line or None
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) > 1 and argv[1] == WARM:
+        preload()
+        path = wait_for_request()
+        if path is None:
+            return 0  # not needed after all
+        argv = [argv[0], path]
     request = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
     try:
         out = run(request)

@@ -222,6 +222,11 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
             cancel()
 
     workers = pool.workers(config.max_parallel_runs, len(todo))
+    # An agent that can start its sessions' processes ahead (HermesAgent.prewarm) keeps one
+    # ready per worker, so a session does not wait for Hermes to start.
+    prewarm = getattr(agent, "prewarm", None)
+    if callable(prewarm) and todo:
+        prewarm(workers)
     try:
         if workers <= 1:
             for index in todo:
