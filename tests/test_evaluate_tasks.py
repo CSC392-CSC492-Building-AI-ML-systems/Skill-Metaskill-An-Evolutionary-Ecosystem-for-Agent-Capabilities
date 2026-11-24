@@ -644,3 +644,25 @@ def test_without_tasks_the_dimensions_are_scored_in_the_calling_thread(tmp_path,
     monkeypatch.setattr(evaluate, "_static_scores", recording)
     evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")
     assert threads == {threading.current_thread().name}
+
+
+def test_the_background_thread_keeps_the_callers_context(tmp_path, harness, monkeypatch):
+    # Hermes scopes a profile's credentials in a contextvar: Clarity's judge calls on the
+    # background thread failed with "could not read this profile's ANTHROPIC_TOKEN".
+    import contextvars
+    scope = contextvars.ContextVar("scope", default=None)
+    real, seen = evaluate._static_scores, []
+
+    def recording(*args):
+        seen.append(scope.get())
+        return real(*args)
+
+    monkeypatch.setattr(evaluate, "_static_scores", recording)
+    token = scope.set("profile")
+    try:
+        rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                    config_path=harness.config, output_path=tmp_path / "out",
+                    tasks_path=harness.tasks)
+    finally:
+        scope.reset(token)
+    assert seen == ["profile", "profile"]

@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .backoff import Backoff
+from .threads import submit
 from .judge import (
     MAX_REASON_CHARS,
     DeterministicJudge,
@@ -313,7 +314,7 @@ def _run_parallel(todo: list[int], workers: int, attempt: Callable[[int], _Outco
     removed, the agent's sessions stopped) before waiting for the threads, which then end
     quickly, and no thread outlives the call."""
     executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="metaskill-run")
-    futures = {executor.submit(attempt, index): index for index in todo}
+    futures = {submit(executor, attempt, index): index for index in todo}
     try:
         pending = set(futures)
         while pending:
@@ -471,7 +472,7 @@ def _verdicts(task: Task, output: RunOutput, pool: _Judges) -> list[Verdict]:
         return [pool.get(c.judge).judge(task, c, output) for c in checks]
     executor = ThreadPoolExecutor(max_workers=len(llm), thread_name_prefix="metaskill-check")
     try:
-        futures = {i: executor.submit(pool.get(checks[i].judge).judge, task, checks[i], output)
+        futures = {i: submit(executor, pool.get(checks[i].judge).judge, task, checks[i], output)
                    for i in llm}
         found: dict[int, Verdict | Exception] = {}
         for i, check in enumerate(checks):

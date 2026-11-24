@@ -57,6 +57,7 @@ from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
 from .runner import RunnerResult, report_dir, run_tasks, timestamp
 from .tasks import TaskError, load_tasks
+from .threads import submit
 
 _log = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     if background is not None:
         for i, skill in enumerate(loaded):
             if isinstance(skill, Skill):
-                static[i] = background.submit(_static_scores, skill, config, llm, judge,
+                static[i] = submit(background, _static_scores, skill, config, llm, judge,
                                               task_name)
     try:
         for i, (path, skill) in enumerate(zip(paths, loaded)):
