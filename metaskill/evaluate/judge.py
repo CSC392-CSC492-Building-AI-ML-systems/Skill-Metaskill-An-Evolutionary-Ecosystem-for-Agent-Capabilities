@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import unicodedata
 from collections import Counter
 from collections.abc import Callable
@@ -38,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Protocol, TypedDict, Unpack
 
+from .backoff import Backoff, is_rate_limited
 from .models import (
     Check,
     CheckKind,
@@ -457,6 +459,12 @@ class Judge:
         # two points in time (a set cannot: a model used before and again looks unchanged).
         self.model_calls: dict[str, int] = {}
         self.usage: dict[str, TokenUsage] = {}  # by purpose: rate, review, check, ...
+        # The runner judges parallel runs with one Judge, so its records are updated and
+        # read under this lock.
+        self._lock = threading.Lock()
+        # Set by the runner for task checks: a provider rate limit is then waited out and
+        # the call retried (backoff.py). None: a rate limit fails the call at once.
+        self.backoff: Backoff | None = None
 
     @classmethod
     def from_context(cls, ctx: Any, config: EvaluationConfig) -> Judge:
@@ -474,11 +482,13 @@ class Judge:
     def judge_model(self) -> str:
         """What ran, for ReportMeta.judge_model. More than one entry means Hermes fell
         back to another model mid-run, so the scores are not all from one judge."""
-        return ", ".join(sorted(f"{p}/{m}" for p, m in self.used))
+        with self._lock:
+            return ", ".join(sorted(f"{p}/{m}" for p, m in self.used))
 
     @property
     def total_usage(self) -> TokenUsage:
-        return sum(self.usage.values(), TokenUsage())
+        with self._lock:
+            return sum(self.usage.values(), TokenUsage())
 
     def ask(self, instructions: str, material: str, schema: dict[str, Any], purpose: str,
             *, system_prompt: str = SYSTEM_PROMPT, temperature: float | None = 0.0,
@@ -518,9 +528,10 @@ class Judge:
                 usage.calls += 1
                 result = self._complete(text, material, system, purpose,
                                         temperature, max_tokens, timeout)
-                self.used.add((result.provider, result.model))
                 name = f"{result.provider}/{result.model}"
-                self.model_calls[name] = self.model_calls.get(name, 0) + 1
+                with self._lock:
+                    self.used.add((result.provider, result.model))
+                    self.model_calls[name] = self.model_calls.get(name, 0) + 1
                 reply_usage = getattr(result, "usage", None)
                 usage.input_tokens += int(getattr(reply_usage, "input_tokens", 0) or 0)
                 usage.output_tokens += int(getattr(reply_usage, "output_tokens", 0) or 0)
@@ -531,7 +542,8 @@ class Judge:
                 if not problems:
                     break
         finally:
-            self.usage[purpose] = self.usage.get(purpose, TokenUsage()) + usage
+            with self._lock:
+                self.usage[purpose] = self.usage.get(purpose, TokenUsage()) + usage
 
         if not isinstance(parsed, dict):
             raise JudgeError(f"judge reply is not a JSON object after {usage.calls} "
@@ -547,7 +559,31 @@ class Judge:
         Hermes (judge.md 2.4), and json_mode breaks on Anthropic: Hermes turns it into the
         schema {"type": "object"}, which the Anthropic API rejects with a 400 because it
         has no "additionalProperties": false.
+
+        With a `backoff`, a rate-limited call waits out the shared pause and is made again,
+        up to backoff.attempts times in all; a call also waits out a pause another call
+        started, so parallel runs do not keep hitting the limit.
         """
+        if self.backoff is None:
+            return self._complete_once(instructions, material, system_prompt, purpose,
+                                       temperature, max_tokens, timeout)
+        for attempt in range(1, self.backoff.attempts + 1):
+            self.backoff.wait()
+            try:
+                result = self._complete_once(instructions, material, system_prompt, purpose,
+                                             temperature, max_tokens, timeout)
+            except JudgeCallFailed as e:
+                if attempt == self.backoff.attempts or not is_rate_limited(e):
+                    raise
+                self.backoff.limited()
+                continue
+            self.backoff.succeeded()
+            return result
+        raise AssertionError("unreachable")  # the last attempt returns or raises
+
+    def _complete_once(self, instructions: str, material: str, system_prompt: str,
+                       purpose: str, temperature: float | None, max_tokens: int | None,
+                       timeout: float | None) -> Any:
         kwargs: dict[str, Any] = {"task": self.task} if self.task else {}
         try:
             return self.llm.complete_structured(

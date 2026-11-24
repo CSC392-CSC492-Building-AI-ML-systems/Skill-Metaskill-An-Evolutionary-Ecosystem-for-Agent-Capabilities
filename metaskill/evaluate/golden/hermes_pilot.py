@@ -1,5 +1,6 @@
 """Opt-in, text-only Quality smoke test on bundled synthetic data."""
 import json
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -23,6 +24,9 @@ class PilotCompletionAgent:
         self.public_inputs = json.dumps(public_inputs, ensure_ascii=True)
         self.route = None
         self.models_used = set()
+        # The runner runs sessions in parallel: the route is checked and set under this lock,
+        # or two runs could both see none yet and a change between them would go unnoticed.
+        self._lock = threading.Lock()
 
     def run(self, prompt, skill, workspace):
         messages = [
@@ -39,10 +43,11 @@ class PilotCompletionAgent:
             route = (reply.provider, reply.model)
             if not all(isinstance(part, str) and part for part in route):
                 raise ValueError("Provider did not report its model")
-            if self.route is not None and self.route != route:
-                raise ValueError("Provider or model changed between runs")
-            self.route = route
-            self.models_used.add(reply.model)
+            with self._lock:
+                if self.route is not None and self.route != route:
+                    raise ValueError("Provider or model changed between runs")
+                self.route = route
+                self.models_used.add(reply.model)
             if not isinstance(reply.text, str) or not reply.text.strip():
                 raise ValueError("Provider returned no text")
             usage = getattr(reply, "usage", None)

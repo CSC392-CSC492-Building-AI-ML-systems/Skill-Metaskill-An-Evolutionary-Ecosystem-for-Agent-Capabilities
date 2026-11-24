@@ -24,6 +24,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,11 +50,19 @@ class HermesAgentUnavailable(JudgeError):
     up, or the provider could not serve it. Either way it tells nothing about the skill.
 
     `stderr` is the tail of the Hermes process's error output when it died without a
-    result; it can hold this machine's paths, so check() keeps it out of the message."""
+    result; it can hold this machine's paths, so check() keeps it out of the message.
+    `rate_limited` is True when the provider throttled the session (RATE_LIMIT_REASONS):
+    the runner then waits and runs it again (backoff.py)."""
 
-    def __init__(self, message: str, stderr: str = ""):
+    def __init__(self, message: str, stderr: str = "", rate_limited: bool = False):
         super().__init__(message)
         self.stderr = stderr
+        self.rate_limited = rate_limited
+
+
+# Hermes' failure_reason for a provider that throttled the session: worth waiting and
+# trying again, unlike billing, auth or a model the provider does not have.
+RATE_LIMIT_REASONS = frozenset({"rate_limit", "overloaded"})
 
 
 @dataclass
@@ -67,8 +77,19 @@ class HermesAgent:
     # The models sessions actually ran on, as Hermes resolved them (for the report header).
     models_used: set[str] = field(default_factory=set, init=False)
     _argv: list[str] | None = field(default=None, init=False, repr=False)
+    # The runner runs sessions in parallel threads (runner.md 2.7): the state above, and the
+    # Hermes processes running now (for cancel), are kept under this lock.
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False,
+                                  compare=False)
+    # Each running Hermes process, with its Job Object on Windows (None elsewhere), so
+    # cancel() stops its whole tree as a timeout does (_kill_tree).
+    _children: dict[subprocess.Popen, Any] = field(default_factory=dict, init=False,
+                                                   repr=False, compare=False)
+    _cancelled: bool = field(default=False, init=False, repr=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
+        if self._cancelled:
+            raise HermesAgentUnavailable("the evaluation was stopped before this session")
         container, docker = _container(workspace)
         argv = self._runtime_argv()
         with tempfile.TemporaryDirectory(prefix="metaskill-agent-") as tmp:
@@ -81,15 +102,39 @@ class HermesAgent:
                 "max_iterations": self.max_iterations,
             }
             request_path.write_text(json.dumps(request), encoding="utf-8")
-            code, stderr = _run_child([*argv, str(request_path)], self.timeout)
+            code, stderr = _run_child([*argv, str(request_path)], self.timeout,
+                                      track=self._track)
             if not result_path.exists():
                 raise HermesAgentUnavailable(
                     f"the Hermes session process exited {code} without a result: "
                     f"{clean(stderr[-_STDERR_TAIL:], _STDERR_TAIL)}")
             result = _read_result(result_path)
             if isinstance(result.get("model"), str) and result["model"]:
-                self.models_used.add(result["model"])
+                with self._lock:
+                    self.models_used.add(result["model"])
             return _agent_run(result)
+
+    def cancel(self) -> None:
+        """Stop every session running now, and refuse new ones. The runner calls this when
+        an evaluation is interrupted or fails (runner.md 2.7), so no Hermes process goes on
+        calling the model after its container is gone."""
+        with self._lock:
+            self._cancelled = True
+            running = list(self._children.items())
+        for proc, job in running:
+            _kill(proc, job)
+
+    def _track(self, proc: subprocess.Popen, running: bool, job: Any = None) -> None:
+        """Record a Hermes process (and its Job Object on Windows) as running, or as ended;
+        one started after cancel() is stopped at once."""
+        with self._lock:
+            if running:
+                self._children[proc] = job
+            else:
+                self._children.pop(proc, None)
+            stop = running and self._cancelled
+        if stop:
+            _kill(proc, job)
 
     def check(self, workspace: Workspace) -> dict[str, Any]:
         """Without a model: set Hermes up for `workspace` and drive its real terminal and
@@ -102,7 +147,7 @@ class HermesAgent:
                        "docker": docker, "container": container, "workdir": workspace.root}
             (Path(tmp) / "request.json").write_text(json.dumps(request), encoding="utf-8")
             code, stderr = _run_child([*self._runtime_argv(), str(Path(tmp) / "request.json")],
-                                      self.timeout)
+                                      self.timeout, track=self._track)
             if not result_path.exists():
                 raise HermesAgentUnavailable(f"the Hermes check exited {code} without a result",
                                              stderr=clean(stderr[-_STDERR_TAIL:], _STDERR_TAIL))
@@ -120,6 +165,10 @@ class HermesAgent:
     def _runtime_argv(self) -> list[str]:
         """Hermes' launch argv with its main replaced by the child, so the child gets
         exactly Hermes' interpreter, isolation flags, sys.path, HERMES_HOME and bootstrap."""
+        with self._lock:
+            return self._runtime_argv_locked()
+
+    def _runtime_argv_locked(self) -> list[str]:
         if self._argv is None:
             try:
                 proc = subprocess.run([self.hermes, "--print-runtime-command"], stdin=subprocess.DEVNULL,
@@ -218,26 +267,39 @@ def _container(workspace: Workspace) -> tuple[str, str]:
     return name, docker
 
 
-def _run_child(argv: list[str], timeout: float) -> tuple[int | None, str]:
+def _run_child(argv: list[str], timeout: float,
+               track: Callable[[subprocess.Popen, bool, Any], None] | None = None,
+               ) -> tuple[int | None, str]:
     """Run the child so that a timeout stops it and every `docker exec` it started; the
     commands themselves stop with the container. Stopping only the child is not enough:
     communicate() would wait on the `docker exec` processes, which hold its stderr open.
 
     POSIX: a session (process group) of its own. Windows: a Job Object (winjob.py), with
     `taskkill /T` if Windows refuses one. The child starts suspended and runs only once it
-    is in the job, so nothing it starts can be outside it."""
+    is in the job, so nothing it starts can be outside it.
+
+    Interrupted (Ctrl-C, or the runner stopping), the tree is stopped too, or it would go on
+    calling the model. `track` is told when the child starts (with its job) and ends, for
+    HermesAgent.cancel."""
     group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED}
              if _windows() else {"start_new_session": True})
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE, text=True, errors="replace", **group)
     job = _contain(proc) if _windows() else None
+    if track is not None:
+        track(proc, True, job)
     try:
         _, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_tree(proc, job)
         proc.communicate()
         raise TimeoutError(f"the Hermes session ran past {timeout:g} s") from None
+    except BaseException:
+        _kill(proc, job)
+        raise
     finally:
+        if track is not None:
+            track(proc, False, job)
         if job is not None:
             job.close()  # kills anything the child left running, as a session's end should
     return proc.returncode, stderr or ""
@@ -290,6 +352,15 @@ def _kill_tree(proc: subprocess.Popen, job=None) -> None:
         proc.kill()
 
 
+def _kill(proc: subprocess.Popen, job: Any = None) -> None:
+    """_kill_tree for cleanup (an interrupt, HermesAgent.cancel): never raises, as the
+    process may already be gone or no longer ours to signal."""
+    try:
+        _kill_tree(proc, job)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass  # already gone
+
+
 def _read_result(path: Path) -> dict[str, Any]:
     try:
         result = json.loads(path.read_text(encoding="utf-8"))
@@ -309,7 +380,8 @@ def _agent_run(result: dict[str, Any]) -> AgentRun:
         reason = result.get("failure_reason")
         raise HermesAgentUnavailable(
             f"the model provider could not serve the session"
-            f"{f' ({reason})' if reason else ''}: {result.get('error') or 'no detail'}")
+            f"{f' ({reason})' if reason else ''}: {result.get('error') or 'no detail'}",
+            rate_limited=isinstance(reason, str) and reason in RATE_LIMIT_REASONS)
     if status == "agent_error":
         reason = result.get("failure_reason")
         raise RuntimeError(f"the agent's session failed{f' ({reason})' if reason else ''}: "

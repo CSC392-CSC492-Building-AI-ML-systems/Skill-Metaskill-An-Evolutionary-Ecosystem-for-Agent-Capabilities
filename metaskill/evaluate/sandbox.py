@@ -209,6 +209,21 @@ class DockerSandbox:
         self.sweep()
         return ""
 
+    def capacity(self) -> int | None:
+        """How many workspaces Docker can hold at once at this sandbox's limits: its CPUs
+        divided by `cpus`, and its memory divided by `memory`, whichever is fewer, and at
+        least 1. None if Docker does not say. The runner runs no more sessions at once
+        (runner.md 2.7), so parallel runs share the machine without starving each other."""
+        try:
+            result = self._docker("info", "--format", "{{.NCPU}} {{.MemTotal}}")
+            cpus, memory = (int(v) for v in result.stdout.split())
+            per_cpu = float(self.cpus)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        if result.returncode != 0 or cpus < 1 or memory < 1 or per_cpu <= 0:
+            return None
+        return max(1, min(int(cpus // per_cpu), memory // size_bytes(self.memory)))
+
     def sweep(self) -> None:
         """Remove containers past ORPHAN_AGE: what a crash, or `docker rm` failing, left
         running. Only those with our label, and only as a courtesy: a failure here does

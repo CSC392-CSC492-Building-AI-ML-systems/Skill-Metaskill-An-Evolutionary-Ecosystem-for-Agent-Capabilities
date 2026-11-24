@@ -125,7 +125,8 @@ def test_every_task_runs_n_times_per_variant(skill, run_dir):
         for variant in (Variant.WITH_SKILL, Variant.BASELINE)
         for n in (1, 2, 3)
     ]
-    assert [c.skill for c in agent.calls[:6]] == ["cleanup"] * 3 + [None] * 3
+    # Sessions may start in any order when they run in parallel; the results above may not.
+    assert sorted(c.skill or "" for c in agent.calls) == [""] * 6 + ["cleanup"] * 6
 
 
 def test_runs_are_judged_and_measured(skill, run_dir):
@@ -392,8 +393,9 @@ def test_exit_code_checks_run_in_the_runs_workspace(skill, run_dir):
     with_skill, baseline = result.tests
     assert with_skill.passed and not baseline.passed
     assert baseline.reason == "`python test.py` exited 1, expected 0: AssertionError"
-    # Run in the workspace the agent ran in, after the agent, before it is closed.
-    assert sandbox.commands == [("python test.py", ["report.txt"]), ("python test.py", [])]
+    # Run in the workspace the agent ran in, after the agent, before it is closed. Runs can
+    # overlap (max_parallel_runs), so the commands are compared as a set of what each saw.
+    assert sorted(sandbox.commands) == [("python test.py", []), ("python test.py", ["report.txt"])]
     assert result.errors == []
 
 
