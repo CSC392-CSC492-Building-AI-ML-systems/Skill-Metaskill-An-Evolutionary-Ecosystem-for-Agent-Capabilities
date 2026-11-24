@@ -171,3 +171,12 @@ The scanner calls are wrapped in one small method so tests can replace it with a
 
 - The deep tier only partly reads large skills. A `deep` result on a large skill is partly static-only; `detail` says which files were skipped.
 - Static false positives remain, such as the CRITICAL `Function constructor` finding on Playwright's `page.waitForFunction('...')` in `p5js`.
+
+## Pinned version: 2.1.0
+
+The add-on pins scanner 2.1.0 although the behaviour above was verified on 2.2.1. From 2.2.0 the scanner needs `pyjwt>=2.15.0`, and Hermes pins `pyjwt[crypto]==2.13.0`, so Hermes refuses to enable the add-on with 2.2.x (issue #54). Differences that matter to the adapter:
+
+- 2.1.0 has no `AnalyzerConfigurationError`. When the LLM analyzer cannot be built it logs a warning and returns the static analyzers only. The adapter then sees no `llm_analyzer` in `analyzers_used` and reports `llm-unavailable`, as for any other deep scan whose LLM layer did not run.
+- 2.1.0 has no `analyzers_failed` key; the adapter reads it with a default. An LLM analyzer that loads and then fails during the scan stays in `analyzers_used` and is reported only by the `LLM_ANALYSIS_FAILED` diagnostic finding, so the adapter treats that diagnostic as `llm-unavailable` too, with the error it records as the reason.
+- Static detection was compared on the hand-written fixtures and on 300 + 300 MaliciousSkillBench skills (test and validation splits, SKILL.md text only). Findings are identical on 291 of the first 300 and 294 of the second. Recall at MEDIUM or above is the same on the first sample (23/150 for both) and 42 vs 39 of 150 in 2.1.0's favour on the second. 2.1.0 flags about twice as many benign skills (18 vs 9 and 4 vs 2 of 150). A severity cap on the noisiest rule removed false positives on the first sample and lost four real detections on the second, so it is not applied.
+- The deep tier was not compared.

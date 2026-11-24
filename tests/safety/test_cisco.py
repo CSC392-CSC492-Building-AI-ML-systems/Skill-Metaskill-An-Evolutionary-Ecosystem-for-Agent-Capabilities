@@ -1,5 +1,7 @@
 import copy
 import json
+import sys
+import types
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -150,6 +152,28 @@ def test_deep_scan_without_llm_analyzer_is_not_reported_as_deep():
     assert result.tier is SafetyTier.STATIC
 
 
+def test_llm_failure_during_the_scan_without_analyzers_failed_is_llm_unavailable():
+    """Scanner 2.1.0 output: the analyzer loaded, so it is in analyzers_used, and it failed
+    during the scan, which only the LLM_ANALYSIS_FAILED diagnostic says."""
+    scan = copy.deepcopy(fixture("p5js-deep-llm-failed"))
+    del scan["analyzers_failed"]
+    assert "llm_analyzer" in scan["analyzers_used"]
+    result = convert(scan, SafetyTier.DEEP)
+    assert result.status is BackendStatus.LLM_UNAVAILABLE
+    assert result.tier is SafetyTier.STATIC
+    # The static findings stay, and the diagnostic itself is not counted against the skill.
+    assert [f.rule for f in result.findings] == ["COMMAND_INJECTION_JS_FUNCTION_CONSTRUCTOR"]
+    assert "Connection error" in result.detail
+
+
+def test_llm_failure_diagnostic_is_ignored_at_the_static_tier():
+    scan = copy.deepcopy(fixture("p5js-deep-llm-failed"))
+    del scan["analyzers_failed"]
+    result = convert(scan, SafetyTier.STATIC)
+    assert result.status is BackendStatus.OK
+    assert result.tier is SafetyTier.STATIC
+
+
 # --- scan() -------------------------------------------------------------------
 
 
@@ -242,6 +266,47 @@ def test_llm_setup_failure_falls_back_to_static():
     assert result.tier is SafetyTier.STATIC
     assert "API key required" in result.detail
     assert len(result.findings) == 1
+
+
+def _fake_scanner(monkeypatch, build_analyzers, configuration_error=None):
+    """Stand-in for skill_scanner's analyzer_factory and scan_policy modules."""
+    factory = types.ModuleType("skill_scanner.core.analyzer_factory")
+    factory.build_analyzers = build_analyzers
+    if configuration_error:
+        factory.AnalyzerConfigurationError = configuration_error
+    policy = types.ModuleType("skill_scanner.core.scan_policy")
+    policy.ScanPolicy = type("ScanPolicy", (), {"default": staticmethod(lambda: "policy")})
+    monkeypatch.setitem(sys.modules, "skill_scanner.core.analyzer_factory", factory)
+    monkeypatch.setitem(sys.modules, "skill_scanner.core.scan_policy", policy)
+
+
+def test_setup_error_from_a_newer_scanner_falls_back_to_static(monkeypatch):
+    class AnalyzerConfigurationError(ValueError):
+        pass
+
+    def build(*args, **kwargs):
+        raise AnalyzerConfigurationError("no key")
+
+    _fake_scanner(monkeypatch, build, AnalyzerConfigurationError)
+    with pytest.raises(LLMSetupError, match="no key"):
+        CiscoBackend()._build_deep_analyzers("model")
+
+
+def test_scanner_without_configuration_error_class_still_builds(monkeypatch):
+    """Scanner 2.1.0 has no AnalyzerConfigurationError; it drops the LLM analyzer itself."""
+    _fake_scanner(monkeypatch, lambda *args, **kwargs: ["static analyzers only"])
+    assert CiscoBackend()._build_deep_analyzers("model") == ["static analyzers only"]
+
+
+def test_deep_scan_from_a_scanner_that_dropped_its_llm_analyzer_is_llm_unavailable():
+    """2.1.0 output: no analyzers_failed key, and llm_analyzer absent from analyzers_used."""
+    scan = copy.deepcopy(fixture("p5js-static"))
+    scan.pop("analyzers_failed", None)
+    assert "llm_analyzer" not in scan["analyzers_used"]
+    result = convert(scan, SafetyTier.DEEP)
+    assert result.status is BackendStatus.LLM_UNAVAILABLE
+    assert result.tier is SafetyTier.STATIC
+    assert "LLM analyzer did not run" in result.detail
 
 
 def test_deep_without_hermes_llm_runs_static():
