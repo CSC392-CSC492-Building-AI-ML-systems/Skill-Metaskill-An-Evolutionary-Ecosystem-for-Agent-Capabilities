@@ -111,6 +111,26 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
               output_path: str | Path | None, tasks_path: str | Path | None,
               ctx: Any, agent: Any = None, sandbox: Any = None,
               judges: Any = None) -> dict[str, Any]:
+    """_evaluate_once, then the agent's close(): Hermes children started ahead of sessions
+    (HermesAgent.prewarm) and not used are stopped however the call ends."""
+    used: list[Any] = []
+    try:
+        return _evaluate_once(paths, config_path, output_path, tasks_path, ctx, agent,
+                              sandbox, judges, used)
+    finally:
+        for made in used:
+            close = getattr(made, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # cleanup must not replace the call's result
+                    _log.warning("metaskill: the task agent could not be closed", exc_info=True)
+
+
+def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
+                   output_path: str | Path | None, tasks_path: str | Path | None,
+                   ctx: Any, agent: Any, sandbox: Any, judges: Any,
+                   used: list[Any]) -> dict[str, Any]:
     from . import safety
 
     try:
@@ -150,6 +170,8 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
                     "error": "running the tasks needs what `dependencies` lists; nothing was run",
                     "dependencies": [asdict(d) for d in missing]}
         agent = agent if agent is not None else _make_agent(config)
+        used.append(agent)
+        _prewarm(agent, config, tasks, sandbox)  # starts while the check below runs
         problem = _check_agent(agent, sandbox)
         if problem:  # one clear error now, not one per run
             return {"status": "error",
@@ -362,12 +384,29 @@ def _make_sandbox(config: EvaluationConfig) -> Any:
     return DockerSandbox(disk=config.sandbox_disk)
 
 
+def _prewarm(agent: Any, config: EvaluationConfig, tasks: list, sandbox: Any) -> None:
+    """Start the agent's processes for the first sessions now (HermesAgent.prewarm), so they
+    are ready when the runs start: as many as the runner will run at once, which is
+    max_parallel_runs, at most one skill's runs, and at most what the sandbox holds."""
+    prewarm = getattr(agent, "prewarm", None)
+    if not callable(prewarm):
+        return
+    sessions = min(config.max_parallel_runs, len(tasks) * 2 * config.runs_per_task)
+    capacity = getattr(sandbox, "capacity", None)
+    room = capacity() if callable(capacity) else None
+    if isinstance(room, int) and room >= 1:
+        sessions = min(sessions, room)
+    if sessions >= 1:
+        prewarm(sessions)
+
+
 def _make_agent(config: EvaluationConfig) -> Any:
     """The agent the task runs use: a Hermes session (hermes_agent.py); replaced in tests."""
     from .hermes_agent import HermesAgent
 
     return HermesAgent(model=config.agent_model or None, provider=config.agent_provider or None,
-                       max_iterations=config.agent_max_iterations, timeout=config.agent_timeout)
+                       max_iterations=config.agent_max_iterations, timeout=config.agent_timeout,
+                       warm=config.prewarm_agents)
 
 
 def _task_files_in_skills(tasks_path: Path, tasks: list, skill_paths: list[str | Path]) -> str:

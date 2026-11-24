@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -44,6 +45,8 @@ _RUNTIME_TIMEOUT = 60  # seconds for `hermes --print-runtime-command`
 _TASKKILL_TIMEOUT = 30  # seconds for `taskkill` to stop a timed-out session on Windows
 _CREATE_SUSPENDED = 0x00000004  # winjob.CREATE_SUSPENDED; winjob is imported on Windows only
 _REAP_TIMEOUT = 5  # seconds to reap a child stopped by an interrupt
+WARM_FLAG = "--warm"  # hermes_child.WARM: import Hermes, then wait for the request on stdin
+_log = logging.getLogger(__name__)
 
 
 class HermesAgentUnavailable(JudgeError):
@@ -75,6 +78,9 @@ class HermesAgent:
     max_iterations: int = DEFAULT_AGENT_MAX_ITERATIONS  # model turns per session
     timeout: float = DEFAULT_AGENT_TIMEOUT  # seconds for a whole session
     hermes: str = "hermes"        # the Hermes launcher
+    # Keep Hermes children started ahead of their sessions (prewarm), so a session does not
+    # wait the ~2 s Hermes takes to import. False: every session starts its own, cold.
+    warm: bool = True
     # The models sessions actually ran on, as Hermes resolved them (for the report header).
     models_used: set[str] = field(default_factory=set, init=False)
     _argv: list[str] | None = field(default=None, init=False, repr=False)
@@ -91,6 +97,11 @@ class HermesAgent:
     _children: dict[subprocess.Popen, Any] = field(default_factory=dict, init=False,
                                                    repr=False, compare=False)
     _cancelled: bool = field(default=False, init=False, repr=False, compare=False)
+    # Warm children waiting for a session (prewarm), how many are being started, and how many
+    # to keep: the most sessions the runner runs at once.
+    _idle: list[_Warm] = field(default_factory=list, init=False, repr=False, compare=False)
+    _starting: int = field(default=0, init=False, repr=False, compare=False)
+    _target: int = field(default=0, init=False, repr=False, compare=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
         if self._cancelled:
@@ -107,8 +118,13 @@ class HermesAgent:
                 "max_iterations": self.max_iterations,
             }
             request_path.write_text(json.dumps(request), encoding="utf-8")
-            code, stderr = _run_child([*argv, str(request_path)], self.timeout,
-                                      track=self._track)
+            warm = self._take()
+            if warm is not None:
+                code, stderr = _run_child(argv, self.timeout, track=self._track, warm=warm,
+                                          request=str(request_path))
+            else:
+                code, stderr = _run_child([*argv, str(request_path)], self.timeout,
+                                          track=self._track)
             if not result_path.exists():
                 raise HermesAgentUnavailable(
                     f"the Hermes session process exited {code} without a result: "
@@ -126,8 +142,70 @@ class HermesAgent:
         with self._lock:
             self._cancelled = True
             running = list(self._children.items())
+            idle, self._idle = self._idle, []
         for proc, job in running:
             _kill(proc, job)
+        for warm in idle:
+            warm.discard()
+
+    def prewarm(self, sessions: int) -> None:
+        """Keep `sessions` Hermes children started and waiting (the runner passes how many
+        sessions it runs at once), each having imported Hermes, so a session hands its
+        request to one rather than starting Hermes itself. Never raises: without them,
+        sessions start cold as before. One child serves one session; a replacement starts
+        whenever one is taken. close() stops those still waiting."""
+        if not self.warm or sessions < 1:
+            return
+        with self._lock:
+            self._target = max(self._target, sessions)
+        self._refill()
+
+    def close(self) -> None:
+        """Stop the warm children still waiting, and start no more until prewarm(). Running
+        sessions are not touched. evaluate calls this when it ends."""
+        with self._lock:
+            self._target = 0
+            idle, self._idle = self._idle, []
+        for warm in idle:
+            warm.discard()
+
+    def _take(self) -> _Warm | None:
+        """A warm child still alive, or None (start one cold); starts its replacement."""
+        dead, taken = [], None
+        with self._lock:
+            while self._idle:
+                warm = self._idle.pop(0)
+                if warm.proc.poll() is None:
+                    taken = warm
+                    break
+                dead.append(warm)
+        for warm in dead:  # exited on its own: idle too long, or Hermes would not import
+            warm.discard()
+        if taken is not None:
+            self._refill()
+        return taken
+
+    def _refill(self) -> None:
+        """Start warm children until there are `_target` of them, waiting or starting."""
+        while True:
+            with self._lock:
+                if self._cancelled or len(self._idle) + self._starting >= self._target:
+                    return
+                self._starting += 1
+            warm = None
+            try:
+                warm = _Warm.start([*self._runtime_argv(), WARM_FLAG])
+            except Exception:  # no Hermes, or Windows refusing: sessions start cold
+                _log.debug("metaskill: a warm Hermes child could not be started", exc_info=True)
+            with self._lock:
+                self._starting -= 1
+                keep = warm is not None and not self._cancelled and self._target > 0
+                if keep:
+                    self._idle.append(warm)
+            if not keep:
+                if warm is not None:
+                    warm.discard()
+                return
 
     def resume(self) -> None:
         """Take sessions again after cancel(). The runner calls this when a new runner call
@@ -279,8 +357,70 @@ def _container(workspace: Workspace) -> tuple[str, str]:
     return name, docker
 
 
+def _group() -> dict[str, Any]:
+    """Popen arguments for a child of its own: a session (POSIX), or a new process group that
+    starts suspended until it is in its Job Object (Windows, _contain)."""
+    return ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED}
+            if _windows() else {"start_new_session": True})
+
+
+@dataclass
+class _Warm:
+    """A Hermes child started ahead of its session (HermesAgent.prewarm): it has imported
+    Hermes and waits for its request file's path on stdin. Its stderr goes to a file, not a
+    pipe: nobody reads a pipe while it waits, and a full one would block it."""
+
+    proc: subprocess.Popen
+    job: Any
+    stderr: Any  # a temporary file
+
+    @classmethod
+    def start(cls, argv: list[str]) -> _Warm:
+        stderr = tempfile.TemporaryFile()
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                    stderr=stderr, text=True, errors="replace", **_group())
+        except BaseException:
+            stderr.close()
+            raise
+        try:
+            job = _contain(proc) if _windows() else None
+        except BaseException:
+            _kill(proc)
+            stderr.close()
+            raise
+        return cls(proc, job, stderr)
+
+    def tail(self) -> str:
+        try:
+            self.stderr.seek(0, os.SEEK_END)
+            size = self.stderr.tell()
+            self.stderr.seek(max(0, size - 4 * _STDERR_TAIL))
+            return self.stderr.read().decode("utf-8", errors="replace")
+        except (OSError, ValueError):
+            return ""
+
+    def discard(self) -> None:
+        """Stop it unused (the evaluation ended or stopped): its whole tree, then reaped."""
+        _kill(self.proc, self.job)
+        try:
+            self.proc.communicate(timeout=_REAP_TIMEOUT)
+        except BaseException:
+            pass
+        self.finish()
+
+    def finish(self) -> None:
+        if self.job is not None:
+            self.job.close()
+        try:
+            self.stderr.close()
+        except OSError:
+            pass
+
+
 def _run_child(argv: list[str], timeout: float,
                track: Callable[[subprocess.Popen, bool, Any], None] | None = None,
+               warm: _Warm | None = None, request: str | None = None,
                ) -> tuple[int | None, str]:
     """Run the child so that a timeout stops it and every `docker exec` it started; the
     commands themselves stop with the container. Stopping only the child is not enough:
@@ -292,20 +432,29 @@ def _run_child(argv: list[str], timeout: float,
 
     Interrupted (Ctrl-C, or the runner stopping), the tree is stopped too, or it would go on
     calling the model. `track` is told when the child starts (with its job) and ends, for
-    HermesAgent.cancel."""
-    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED}
-             if _windows() else {"start_new_session": True})
-    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE, text=True, errors="replace", **group)
-    job = None
+    HermesAgent.cancel.
+
+    With `warm`, the child was started ahead (HermesAgent.prewarm) and is already in its
+    job: it is given `request`, the request file's path, on stdin, and the timeout counts
+    from then."""
+    if warm is None:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True, errors="replace", **_group())
+        job = None
+    else:
+        proc, job = warm.proc, warm.job
     try:
         # Inside the try: an interrupt right after the start still stops the child. On
         # Windows it is suspended until it is in its job (_contain resumes it).
-        if _windows():
+        if warm is None and _windows():
             job = _contain(proc)
         if track is not None:
             track(proc, True, job)
-        _, stderr = proc.communicate(timeout=timeout)
+        if warm is None:
+            _, stderr = proc.communicate(timeout=timeout)
+        else:
+            proc.communicate(input=f"{request}\n", timeout=timeout)
+            stderr = warm.tail()
     except subprocess.TimeoutExpired:
         _kill_tree(proc, job)
         proc.communicate()
@@ -322,7 +471,9 @@ def _run_child(argv: list[str], timeout: float,
     finally:
         if track is not None:
             track(proc, False, job)
-        if job is not None:
+        if warm is not None:
+            warm.finish()  # closes its job, as below, and its stderr file
+        elif job is not None:
             job.close()  # kills anything the child left running, as a session's end should
     return proc.returncode, stderr or ""
 

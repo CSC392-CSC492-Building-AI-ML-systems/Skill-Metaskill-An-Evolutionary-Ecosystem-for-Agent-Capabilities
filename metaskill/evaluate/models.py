@@ -221,6 +221,10 @@ class EvaluationConfig:
     # Task sessions of one skill run at once (runner.md 2.7). The results are the same as one
     # at a time, so it is not part of the hash.
     max_parallel_runs: int = DEFAULT_MAX_PARALLEL_RUNS
+    # Start Hermes for the next sessions ahead of them (hermes_agent.md, warm start), saving
+    # each session the ~2 s Hermes takes to import, at the cost of up to max_parallel_runs
+    # idle Hermes processes. Timing only, so not part of the hash.
+    prewarm_agents: bool = True
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
@@ -254,6 +258,8 @@ class EvaluationConfig:
                 or not 1 <= self.max_parallel_runs <= MAX_PARALLEL_RUNS):
             raise ValueError(f"max_parallel_runs must be an integer from 1 to "
                              f"{MAX_PARALLEL_RUNS}, got {self.max_parallel_runs!r}")
+        if not isinstance(self.prewarm_agents, bool):
+            raise ValueError(f"prewarm_agents must be true or false, got {self.prewarm_agents!r}")
         check_weights(self.weights)
 
     def hash(self) -> str:
@@ -261,13 +267,14 @@ class EvaluationConfig:
 
         output_dir is left out, since where reports are written does not change them, and so
         is where the task file is: the tasks themselves are what change scores, and the same
-        file read from another folder is the same tasks. max_parallel_runs is left out too:
-        it changes how long the runs take, not what they give.
+        file read from another folder is the same tasks. max_parallel_runs and prewarm_agents
+        are left out too: they change how long the runs take, not what they give.
         """
         settings = self.to_dict()
         del settings["output_dir"]
         del settings["tasks_path"]
         del settings["max_parallel_runs"]
+        del settings["prewarm_agents"]
         encoded = json.dumps(settings, sort_keys=True).encode()
         return hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -303,6 +310,7 @@ class EvaluationConfig:
             "agent_max_iterations": self.agent_max_iterations,
             "agent_timeout": self.agent_timeout,
             "max_parallel_runs": self.max_parallel_runs,
+            "prewarm_agents": self.prewarm_agents,
         }
 
     @classmethod
@@ -324,6 +332,7 @@ class EvaluationConfig:
             agent_max_iterations=data.get("agent_max_iterations", DEFAULT_AGENT_MAX_ITERATIONS),
             agent_timeout=data.get("agent_timeout", DEFAULT_AGENT_TIMEOUT),
             max_parallel_runs=data.get("max_parallel_runs", DEFAULT_MAX_PARALLEL_RUNS),
+            prewarm_agents=data.get("prewarm_agents", True),
         )
         if "weights" in data:
             config.weights = {
