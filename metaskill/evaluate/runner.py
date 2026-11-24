@@ -175,6 +175,12 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
         raise ValueError(f"skill name {folder!r} may only contain letters, digits, "
                          "'_', '.' and '-'")
     pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
+    # One agent serves every skill of a rank call. A stop() in an earlier call cancelled it
+    # (HermesAgent.cancel); if its caller went on to this skill, this skill's runs must not
+    # all be refused as "stopped".
+    resume = getattr(agent, "resume", None)
+    if callable(resume):
+        resume()
     result = RunnerResult(tests=[], task_ids=[task.task_id for task in tasks])
     log_dir = run_dir / folder / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -271,6 +277,8 @@ def _attempt(planned: _Planned, skill: Skill, agent: Agent, pool: _Judges,
         if pool.stopping:
             return _Outcome(error=f"{label}: the evaluation was stopped before this run")
         backoff.wait()
+        if pool.stopping:  # stopped during the pause, which stop() ended early
+            return _Outcome(error=f"{label}: the evaluation was stopped before this run")
         try:
             test, transcript = _run_once(skill, planned.task, planned.variant, planned.n,
                                          agent, pool, config, run_dir, folder)
@@ -435,7 +443,7 @@ def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Ve
         workspace.export(workdir)
         output = RunOutput(text=run.output, workdir=workdir)
         pool.workspace = workspace
-        return _combine([pool.get(c.judge).judge(task, c, output) for c in task.checks])
+        return _combine(_verdicts(task, output, pool))
     except RunFailed as e:
         return _failed(str(e))
     except (JudgeError, JudgeUnavailable):
@@ -450,6 +458,41 @@ def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Ve
     finally:
         pool.workspace = None
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _verdicts(task: Task, output: RunOutput, pool: _Judges) -> list[Verdict]:
+    """Each check's verdict, in the task's order. Two or more LLM checks are asked at once,
+    each a model round-trip of its own, while the deterministic ones run here: an
+    `exit_code` check must run on this thread, whose run's workspace pool.workspace is.
+    An error is raised as a sequential pass would: the first check's, in order."""
+    checks = task.checks
+    llm = [i for i, c in enumerate(checks) if c.judge is JudgeType.LLM]
+    if len(llm) < 2:
+        return [pool.get(c.judge).judge(task, c, output) for c in checks]
+    executor = ThreadPoolExecutor(max_workers=len(llm), thread_name_prefix="metaskill-check")
+    try:
+        futures = {i: executor.submit(pool.get(checks[i].judge).judge, task, checks[i], output)
+                   for i in llm}
+        found: dict[int, Verdict | Exception] = {}
+        for i, check in enumerate(checks):
+            if i not in futures:
+                try:
+                    found[i] = pool.get(check.judge).judge(task, check, output)
+                except Exception as e:  # raised below, in check order
+                    found[i] = e
+        for i, future in futures.items():
+            try:
+                found[i] = future.result()
+            except Exception as e:
+                found[i] = e
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)  # every future is done, or raising
+    verdicts = []
+    for i in range(len(checks)):
+        if isinstance(found[i], Exception):
+            raise found[i]
+        verdicts.append(found[i])
+    return verdicts
 
 
 def _failed(reason: str) -> Verdict:
@@ -566,6 +609,9 @@ class _Judges:
         with self._lock:
             self.stopping = True
             still_open = list(self._open.values())
+        # A worker in a rate-limit pause (up to backoff.MAX_DELAY) wakes now and sees the stop,
+        # and a judge call waiting on it is not made, so the threads end quickly.
+        self.backoff.cancel()
         for workspace in still_open:
             try:
                 self.close(workspace)

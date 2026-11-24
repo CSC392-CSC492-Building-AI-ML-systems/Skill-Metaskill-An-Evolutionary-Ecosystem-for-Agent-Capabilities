@@ -15,7 +15,7 @@ from metaskill.evaluate import backoff as backoff_module
 from metaskill.evaluate import hermes_agent, runner
 from metaskill.evaluate.backoff import Backoff, is_rate_limited
 from metaskill.evaluate.hermes_agent import HermesAgentUnavailable
-from metaskill.evaluate.judge import Judge, JudgeCallFailed, JudgeError
+from metaskill.evaluate.judge import Judge, JudgeCallFailed, JudgeError, Verdict
 from metaskill.evaluate.models import (
     MAX_PARALLEL_RUNS, Check, CheckKind, EvaluationConfig, JudgeType, Variant)
 from metaskill.evaluate.runner import AgentRun, run_tasks
@@ -445,21 +445,33 @@ def test_max_parallel_runs_round_trips_and_does_not_change_the_hash():
     assert config.hash() == EvaluationConfig().hash()
 
 
-def test_docker_capacity_is_cpus_and_memory_whichever_is_fewer():
-    sandbox = DockerSandbox()
+@pytest.mark.parametrize("cpus, memory, room", [
+    (8, 2 * 1024 ** 3, 4),  # 2 GB: four 512 MB sandboxes
+    (2, 64 * 1024 ** 3, 2),
+    (1, 100, 1),  # less than one sandbox's memory: still one at a time
+])
+def test_docker_capacity_is_cpus_and_memory_whichever_is_fewer(cpus, memory, room):
+    sandbox, calls = DockerSandbox(), []
 
     def info(*args):
-        return SimpleNamespace(returncode=0, stdout=f"{info.cpus} {info.memory}\n", stderr="")
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout=f"{cpus} {memory}\n", stderr="")
 
     sandbox._docker = info
-    info.cpus, info.memory = 8, 2 * 1024 ** 3  # 2 GB: four 512 MB sandboxes
-    assert sandbox.capacity() == 4
-    info.cpus, info.memory = 2, 64 * 1024 ** 3
-    assert sandbox.capacity() == 2
-    info.cpus, info.memory = 1, 100  # less than one sandbox's memory: still one at a time
-    assert sandbox.capacity() == 1
-    sandbox._docker = lambda *a: SimpleNamespace(returncode=1, stdout="", stderr="no daemon")
-    assert sandbox.capacity() is None
+    assert sandbox.capacity() == room
+    assert sandbox.capacity() == room and len(calls) == 1  # asked once, then kept
+
+
+def test_docker_capacity_is_none_when_docker_does_not_say_and_is_asked_again():
+    sandbox, calls = DockerSandbox(), []
+
+    def no_daemon(*args):
+        calls.append(args)
+        return SimpleNamespace(returncode=1, stdout="", stderr="no daemon")
+
+    sandbox._docker = no_daemon
+    assert sandbox.capacity() is None and sandbox.capacity() is None
+    assert len(calls) == 2  # an unknown answer is not kept
 
 
 # --- The Hermes agent stops its sessions --------------------------------------------------
@@ -521,3 +533,150 @@ def test_cancel_kills_running_sessions_and_refuses_new_ones(monkeypatch):
     assert killed == [(running, job), (late, None)]
     with pytest.raises(HermesAgentUnavailable, match="stopped"):
         agent.run("p", None, SimpleNamespace())
+
+
+# --- Stopping ends rate-limit pauses, and the agent takes sessions again --------------------
+
+
+def test_cancel_wakes_a_worker_in_a_rate_limit_pause_at_once():
+    gate = Backoff(initial=60)
+    gate.limited()  # a 60 s pause
+    waiter = threading.Thread(target=gate.wait)
+    start = time.monotonic()
+    waiter.start()
+    time.sleep(0.05)
+    gate.cancel()
+    waiter.join(timeout=5)
+    assert not waiter.is_alive() and time.monotonic() - start < 5
+    gate.wait()  # and every later pause is over at once
+    assert gate.cancelled
+
+
+def test_stopping_the_pool_ends_its_pause_and_no_judge_call_is_made_after():
+    pool = runner._Judges(None, config(), None, FakeSandbox())
+    pool.backoff.limited()
+    pool.stop()
+    assert pool.backoff.cancelled
+
+    class Never(FakeLlm):
+        def complete_structured(self, **kwargs):
+            raise AssertionError("a judge call was made after the stop")
+
+    judge = Judge(Never(), retries=0)
+    judge.backoff = pool.backoff
+    with pytest.raises(JudgeError, match="stopped"):
+        judge.ask("x", "y", {"type": "object"}, "check")
+
+
+def test_a_new_runner_call_resumes_an_agent_an_earlier_stop_cancelled(skill, tmp_path):
+    class Resumable(CancellableAgent):
+        resumed = 0
+
+        def resume(self):
+            self.resumed += 1
+
+    agent = Resumable(writes_report_with_skill)
+    run_tasks(skill, [task("a")], agent, config=config(runs=1), run_dir=tmp_path)
+    assert agent.resumed == 1 and agent.cancelled == 0
+
+
+def test_hermes_agent_resume_takes_sessions_again(monkeypatch):
+    monkeypatch.setattr(hermes_agent, "_kill", lambda proc, job=None: None)
+    agent = hermes_agent.HermesAgent()
+    agent.cancel()
+    agent.resume()
+    killed = []
+    monkeypatch.setattr(hermes_agent, "_kill", lambda proc, job=None: killed.append(proc))
+    agent._track(FakeProc(), True)  # not stopped: the agent is no longer cancelled
+    assert killed == [] and not agent._cancelled
+
+
+def test_the_runtime_command_lookup_does_not_hold_the_session_lock(monkeypatch):
+    # cancel() and a session ending (_track) take the session lock; the `hermes` lookup of
+    # the runtime command must not keep them waiting.
+    agent = hermes_agent.HermesAgent()
+    inside, release = threading.Event(), threading.Event()
+
+    def slow_lookup():
+        inside.set()
+        release.wait(5)
+        return ["python", "-c", "x"]
+
+    monkeypatch.setattr(agent, "_runtime_argv_locked", slow_lookup)
+    looker = threading.Thread(target=agent._runtime_argv)
+    looker.start()
+    assert inside.wait(5)
+    try:
+        assert agent._lock.acquire(timeout=1)
+        agent._lock.release()
+    finally:
+        release.set()
+        looker.join(5)
+
+
+def test_an_interrupted_child_is_reaped_after_it_is_killed(monkeypatch, posix_child):
+    class Proc(FakeProc):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def communicate(self, timeout=None):
+            self.calls.append(timeout)
+            if len(self.calls) == 1:
+                raise KeyboardInterrupt
+            return "", ""
+
+    proc = Proc()
+    monkeypatch.setattr(hermes_agent.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(hermes_agent, "_kill", lambda p, job=None: None)
+    with pytest.raises(KeyboardInterrupt):
+        hermes_agent._run_child(["hermes"], 10)
+    assert proc.calls == [10, hermes_agent._REAP_TIMEOUT]
+
+
+# --- A run's LLM checks are asked at once -------------------------------------------------
+
+
+def llm_check(item):
+    return Check(judge=JudgeType.LLM, checklist=[item])
+
+
+class SlowJudge:
+    """An LLM judge whose verdict names its check, after a pause; counts calls at once."""
+
+    judge_type = JudgeType.LLM
+
+    def __init__(self, fail=()):
+        self.lock, self.running, self.peak, self.fail = threading.Lock(), 0, 0, set(fail)
+
+    def judge(self, task, check, run):
+        with self.lock:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        time.sleep(0.1)
+        with self.lock:
+            self.running -= 1
+        if check.checklist[0] in self.fail:
+            raise JudgeError(f"failed {check.checklist[0]}")
+        return Verdict(passed=True, score=1.0, reason=check.checklist[0], evidence=None)
+
+
+def test_a_runs_llm_checks_are_asked_at_once_and_kept_in_order(skill, tmp_path):
+    slow = SlowJudge()
+    checks = [llm_check("one"), file_check(), llm_check("two"), llm_check("three")]
+    result = run_tasks(skill, [task("a", checks=checks)], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1, parallel=1), run_dir=tmp_path,
+                       judges={JudgeType.LLM: slow})
+    reasons = result.tests[0].reason.split("; ")
+    assert slow.peak == 3
+    assert (reasons[0], reasons[2], reasons[3]) == ("one", "two", "three")
+
+
+def test_the_first_failing_check_in_order_is_the_runs_error(skill, tmp_path):
+    slow = SlowJudge(fail={"two", "three"})
+    checks = [llm_check("one"), llm_check("two"), llm_check("three")]
+    result = run_tasks(skill, [task("a", checks=checks)], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1, parallel=1), run_dir=tmp_path,
+                       judges={JudgeType.LLM: slow})
+    assert result.tests == [] and len(result.errors) == 2
+    assert all("failed two" in e for e in result.errors)

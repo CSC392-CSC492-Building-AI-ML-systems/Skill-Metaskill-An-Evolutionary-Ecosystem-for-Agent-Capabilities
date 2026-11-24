@@ -57,23 +57,36 @@ class Backoff:
     `wait()` is called before each model use (a session, a judge call) and returns once no
     pause is in force. `limited()` records a rate limit and starts or extends the pause:
     INITIAL_DELAY, doubled for each further limit before a call succeeds, at most MAX_DELAY.
-    `succeeded()` resets the doubling. Thread-safe; `sleep` and `clock` are for tests.
+    `succeeded()` resets the doubling. `cancel()` ends every pause at once, and every later
+    one, so a stopping runner does not wait up to MAX_DELAY per worker for its threads.
+    Thread-safe; `sleep` and `clock` are for tests (None: an interruptible wait).
     """
 
     def __init__(self, *, initial: float = INITIAL_DELAY, maximum: float = MAX_DELAY,
-                 attempts: int = ATTEMPTS, sleep: Callable[[float], None] = time.sleep,
+                 attempts: int = ATTEMPTS, sleep: Callable[[float], None] | None = None,
                  clock: Callable[[], float] = time.monotonic):
         if attempts < 1:
             raise ValueError(f"attempts must be >= 1, got {attempts}")
         self.initial, self.maximum, self.attempts = initial, maximum, attempts
-        self._sleep, self._clock = sleep, clock
+        self._cancelled = threading.Event()
+        # The default waits on the event, so cancel() wakes a waiting worker at once.
+        self._sleep = sleep if sleep is not None else self._cancelled.wait
+        self._clock = clock
         self._lock = threading.Lock()
         self._resume_at = 0.0
         self._streak = 0  # rate limits since the last success
         self.limits = 0  # every rate limit seen, for the log
 
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def cancel(self) -> None:
+        """End every pause now and later: the call is stopping (runner.md 2.7)."""
+        self._cancelled.set()
+
     def wait(self) -> None:
-        while True:
+        while not self._cancelled.is_set():
             with self._lock:
                 left = self._resume_at - self._clock()
             if left <= 0:

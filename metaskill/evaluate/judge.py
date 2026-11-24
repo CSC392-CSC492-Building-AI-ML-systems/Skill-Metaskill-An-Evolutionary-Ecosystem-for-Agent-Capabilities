@@ -569,6 +569,8 @@ class Judge:
                                        temperature, max_tokens, timeout)
         for attempt in range(1, self.backoff.attempts + 1):
             self.backoff.wait()
+            if self.backoff.cancelled:  # the runner is stopping: no new model call
+                raise JudgeError("the evaluation was stopped before this judge call")
             try:
                 result = self._complete_once(instructions, material, system_prompt, purpose,
                                              temperature, max_tokens, timeout)
