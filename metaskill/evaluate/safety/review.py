@@ -18,6 +18,7 @@ from ..judge import Judge, JudgeError, JudgeUnavailable, strip_hidden
 from ..models import Dimension, Finding, SafetyTier, Skill
 from .checks import SkippedWarning, skipped_warnings
 from .findings import BackendResult, BackendStatus, SEVERITY_RANK
+from ..threads import map_in_context, submit
 
 NAME = "llm-review"
 # Skipped matches sent in one re-check, most severe first; the rest are reported as not
@@ -222,7 +223,7 @@ class ReviewBackend:
         # model round-trip rather than up to three in turn. Its answer is only used when the
         # review succeeds, as before.
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="metaskill-recheck") as ex:
-            recheck = ex.submit(self._recheck, skill)
+            recheck = submit(ex, self._recheck, skill)
             try:
                 result = self.judge.review(skill, CATEGORIES, dimension=Dimension.SAFETY,
                                            source=self.name, instructions=INSTRUCTIONS)
@@ -281,7 +282,7 @@ class ReviewBackend:
         if len(groups) > 1:
             with ThreadPoolExecutor(max_workers=len(groups),
                                     thread_name_prefix="metaskill-recheck") as ex:
-                answers = list(ex.map(lambda pair: checked(*pair), groups))
+                answers = map_in_context(ex, lambda pair: checked(*pair), groups)
         else:
             answers = [checked(cfg, group) for cfg, group in groups]
         for (cfg, _), answer in zip(groups, answers):

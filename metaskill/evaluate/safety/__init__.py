@@ -21,6 +21,7 @@ from .findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
 from .hermes_bridge import PluginLlm
 from .review import ReviewBackend
+from ..threads import map_in_context
 
 # Statuses that still produced findings the score can rely on. A deep scan that
 # fell back to static is usable: its static findings are real.
@@ -89,7 +90,7 @@ def _scan_all(backends: list[SafetyBackend], skill: Skill,
         return [backend.scan(skill, tier) for backend in backends]
     with ThreadPoolExecutor(max_workers=len(backends),
                             thread_name_prefix="metaskill-safety") as executor:
-        return list(executor.map(lambda backend: backend.scan(skill, tier), backends))
+        return map_in_context(executor, lambda backend: backend.scan(skill, tier), backends)
 
 
 def _spent(backend: SafetyBackend) -> tuple[TokenUsage, dict[str, int]]:

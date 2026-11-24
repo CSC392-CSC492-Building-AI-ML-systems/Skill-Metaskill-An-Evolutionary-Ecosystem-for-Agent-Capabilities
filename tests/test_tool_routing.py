@@ -444,10 +444,11 @@ def test_command_prints_the_table_and_what_is_missing(monkeypatch):
         "partial": ["Partial result"], "dependencies": [
             {"package": "scanner", "install_command": "pip install scanner", "install_url": ""}]}
     monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
-    out = tools.make_command_handler(FakeCtx())("evaluate x").split("\n")
+    *out, took = tools.make_command_handler(FakeCtx())("evaluate x").split("\n")
     assert out == [f"Scanned x in {os.getcwd()}", "Rank", "----",
                    "Warning: x could not be evaluated",
                    "Not installed: scanner (pip install scanner)"]
+    assert took.startswith("Took ")  # last: how long the run took
 
 
 TABLE = (
@@ -498,8 +499,8 @@ def test_a_failure_does_not_say_what_was_scanned(monkeypatch):
     module = types.ModuleType("metaskill.evaluate")
     module.evaluate_skill = lambda target, **kwargs: {"status": "error", "error": "bad config"}
     monkeypatch.setitem(sys.modules, "metaskill.evaluate", module)
-    out = tools.make_command_handler(FakeCtx())("evaluate x")
-    assert out == "metaskill evaluate failed: bad config"
+    first, took = tools.make_command_handler(FakeCtx())("evaluate x").split("\n")
+    assert first == "metaskill evaluate failed: bad config" and took.startswith("Took ")
 
 
 def test_command_does_not_leak_or_raise_on_failure(monkeypatch):
@@ -817,3 +818,24 @@ def test_command_passes_tasks_on_with_or_without_config(fake_evaluate, workspace
     handler('rank x, skills/gcp --tasks "my tasks.json" --config c.json')
     _, kwargs = fake_evaluate["rank"]
     assert kwargs["tasks_path"].endswith("my tasks.json") and kwargs["config_path"].endswith("c.json")
+
+
+@pytest.mark.parametrize("seconds, shown", [
+    (4.25, "4.2s"), (59.94, "59.9s"), (187, "3m 07s"), (3725, "1h 02m 05s")])
+def test_the_run_time_reads_as_people_read_it(seconds, shown):
+    assert tools._duration(seconds) == shown
+
+
+def test_the_summary_ends_with_how_long_the_run_took(fake_evaluate):
+    out = tools.make_command_handler(FakeCtx())("evaluate skills/gcp")
+    assert out.splitlines()[-1].startswith("Took ") and out.endswith("s.")
+
+
+def test_the_response_has_the_run_time_even_when_it_fails(monkeypatch, workspace):
+    def broken(target, **kwargs):
+        raise RuntimeError("secret detail")
+    monkeypatch.setattr(tools, "_load_entry_point", lambda operation: broken)
+    (workspace / "s").mkdir()
+    result = tools.run("evaluate", "s", ctx=FakeCtx())
+    assert result["status"] == "error" and isinstance(result["elapsed_seconds"], float)
+    assert "Took " in tools._summary(result)

@@ -2,7 +2,9 @@
 a sequential run, every container is removed on a failure or an interrupt, rate limits are
 backed off, and the shared judges stay consistent. Fakes only: no Docker, no model."""
 
+import contextvars
 import functools
+import json
 import random
 import threading
 import time
@@ -680,3 +682,48 @@ def test_the_first_failing_check_in_order_is_the_runs_error(skill, tmp_path):
                        judges={JudgeType.LLM: slow})
     assert result.tests == [] and len(result.errors) == 2
     assert all("failed two" in e for e in result.errors)
+
+
+# --- Threads keep the caller's context (Hermes' profile secret scope) ------------------------
+
+PROFILE = contextvars.ContextVar("PROFILE", default=None)
+
+
+class ScopedLlm(FakeLlm):
+    """Like Hermes on a multiplexing gateway: a call made outside the caller's profile scope
+    (a contextvar) is refused, as UnscopedSecretError refuses ANTHROPIC_TOKEN."""
+
+    def complete_structured(self, **kwargs):
+        if PROFILE.get() != "user":
+            raise RuntimeError("Hermes could not read this profile's ANTHROPIC_TOKEN")
+        return SimpleNamespace(
+            provider="fake", model="m", content_type="text", parsed=None,
+            text=json.dumps({"items": [{"item": 1, "met": True, "reason": "",
+                                        "quote": "wrote the report to report.txt"}]}),
+            usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+
+
+@pytest.mark.parametrize("checks", [1, 2])  # 2: the run's checks go to threads of their own
+def test_judge_calls_on_worker_threads_keep_the_callers_profile_scope(skill, tmp_path, checks):
+    ctx = SimpleNamespace(llm=ScopedLlm())
+    token = PROFILE.set("user")
+    try:
+        result = run_tasks(skill, [task("a", checks=[llm_check("says it wrote")] * checks)],
+                           FakeAgent(writes_report_with_skill), config=config(runs=2, parallel=4),
+                           run_dir=tmp_path, ctx=ctx)
+    finally:
+        PROFILE.reset(token)
+    assert result.errors == [] and len(result.tests) == 4
+
+
+def test_submit_runs_in_a_copy_of_the_callers_context():
+    from concurrent.futures import ThreadPoolExecutor
+    from metaskill.evaluate.threads import map_in_context, submit
+    token = PROFILE.set("user")
+    try:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            assert submit(executor, PROFILE.get).result() == "user"
+            assert map_in_context(executor, lambda _: PROFILE.get(), range(8)) == ["user"] * 8
+            assert executor.submit(PROFILE.get).result() is None  # what the bug was
+    finally:
+        PROFILE.reset(token)
