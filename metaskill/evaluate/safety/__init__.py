@@ -7,6 +7,7 @@ every backend.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,7 +58,7 @@ def score(skill: Skill, config: EvaluationConfig,
     if backends is None:
         backends = default_backends(config, llm, task)
     before = [_spent(backend) for backend in backends]
-    results = [backend.scan(skill, tier) for backend in backends]
+    results = _scan_all(backends, skill, tier)
 
     usable = [r for r in results if r.status in _USABLE]
     findings = merge([f for r in usable for f in r.findings])
@@ -75,6 +76,20 @@ def score(skill: Skill, config: EvaluationConfig,
         judge_model=judge_model,
         judge_usage=judge_usage,
     )
+
+
+def _scan_all(backends: list[SafetyBackend], skill: Skill,
+              tier: SafetyTier) -> list[BackendResult]:
+    """Every backend's scan, in the backends' order. At the deep tier the scans are made at
+    once: Cisco's LLM analyzer and the review each wait on the model, so the dimension takes
+    the longest of them rather than their sum. Each backend has its own judge and usage
+    record (default_backends), so their counts stay apart. At the static tier no model is
+    called and the scans run in turn."""
+    if tier is not SafetyTier.DEEP or len(backends) < 2:
+        return [backend.scan(skill, tier) for backend in backends]
+    with ThreadPoolExecutor(max_workers=len(backends),
+                            thread_name_prefix="metaskill-safety") as executor:
+        return list(executor.map(lambda backend: backend.scan(skill, tier), backends))
 
 
 def _spent(backend: SafetyBackend) -> tuple[TokenUsage, dict[str, int]]:

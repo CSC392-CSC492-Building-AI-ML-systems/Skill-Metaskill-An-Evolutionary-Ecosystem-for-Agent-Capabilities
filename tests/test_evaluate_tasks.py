@@ -605,3 +605,42 @@ def test_an_invalid_limit_in_the_config_file_is_an_error_before_anything_runs(tm
                             tasks_path=harness.tasks)
     assert result["status"] == "error" and "not a valid evaluation config" in result["error"]
     assert harness.agents == []
+
+
+# --- Dimensions that do not read the runs are scored while they run ---------------------
+
+
+def test_dimensions_without_runs_are_scored_on_a_background_thread_in_order(tmp_path, harness,
+                                                                            monkeypatch):
+    import threading
+    real, threads, order = evaluate._static_scores, set(), []
+
+    def recording(skill, *args):
+        threads.add(threading.current_thread().name)
+        order.append(skill.name)
+        return real(skill, *args)
+
+    monkeypatch.setattr(evaluate, "_static_scores", recording)
+    result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    assert order == ["a", "b"] and all(t.startswith("metaskill-static") for t in threads)
+    skills = report(result).skills
+    assert {s.name for s in skills} == {"a", "b"}
+    for skill in skills:  # every dimension is there, the static ones too
+        assert skill.dimensions[Dimension.SAFETY].status is not Status.SKIPPED
+        assert skill.dimensions[Dimension.EFFICIENCY].status is not Status.SKIPPED
+
+
+def test_without_tasks_the_dimensions_are_scored_in_the_calling_thread(tmp_path, harness,
+                                                                       monkeypatch):
+    import threading
+    real, threads = evaluate._static_scores, set()
+
+    def recording(*args):
+        threads.add(threading.current_thread().name)
+        return real(*args)
+
+    monkeypatch.setattr(evaluate, "_static_scores", recording)
+    evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")
+    assert threads == {threading.current_thread().name}

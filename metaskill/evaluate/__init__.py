@@ -33,6 +33,8 @@ import importlib
 import importlib.util
 import json
 import logging
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -166,42 +168,60 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     judge_usage = TokenUsage()
     folders: set[str] = set()  # log folders taken in this call
     named: set[str] = set()  # names already warned about
+    task_name = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
+    # Every skill is loaded first. With tasks, the dimensions that do not read the runs
+    # (Clarity, Safety, Config Cleanliness) are then scored on a background thread while the
+    # sessions run here, each skill's in turn, so they add nothing to the call's time
+    # (evaluate.md). One thread: their judge calls are not retried on a rate limit, so they
+    # are not made several at a time next to the sessions.
+    loaded: list[Skill | Exception] = []
     for path in paths:
         try:
-            skill = Skill.load(_folder(path))
-            log_folder = _log_folder(skill.name, folders)
-            if log_folder != skill.name and skill.name not in named:
-                named.add(skill.name)
-                warnings.append(clean(
-                    f"more than one skill is named {skill.name}: the report has a row for "
-                    f"each, and each has its own run log folder ({skill.name}, "
-                    f"{log_folder}, ...)", MAX_REASON_CHARS))
-            result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
-                                           agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
-                                           log_folder=log_folder)
-            result.log_folder = log_folder
-        except Exception as e:  # one bad skill must not stop the others
-            warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
-                                  MAX_REASON_CHARS))
-            continue
-        results.append(result)
-        errors = runs.errors if runs else []
-        if runs and runs.judge_model:  # task checks an LLM judged (runner.md 2.3)
-            judge_models.update(m for m in runs.judge_model.split(", ") if m)
-            judge_usage = judge_usage + runs.judge_usage
-        for model, usage in judged:  # dimensions an LLM judged, e.g. the deep safety tier
-            judge_models.update(m for m in model.split(", ") if m)
-            judge_usage = judge_usage + TokenUsage(usage.get("input_tokens", 0),
-                                                   usage.get("output_tokens", 0),
-                                                   usage.get("calls", 0))
-        sessions += len(result.tests)
-        run_errors += len(errors)
-        if errors:  # infrastructure, not the skill: the runs are left out, and it says so
-            # The kind only: the message can hold this machine's paths (a stderr tail),
-            # which stay in the report (the task-based dimensions' detail).
-            warnings.append(clean(f"{result.name}: {len(errors)} task run(s) could not be made "
-                                  f"({_error_kind(errors[0])}); the report has the details",
-                                  MAX_REASON_CHARS))
+            loaded.append(Skill.load(_folder(path)))
+        except Exception as e:  # reported below, in its place among the skills
+            loaded.append(e)
+    background = ThreadPoolExecutor(max_workers=1, thread_name_prefix="metaskill-static") \
+        if tasks is not None else None
+    static: dict[int, Future] = {}
+    if background is not None:
+        for i, skill in enumerate(loaded):
+            if isinstance(skill, Skill):
+                static[i] = background.submit(_static_scores, skill, config, llm, judge,
+                                              task_name)
+    try:
+        for i, (path, skill) in enumerate(zip(paths, loaded)):
+            try:
+                if isinstance(skill, Exception):
+                    raise skill
+                log_folder = _log_folder(skill.name, folders)
+                if log_folder != skill.name and skill.name not in named:
+                    named.add(skill.name)
+                    warnings.append(clean(
+                        f"more than one skill is named {skill.name}: the report has a row for "
+                        f"each, and each has its own run log folder ({skill.name}, "
+                        f"{log_folder}, ...)", MAX_REASON_CHARS))
+                result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
+                                               agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
+                                               log_folder=log_folder,
+                                               static=static[i].result if i in static else None)
+                result.log_folder = log_folder
+            except Exception as e:  # one bad skill must not stop the others
+                warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
+                                      MAX_REASON_CHARS))
+                continue
+            results.append(result)
+            judge_usage = judge_usage + _tally(result, runs, judged, warnings, judge_models)
+            sessions += len(result.tests)
+            run_errors += len(runs.errors) if runs else 0
+        if background is not None:
+            # A skill whose result failed may still be scoring: the shared judge's totals,
+            # read below, must cover its calls, as they did when it scored in turn.
+            background.shutdown(wait=True)
+    finally:
+        if background is not None:
+            # Interrupted (Ctrl-C) or done: no skill's scoring starts after this, and the call
+            # does not wait for one under way, whose result nobody reads.
+            background.shutdown(wait=False, cancel_futures=True)
     if not results:
         _remove_if_empty(run_dir, config.output_dir if created else None)
         return {"status": "error", "error": "no skill could be evaluated",
@@ -240,6 +260,29 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     if tasks is not None:
         response["task_runs"] = {"tasks": len(tasks), "sessions": sessions, "errors": run_errors}
     return response
+
+
+def _tally(result: SkillResult, runs: RunnerResult | None,
+           judged: list[tuple[str, dict[str, int]]], warnings: list[str],
+           judge_models: set[str]) -> TokenUsage:
+    """Add a skill's judge models to `judge_models` and a warning for its failed runs to
+    `warnings`; returns the judge tokens it used (the task checks' and its own judges')."""
+    used = TokenUsage()
+    if runs and runs.judge_model:  # task checks an LLM judged (runner.md 2.3)
+        judge_models.update(m for m in runs.judge_model.split(", ") if m)
+        used = used + runs.judge_usage
+    for model, usage in judged:  # dimensions an LLM judged, e.g. the deep safety tier
+        judge_models.update(m for m in model.split(", ") if m)
+        used = used + TokenUsage(usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+                                 usage.get("calls", 0))
+    errors = runs.errors if runs else []
+    if errors:  # infrastructure, not the skill: the runs are left out, and it says so
+        # The kind only: the message can hold this machine's paths (a stderr tail),
+        # which stay in the report (the task-based dimensions' detail).
+        warnings.append(clean(f"{result.name}: {len(errors)} task run(s) could not be made "
+                              f"({_error_kind(errors[0])}); the report has the details",
+                              MAX_REASON_CHARS))
+    return used
 
 
 def _log_folder(name: str, taken: set[str]) -> str:
@@ -370,10 +413,13 @@ def _judge(ctx: Any, config: EvaluationConfig) -> Judge | None:
 def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None = None, *,
             judge: Judge | None = None, agent: Any = None, sandbox: Any = None,
             run_dir: Path | None = None, ctx: Any = None, log_folder: str | None = None, judges: Any = None,
+            static: Callable[[], dict[Dimension, DimensionScore]] | None = None,
             ) -> tuple[SkillResult, RunnerResult | None, list[tuple[str, dict[str, int]]]]:
     """The skill's result, its task runs (None when no tasks ran), and the (judge_model,
     judge_usage) of every dimension that judged with a judge of its own. judge is the
-    run's shared Judge, for the dimensions in JUDGED; evaluate totals its use itself."""
+    run's shared Judge, for the dimensions in JUDGED; evaluate totals its use itself.
+    `static` gives the scores of the dimensions that do not read the runs, when they were
+    scored elsewhere (on _evaluate's background thread); None scores them here."""
     from . import safety
 
     runs = None
@@ -385,7 +431,10 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
                                 errors=[clean(str(e), MAX_REASON_CHARS)])
     task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
-    found = {d: _score(d, skill, config, llm, runs, judge, task) for d in Dimension}
+    scored = static() if static is not None else _static_scores(skill, config, llm, judge, task)
+    # In Dimension order, as when every dimension was scored here in turn.
+    found = {d: scored[d] if d in scored else _score(d, skill, config, llm, runs, judge, task)
+             for d in Dimension}
     return SkillResult(
         name=skill.name,
         scores=make_scores(found, config, runs.tests if runs else ()),
@@ -396,6 +445,15 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
         findings=[f for score in found.values() for f in score.findings],
         local_warnings=safety.local_warnings(skill),
     ), runs, [(s.judge_model, s.judge_usage) for s in found.values() if s.judge_usage]
+
+
+def _static_scores(skill: Skill, config: EvaluationConfig, llm: Any, judge: Judge | None,
+                   task: str | None) -> dict[Dimension, DimensionScore]:
+    """The scores of the dimensions that do not read task runs. They need nothing from the
+    runs, so _evaluate scores them while the runs are made. Never raises: _score turns
+    every failure into the dimension's `error`."""
+    return {d: _score(d, skill, config, llm, None, judge, task)
+            for d in Dimension if d not in TASK_DIMENSIONS}
 
 
 def _lift(config: EvaluationConfig, runs: RunnerResult | None) -> float | None:

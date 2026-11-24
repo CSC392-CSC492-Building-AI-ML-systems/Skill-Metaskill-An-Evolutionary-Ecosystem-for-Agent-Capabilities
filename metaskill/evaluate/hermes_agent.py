@@ -43,6 +43,7 @@ _STDERR_TAIL = 1500
 _RUNTIME_TIMEOUT = 60  # seconds for `hermes --print-runtime-command`
 _TASKKILL_TIMEOUT = 30  # seconds for `taskkill` to stop a timed-out session on Windows
 _CREATE_SUSPENDED = 0x00000004  # winjob.CREATE_SUSPENDED; winjob is imported on Windows only
+_REAP_TIMEOUT = 5  # seconds to reap a child stopped by an interrupt
 
 
 class HermesAgentUnavailable(JudgeError):
@@ -81,11 +82,15 @@ class HermesAgent:
     # Hermes processes running now (for cancel), are kept under this lock.
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False,
                                   compare=False)
+    # The runtime command is read once, by a `hermes` process of its own: under a lock of its
+    # own, so cancel() and a session ending (_track) never wait for that process.
+    _argv_lock: threading.Lock = field(default_factory=threading.Lock, init=False,
+                                       repr=False, compare=False)
     # Each running Hermes process, with its Job Object on Windows (None elsewhere), so
     # cancel() stops its whole tree as a timeout does (_kill_tree).
     _children: dict[subprocess.Popen, Any] = field(default_factory=dict, init=False,
                                                    repr=False, compare=False)
-    _cancelled: bool = field(default=False, init=False, repr=False)
+    _cancelled: bool = field(default=False, init=False, repr=False, compare=False)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
         if self._cancelled:
@@ -123,6 +128,13 @@ class HermesAgent:
             running = list(self._children.items())
         for proc, job in running:
             _kill(proc, job)
+
+    def resume(self) -> None:
+        """Take sessions again after cancel(). The runner calls this when a new runner call
+        starts (one per skill of a rank call), so a stop that the caller recovered from does
+        not refuse every later skill's sessions."""
+        with self._lock:
+            self._cancelled = False
 
     def _track(self, proc: subprocess.Popen, running: bool, job: Any = None) -> None:
         """Record a Hermes process (and its Job Object on Windows) as running, or as ended;
@@ -165,7 +177,7 @@ class HermesAgent:
     def _runtime_argv(self) -> list[str]:
         """Hermes' launch argv with its main replaced by the child, so the child gets
         exactly Hermes' interpreter, isolation flags, sys.path, HERMES_HOME and bootstrap."""
-        with self._lock:
+        with self._argv_lock:
             return self._runtime_argv_locked()
 
     def _runtime_argv_locked(self) -> list[str]:
@@ -285,10 +297,14 @@ def _run_child(argv: list[str], timeout: float,
              if _windows() else {"start_new_session": True})
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE, text=True, errors="replace", **group)
-    job = _contain(proc) if _windows() else None
-    if track is not None:
-        track(proc, True, job)
+    job = None
     try:
+        # Inside the try: an interrupt right after the start still stops the child. On
+        # Windows it is suspended until it is in its job (_contain resumes it).
+        if _windows():
+            job = _contain(proc)
+        if track is not None:
+            track(proc, True, job)
         _, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_tree(proc, job)
@@ -296,6 +312,12 @@ def _run_child(argv: list[str], timeout: float,
         raise TimeoutError(f"the Hermes session ran past {timeout:g} s") from None
     except BaseException:
         _kill(proc, job)
+        # Reaped, and its stderr pipe closed, so no zombie or open pipe is left per stopped
+        # session; briefly, as a second Ctrl-C must still get out.
+        try:
+            proc.communicate(timeout=_REAP_TIMEOUT)
+        except BaseException:
+            pass  # the first interrupt is the one raised
         raise
     finally:
         if track is not None:
