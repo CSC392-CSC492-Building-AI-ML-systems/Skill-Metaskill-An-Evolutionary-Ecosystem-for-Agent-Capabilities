@@ -48,6 +48,7 @@ _TASKKILL_TIMEOUT = 30  # seconds for `taskkill` to stop a timed-out session on 
 _CREATE_SUSPENDED = 0x00000004  # winjob.CREATE_SUSPENDED; winjob is imported on Windows only
 _REAP_TIMEOUT = 5  # seconds to reap a child stopped by an interrupt
 WARM_FLAG = "--warm"  # hermes_child.WARM: import Hermes, then wait for the request on stdin
+NO_REQUEST = 75  # hermes_child.NO_REQUEST: a warm child that ended without reading a request
 # Seconds between starting two warm children. Each spends ~2 s of a CPU importing Hermes, and
 # more when they import together. Measured with 16 on a 28-thread Windows machine (12% idle):
 # all at once peaked at 61% total CPU; 0.25 s apart at 51%; 0.5 s apart at 33%, the 16 started
@@ -143,7 +144,11 @@ class HermesAgent:
             if warm is not None:
                 code, stderr = _run_child(argv, self.timeout, track=self._track, warm=warm,
                                           request=str(request_path))
-            else:
+                if code == NO_REQUEST and not result_path.exists() and not self._cancelled:
+                    # It reached its idle limit (hermes_child.WARM_IDLE) as it was taken and
+                    # never read the request: the session has not run, so run it cold.
+                    warm = None
+            if warm is None:
                 code, stderr = _run_child([*argv, str(request_path)], self.timeout,
                                           track=self._track)
             if not result_path.exists():
@@ -557,7 +562,7 @@ def _run_child(argv: list[str], timeout: float,
             stderr = warm.tail()
     except subprocess.TimeoutExpired:
         _kill_tree(proc, job)
-        proc.communicate()
+        _reap(proc)  # bounded: a process outside the job and tree may hold stderr open
         raise TimeoutError(f"the Hermes session ran past {timeout:g} s") from None
     except BaseException:
         _kill(proc, job)
@@ -581,22 +586,53 @@ def _run_child(argv: list[str], timeout: float,
 def _contain(proc: subprocess.Popen):
     """Put the suspended `proc` in a new Job Object and let it run. Returns the job, or None
     if Windows refuses one (taskkill is then used). Raises HermesAgentUnavailable, with the
-    child killed, if it cannot be resumed: it would never run."""
-    from . import winjob
+    child killed, if it cannot be resumed: it would never run.
 
+    Anything else that goes wrong here (winjob failing to import, a ctypes error, an
+    interrupt) also kills the child before it is raised: a suspended child that no caller
+    resumes or kills would wait forever, holding its pipes."""
+    job = None
     try:
-        job = winjob.contain(proc.pid)
-    except OSError:
-        job = None
-    try:
-        winjob.resume(proc.pid)
-    except OSError as e:
+        from . import winjob
+
+        try:
+            job = winjob.contain(proc.pid)
+        except OSError:
+            job = None
+        try:
+            winjob.resume(proc.pid)
+        except OSError as e:
+            raise HermesAgentUnavailable(
+                f"the Hermes session process could not be started: {e}") from e
+    except BaseException as e:
         if job is not None:
             job.close()
-        proc.kill()
-        proc.communicate()
-        raise HermesAgentUnavailable(f"the Hermes session process could not be started: {e}") from e
+        proc.kill()  # TerminateProcess works on a suspended process
+        _reap(proc)
+        if isinstance(e, Exception) and not isinstance(e, HermesAgentUnavailable):
+            # Says nothing about the skill: the run is an error, not a failed test.
+            raise HermesAgentUnavailable(f"the Hermes session process could not be "
+                                         f"contained: {type(e).__name__}: {e}") from e
+        raise
     return job
+
+
+def _reap(proc: subprocess.Popen) -> None:
+    """Wait briefly for a killed `proc` and its pipes. A process it started outside its job
+    and tree (both kills missed it) may hold a pipe open; communicate() would then wait for
+    it forever. The child itself is dead, so wait() for it alone and leave the pipe to
+    communicate()'s reader thread, a daemon that ends when that process does."""
+    try:
+        proc.communicate(timeout=_REAP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _log.warning("metaskill: a process the Hermes session started still holds its "
+                     "output open after the session was stopped")
+        try:
+            proc.wait(timeout=_REAP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
+    except (OSError, ValueError):
+        pass
 
 
 def _kill_tree(proc: subprocess.Popen, job=None) -> None:

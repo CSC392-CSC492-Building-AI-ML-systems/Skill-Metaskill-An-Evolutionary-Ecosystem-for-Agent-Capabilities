@@ -19,6 +19,11 @@ REFERENCE = PILOT_ROOT / "skills/reference"
 class PilotCompletionAgent:
     """Fresh Hermes completions; no tools, history, or workspace access."""
 
+    # One session at a time (runner.run_tasks): the first run in the plan fixes the route,
+    # and a later run on another one is the error. In parallel, which runs failed would
+    # depend on which reply came back first.
+    max_parallel_runs = 1
+
     def __init__(self, complete, public_inputs):
         self.complete = complete
         self.public_inputs = json.dumps(public_inputs, ensure_ascii=True)

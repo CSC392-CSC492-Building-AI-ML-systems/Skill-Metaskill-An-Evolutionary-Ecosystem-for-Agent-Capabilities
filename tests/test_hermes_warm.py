@@ -24,6 +24,8 @@ if sys.argv[1] == "--warm":
     path = sys.stdin.readline().strip()
     if not path:
         sys.exit(0)
+    if os.environ.get("CHILD_MODE") == "late":  # as if its idle limit came first
+        sys.exit(75)
 else:
     path = sys.argv[1]
 request = json.load(open(path))
@@ -366,3 +368,17 @@ def test_a_session_does_not_wait_when_no_filler_is_running(agent, monkeypatch):
     assert agent._take() is None
     assert time.monotonic() - begin < 2  # cold at once, not after _TAKE_WAIT
     assert wait_for(lambda: not agent._filling)
+
+
+def test_a_warm_child_that_timed_out_as_it_was_taken_is_replaced_by_a_cold_one(agent, monkeypatch):
+    # It reached its idle limit (WARM_IDLE) as the session took it, so it never read the
+    # request; it says so with NO_REQUEST, and the session runs cold rather than fail.
+    monkeypatch.setenv("CHILD_MODE", "late")
+    agent.prewarm(1)
+    assert wait_for(lambda: len(agent._idle) == 1)
+    run = agent.run("p", None, docker_workspace())
+    assert run.output == "60" and agent.models_used == {"cold"}
+
+
+def test_the_child_and_the_agent_agree_on_no_request():
+    assert hermes_child.NO_REQUEST == hermes_agent.NO_REQUEST

@@ -220,12 +220,21 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
             if stopped:
                 return
             stopped.append(True)
-        pool.stop()
+        # No new session or judge call first, then the sessions themselves, and only then
+        # the containers: removing up to 16 takes seconds, during which live sessions would
+        # go on calling the model against containers that are gone.
+        pool.halt()
         cancel = getattr(agent, "cancel", None)
         if callable(cancel):
             cancel()
+        pool.stop()
 
     workers = pool.workers(config.max_parallel_runs, len(todo))
+    # An agent whose sessions must run in plan order says so (the Quality pilot's route
+    # check: the first run in the plan fixes the route, as before parallel runs).
+    limit = getattr(agent, "max_parallel_runs", None)
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 1:
+        workers = min(workers, limit)
     # An agent that can start its sessions' processes ahead (HermesAgent.prewarm) keeps one
     # ready per worker, so a session does not wait for Hermes to start.
     prewarm = getattr(agent, "prewarm", None)
@@ -390,7 +399,8 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         cache_read_tokens=run.cache_read_tokens, cache_write_tokens=run.cache_write_tokens,
         llm_calls=run.llm_calls, tool_calls=run.tool_calls,
         seconds=round(_own_seconds(run) if _own_seconds(run) is not None else seconds, 3))
-    _write_log(run_dir / log, task, variant, n, run, metrics, verdict, left_out)
+    if not pool.stopping:  # a run the stop killed did not fail: no log that says it did
+        _write_log(run_dir / log, task, variant, n, run, metrics, verdict, left_out)
     test = TestResult(
         task_id=task.task_id,
         description=task.description,
@@ -625,15 +635,20 @@ class _Judges:
             self._open.pop(id(workspace), None)
         workspace.close()
 
-    def stop(self) -> None:
-        """No new workspace, and every open one removed, with whatever still runs in it.
-        A run whose workspace goes ends with an error, which the caller no longer reads."""
+    def halt(self) -> None:
+        """No new workspace or judge call from now on. Quick: stop() calls it first."""
         with self._lock:
             self.stopping = True
-            still_open = list(self._open.values())
         # A worker in a rate-limit pause (up to backoff.MAX_DELAY) wakes now and sees the stop,
         # and a judge call waiting on it is not made, so the threads end quickly.
         self.backoff.cancel()
+
+    def stop(self) -> None:
+        """halt(), and every open workspace removed, with whatever still runs in it.
+        A run whose workspace goes ends with an error, which the caller no longer reads."""
+        self.halt()
+        with self._lock:
+            still_open = list(self._open.values())
         for workspace in still_open:
             try:
                 self.close(workspace)

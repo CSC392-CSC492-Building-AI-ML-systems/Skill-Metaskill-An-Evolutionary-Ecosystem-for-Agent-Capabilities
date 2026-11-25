@@ -1003,7 +1003,8 @@ _OBJECT_START = re.compile(r'\{\s*["}]')
 MAX_JSON_FAILURES = 1000  # failed decodes before parse_json_reply gives up on a reply
 
 
-def parse_json_reply(text: str, schema: dict[str, Any] | None = None) -> Any:
+def parse_json_reply(text: str, schema: dict[str, Any] | None = None,
+                     strict: bool = False) -> Any:
     """The JSON value in a reply sent as text, or None if there is none or it is ambiguous.
 
     The whole reply is tried first. Otherwise the reply is scanned for JSON objects (in a
@@ -1023,6 +1024,14 @@ def parse_json_reply(text: str, schema: dict[str, Any] | None = None) -> Any:
     read to the end of the text, so after MAX_JSON_FAILURES of them the reply counts as
     unreadable (None) rather than taking quadratic time. JSON nested too deep for Python's
     parser is not JSON here either.
+
+    `strict` (the Cisco bridge, safety/hermes_bridge.py): no schema filter, and any `{` that
+    does not decode makes the reply None. The filter lets a planted object that fits the
+    schema win over the model's own answer when that answer misses it, by being cut off
+    at max_tokens (the `{` that does not decode) or by one wrong enum value: the planted
+    one is then the only candidate left. The judge asks again on a schema miss and weighs
+    one criterion per object; a scanner verdict is one object for a whole skill, so there
+    it must be the model's only answer or none.
     """
     try:
         return json.loads(text.strip())
@@ -1037,13 +1046,13 @@ def parse_json_reply(text: str, schema: dict[str, Any] | None = None) -> Any:
             value, end = decoder.raw_decode(text, start.start())
         except (ValueError, RecursionError):
             failures += 1
-            if failures > MAX_JSON_FAILURES:
+            if strict or failures > MAX_JSON_FAILURES:
                 return None  # giving up early could miss a second, different answer
             start = _OBJECT_START.search(text, start.start() + 1)
             continue
         found.append(value)  # a decode that starts at `{` gives an object
         start = _OBJECT_START.search(text, end)  # nested objects belong to the one just read
-    if schema is not None:
+    if schema is not None and not strict:
         found = [v for v in found if not schema_problems(v, schema)] or found
     if not found or any(value != found[0] for value in found[1:]):
         return None

@@ -10,6 +10,7 @@ nothing about the skill.
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -20,6 +21,12 @@ INITIAL_DELAY = 5.0
 MAX_DELAY = 60.0
 # Tries per call (the first one included) before a rate limit is reported as an error.
 ATTEMPTS = 4
+# Up to this many seconds more, at random, per worker once a pause ends: the workers a
+# pause held would otherwise all call the provider in the same instant, and likely be
+# limited again together.
+JITTER = 1.0
+# Doublings at most: MAX_DELAY is reached long before, and 2 ** streak cannot overflow.
+_MAX_STREAK = 32
 
 # How a rate limit shows itself when a provider SDK or Hermes does not say so in a field.
 _RATE_LIMIT_WORDS = ("rate limit", "rate_limit", "ratelimit", "too many requests")
@@ -56,7 +63,9 @@ class Backoff:
 
     `wait()` is called before each model use (a session, a judge call) and returns once no
     pause is in force. `limited()` records a rate limit and starts or extends the pause:
-    INITIAL_DELAY, doubled for each further limit before a call succeeds, at most MAX_DELAY.
+    INITIAL_DELAY, doubled for each further pause before a call succeeds, at most MAX_DELAY.
+    A limit while a pause is in force is the same burst (16 workers limited by one window)
+    and leaves it as it is; only a limit after the pause has ended doubles it.
     `succeeded()` resets the doubling. `cancel()` ends every pause at once, and every later
     one, so a stopping runner does not wait up to MAX_DELAY per worker for its threads.
     Thread-safe; `sleep` and `clock` are for tests (None: an interruptible wait).
@@ -64,7 +73,7 @@ class Backoff:
 
     def __init__(self, *, initial: float = INITIAL_DELAY, maximum: float = MAX_DELAY,
                  attempts: int = ATTEMPTS, sleep: Callable[[float], None] | None = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, jitter: float = JITTER):
         if attempts < 1:
             raise ValueError(f"attempts must be >= 1, got {attempts}")
         self.initial, self.maximum, self.attempts = initial, maximum, attempts
@@ -73,8 +82,10 @@ class Backoff:
         self._sleep = sleep if sleep is not None else self._cancelled.wait
         self._clock = clock
         self._lock = threading.Lock()
+        self.jitter = jitter
         self._resume_at = 0.0
-        self._streak = 0  # rate limits since the last success
+        self._delay = 0.0  # the pause in force, or the last one
+        self._streak = 0  # pauses since the last success
         self.limits = 0  # every rate limit seen, for the log
 
     @property
@@ -86,21 +97,27 @@ class Backoff:
         self._cancelled.set()
 
     def wait(self) -> None:
+        paused = False
         while not self._cancelled.is_set():
             with self._lock:
                 left = self._resume_at - self._clock()
             if left <= 0:
+                if paused and self.jitter > 0 and not self._cancelled.is_set():
+                    self._sleep(random.uniform(0, self.jitter))
                 return
+            paused = True
             self._sleep(left)
 
     def limited(self) -> float:
-        """Record a rate limit; returns the pause it set."""
+        """Record a rate limit; returns the length of the pause in force."""
         with self._lock:
-            delay = min(self.maximum, self.initial * 2 ** self._streak)
-            self._streak += 1
             self.limits += 1
-            self._resume_at = max(self._resume_at, self._clock() + delay)
-            return delay
+            now = self._clock()
+            if now >= self._resume_at:  # not covered by the pause in force: a longer one
+                self._delay = min(self.maximum, self.initial * 2 ** self._streak)
+                self._streak = min(self._streak + 1, _MAX_STREAK)
+                self._resume_at = now + self._delay
+            return self._delay
 
     def succeeded(self) -> None:
         with self._lock:

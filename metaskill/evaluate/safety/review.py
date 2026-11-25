@@ -221,7 +221,9 @@ class ReviewBackend:
                                  detail="no Hermes LLM access (ctx.llm), so the review did not run")
         # The re-check does not read the review's answer, so both are asked at once: one
         # model round-trip rather than up to three in turn. Its answer is only used when the
-        # review succeeds, as before.
+        # review succeeds, as before. When the review fails, the re-check is still waited
+        # for (leaving the `with`), and its calls are paid for: a call in flight cannot be
+        # taken back, and one left running would add to the usage after it was reported.
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="metaskill-recheck") as ex:
             recheck = submit(ex, self._recheck, skill)
             try:

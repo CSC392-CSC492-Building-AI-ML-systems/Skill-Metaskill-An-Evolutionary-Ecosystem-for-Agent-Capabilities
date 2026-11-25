@@ -253,6 +253,8 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
             # A skill whose result failed may still be scoring: the shared judge's totals,
             # read below, must cover its calls, as they did when it scored in turn.
             background.shutdown(wait=True)
+        # Stopped while the last skill was scored: no report, as the stop command said.
+        cancel.check()
     finally:
         if background is not None:
             # Interrupted (Ctrl-C) or done: no skill's scoring starts after this, and the call
@@ -486,7 +488,8 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
     task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
     scored = static() if static is not None else _static_scores(skill, config, llm, judge, task)
     # In Dimension order, as when every dimension was scored here in turn.
-    found = {d: scored[d] if d in scored else _score(d, skill, config, llm, runs, judge, task)
+    found = {d: scored[d] if d in scored else _score_unless_stopped(d, skill, config, llm, runs,
+                                                                   judge, task)
              for d in Dimension}
     return SkillResult(
         name=skill.name,
@@ -503,10 +506,18 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
 def _static_scores(skill: Skill, config: EvaluationConfig, llm: Any, judge: Judge | None,
                    task: str | None) -> dict[Dimension, DimensionScore]:
     """The scores of the dimensions that do not read task runs. They need nothing from the
-    runs, so _evaluate scores them while the runs are made. Never raises: _score turns
-    every failure into the dimension's `error`."""
-    return {d: _score(d, skill, config, llm, None, judge, task)
+    runs, so _evaluate scores them while the runs are made. Raises EvaluationStopped only:
+    _score turns every failure into the dimension's `error`."""
+    return {d: _score_unless_stopped(d, skill, config, llm, None, judge, task)
             for d in Dimension if d not in TASK_DIMENSIONS}
+
+
+def _score_unless_stopped(dimension: Dimension, *args: Any) -> DimensionScore:
+    """_score, unless the evaluation was stopped (cancel.py): then EvaluationStopped, so no
+    further judge call is made for a call that returns no report. On the background thread
+    too, which runs in a copy of the caller's context and so sees its stop."""
+    cancel.check()
+    return _score(dimension, *args)
 
 
 def _lift(config: EvaluationConfig, runs: RunnerResult | None) -> float | None:

@@ -284,24 +284,30 @@ def _schema(params: dict[str, Any]) -> Any:
 
 
 def _parsed(result: Any, schema: Any = None) -> Any:
-    """The reply's JSON value: Hermes' `parsed` when it gave one, else the JSON object in the
-    reply's text (judge.parse_json_reply), or None."""
+    """The reply's JSON value: Hermes' `parsed` when it gave one, else the reply's one JSON
+    object (judge.parse_json_reply, strict), or None.
+
+    Strict, because the skill under scan is in the prompt: it can hold a ready-made clean
+    verdict that the model quotes before its own answer. Without strict, a schema-fitting
+    planted verdict won whenever the model's answer was cut off or missed the schema."""
     parsed = getattr(result, "parsed", None)
     if parsed is not None:
         return parsed
     from ..judge import parse_json_reply
 
-    return parse_json_reply(getattr(result, "text", "") or "",
-                            schema if isinstance(schema, dict) else None)
+    return parse_json_reply(getattr(result, "text", "") or "", strict=True)
 
 
 def _response(model_response: Any, result: Any, tokens: tuple[int, int],
               schema: Any = None) -> Any:
     """ctx.llm's result as the LiteLLM response Cisco expects; tokens cover any retry. The
-    JSON found in the reply is passed on alone, so prose around it cannot break Cisco's parse;
-    a reply with none is passed on as it is, for Cisco to reject."""
+    JSON found in the reply is passed on alone, so prose around it cannot break Cisco's parse.
+
+    A reply with no single JSON object is passed on empty: Cisco rejects it ("Empty
+    response") and the scan falls back to static. Not as it is: Cisco's parser takes the
+    first `{` object in the text, which may be a verdict planted in the skill and quoted."""
     parsed = _parsed(result, schema)
-    text = json.dumps(parsed) if parsed is not None else (getattr(result, "text", "") or "")
+    text = json.dumps(parsed) if parsed is not None else ""
     prompt, completion = tokens
     return model_response(
         model=f"{getattr(result, 'provider', '')}/{getattr(result, 'model', '')}".strip("/"),

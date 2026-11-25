@@ -112,6 +112,31 @@ def test_a_stop_ends_the_runs_and_removes_every_container(skill, tmp_path, paral
                 if t.name.startswith(("metaskill-run", "metaskill-stop-watch"))]
 
 
+def test_a_stop_ends_sessions_before_removing_containers_and_logs_no_failures(skill, tmp_path):
+    # Removing 16 containers takes seconds; sessions must not call the model meanwhile. And
+    # a session the stop killed did not fail: no log may say it did.
+    sandbox = FakeSandbox()
+    open_at_cancel = []
+
+    class Ordered(BlockingAgent):
+        def cancel(self):
+            open_at_cancel.extend(not w.closed for w in sandbox.opened)
+            super().cancel()
+
+    agent = Ordered()
+    stopper = threading.Thread(target=lambda: (agent.started.wait(10), cancel.stop_all()))
+    with cancel.running():
+        stopper.start()
+        with pytest.raises(cancel.EvaluationStopped):
+            run_tasks(skill, [task("a"), task("b")], agent,
+                      config=EvaluationConfig(runs_per_task=2, max_parallel_runs=4),
+                      run_dir=tmp_path, sandbox=sandbox)
+    stopper.join()
+    assert open_at_cancel and all(open_at_cancel)  # every container still there
+    assert all(w.closed for w in sandbox.opened)
+    assert not list(tmp_path.rglob("logs/*.txt"))
+
+
 def test_a_run_outside_an_evaluation_has_no_watcher(skill, tmp_path):
     result = run_tasks(skill, [task("a")], FakeAgent(lambda p, s, w: AgentRun(output="x")),
                        config=EvaluationConfig(runs_per_task=1), run_dir=tmp_path,
@@ -188,3 +213,76 @@ def test_the_stop_command_reports_what_it_stopped():
         out = handle("stop")
         assert out.startswith("Stopping 1 running evaluation(s)") and run.requested()
     assert handle("stop now").startswith("Usage: /metaskill stop")
+
+
+def test_a_stop_during_the_last_skills_scoring_still_writes_no_report(tmp_path, monkeypatch):
+    # The runs were done, so no runner watcher was left: the stop came while the skill was
+    # scored. The stop command had said "no report"; one was written all the same.
+    import json
+
+    import metaskill.evaluate as evaluate
+    from test_evaluate_tasks import ReadySandbox, make_skill
+
+    monkeypatch.setattr(evaluate, "_make_agent",
+                        lambda config: FakeAgent(lambda p, s, w: AgentRun(output="x")))
+    monkeypatch.setattr(evaluate, "_make_sandbox", lambda config: ReadySandbox())
+    real_score, scored = evaluate._score, []
+
+    def stop_on_first_task_dimension(dimension, *args):
+        if dimension in evaluate.TASK_DIMENSIONS:
+            if not scored:
+                cancel.stop_all()  # /metaskill stop, as the skill is scored
+            scored.append(dimension)
+        return real_score(dimension, *args)
+    monkeypatch.setattr(evaluate, "_score", stop_on_first_task_dimension)
+    tasks = tmp_path / "evals" / "tasks.json"
+    tasks.parent.mkdir()
+    (tasks.parent / "data.csv").write_text("a\n")
+    tasks.write_text(json.dumps({"tasks": [
+        {"task_id": "t1", "description": "d", "prompt": "p", "fixtures": ["data.csv"],
+         "checks": [{"judge": "deterministic", "kind": "file_exists", "target": "x"}]}]}))
+    result = evaluate.evaluate_skill(make_skill(tmp_path, "a"), output_path=tmp_path / "out",
+                                     tasks_path=tasks)
+    assert result["status"] == "error" and result["stopped"] is True
+    assert not list((tmp_path / "out").rglob("ranked-evaluation.json"))
+    assert len(scored) == 1  # no task dimension judged after the stop
+
+
+def test_a_stopped_call_makes_no_further_dimension_scores(monkeypatch):
+    # The background static thread runs in a copy of the caller's context, so it sees the
+    # stop too, and makes no judge call for a call that returns no report.
+    import metaskill.evaluate as evaluate
+    from metaskill.evaluate.models import Dimension
+
+    called = []
+    monkeypatch.setattr(evaluate, "_score", lambda *a: called.append(a))
+    with cancel.running():
+        evaluate._score_unless_stopped(Dimension.CLARITY)
+        cancel.stop_all()
+        with pytest.raises(cancel.EvaluationStopped):
+            evaluate._score_unless_stopped(Dimension.CLARITY)
+    assert len(called) == 1
+
+
+def test_an_agent_can_ask_for_its_sessions_one_at_a_time(skill, tmp_path):
+    # The Quality pilot's route check is decided by the first run in plan order.
+    from metaskill.evaluate.golden.hermes_pilot import PilotCompletionAgent
+
+    assert PilotCompletionAgent.max_parallel_runs == 1
+    now, most, lock = [0], [0], threading.Lock()
+
+    def act(prompt, skill_, workdir):
+        with lock:
+            now[0] += 1
+            most[0] = max(most[0], now[0])
+        time.sleep(0.05)
+        with lock:
+            now[0] -= 1
+        return AgentRun(output="x")
+
+    agent = FakeAgent(act)
+    agent.max_parallel_runs = 1
+    run_tasks(skill, [task("a"), task("b")], agent,
+              config=EvaluationConfig(runs_per_task=2, max_parallel_runs=8),
+              run_dir=tmp_path, sandbox=FakeSandbox())
+    assert most[0] == 1 and len(agent.calls) == 8

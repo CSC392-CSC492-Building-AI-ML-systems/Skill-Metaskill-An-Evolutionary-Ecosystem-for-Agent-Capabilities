@@ -509,6 +509,9 @@ _PRELOAD = (
 )
 WARM = "--warm"
 WARM_IDLE = 900  # seconds a warm child waits for a request before it exits on its own
+# A warm child's exit code when it ends without a request (idle too long, or stdin closed):
+# a session that handed it one just then starts a cold child instead (HermesAgent.run).
+NO_REQUEST = 75
 
 
 def preload() -> None:
@@ -543,7 +546,7 @@ def main(argv: list[str]) -> int:
         preload()
         path = wait_for_request()
         if path is None:
-            return 0  # not needed after all
+            return NO_REQUEST  # not needed after all, or its request came too late
         argv = [argv[0], path]
     request = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
     try:

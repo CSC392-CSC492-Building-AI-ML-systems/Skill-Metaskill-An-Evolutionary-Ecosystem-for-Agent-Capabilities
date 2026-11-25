@@ -63,7 +63,8 @@ def no_waiting(monkeypatch):
         with lock:
             return now[0]
 
-    monkeypatch.setattr(runner, "Backoff", functools.partial(Backoff, sleep=sleep, clock=clock))
+    monkeypatch.setattr(runner, "Backoff",
+                        functools.partial(Backoff, sleep=sleep, clock=clock, jitter=0))
     return slept
 
 
@@ -377,14 +378,51 @@ def test_backoff_pauses_every_waiter_doubles_and_resets():
         slept.append(seconds)
         now[0] += seconds
 
-    gate = Backoff(initial=5, maximum=12, sleep=sleep, clock=lambda: now[0])
+    gate = Backoff(initial=5, maximum=12, sleep=sleep, clock=lambda: now[0], jitter=0)
     gate.wait()
     assert slept == []
-    assert [gate.limited(), gate.limited(), gate.limited()] == [5, 10, 12]  # capped
-    gate.wait()
-    assert now[0] == 12 and gate.limits == 3
+    pauses = []
+    for _ in range(3):  # limited again each time the pause ends
+        pauses.append(gate.limited())
+        gate.wait()
+    assert pauses == [5, 10, 12] and now[0] == 27 and gate.limits == 3  # capped at 12
     gate.succeeded()
     assert gate.limited() == 5
+
+
+def test_a_burst_of_limits_in_one_pause_does_not_double_it():
+    # 16 workers limited by one provider window, at the same moment: one 5 s pause, not 60 s.
+    now = [0.0]
+    gate = Backoff(initial=5, maximum=60, sleep=lambda s: now.__setitem__(0, now[0] + s),
+                   clock=lambda: now[0], jitter=0)
+    assert [gate.limited() for _ in range(16)] == [5] * 16
+    gate.wait()
+    assert now[0] == 5 and gate.limits == 16
+    assert gate.limited() == 10  # limited again after the pause: now it doubles
+
+
+def test_endless_limits_cannot_overflow_the_doubling():
+    now = [0.0]
+    gate = Backoff(initial=5, maximum=60, sleep=lambda s: now.__setitem__(0, now[0] + s),
+                   clock=lambda: now[0], jitter=0)
+    for _ in range(2000):  # 2 ** 1024 used to raise OverflowError, ending the whole skill
+        gate.limited()
+        gate.wait()
+    assert gate.limited() == 60
+
+
+def test_workers_wake_at_different_times_after_a_pause():
+    now, slept = [0.0], []
+
+    def sleep(seconds):
+        slept.append(seconds)
+        now[0] += seconds
+    gate = Backoff(initial=5, sleep=sleep, clock=lambda: now[0], jitter=1.0)
+    gate.limited()
+    gate.wait()
+    assert slept[0] == 5 and len(slept) == 2 and 0 <= slept[1] <= 1.0
+    gate.wait()  # no pause in force: no jitter either
+    assert len(slept) == 2
 
 
 def test_the_llm_judge_of_task_checks_backs_off_a_rate_limit(no_waiting):
