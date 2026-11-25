@@ -17,6 +17,7 @@ Outcomes:
 
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import json
 import logging
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +48,14 @@ _TASKKILL_TIMEOUT = 30  # seconds for `taskkill` to stop a timed-out session on 
 _CREATE_SUSPENDED = 0x00000004  # winjob.CREATE_SUSPENDED; winjob is imported on Windows only
 _REAP_TIMEOUT = 5  # seconds to reap a child stopped by an interrupt
 WARM_FLAG = "--warm"  # hermes_child.WARM: import Hermes, then wait for the request on stdin
+# Seconds between starting two warm children. Each spends ~2 s of a CPU importing Hermes, and
+# more when they import together. Measured with 16 on a 28-thread Windows machine (12% idle):
+# all at once peaked at 61% total CPU; 0.25 s apart at 51%; 0.5 s apart at 33%, the 16 started
+# in 8 s. Sessions still start as soon as a child is (HermesAgent._take).
+WARM_STAGGER = 0.5
+# The longest a session waits for the next warm child (HermesAgent._take) before it starts a
+# cold one. A bound only: the filler hands one out every WARM_STAGGER seconds.
+_TAKE_WAIT = 10.0
 _log = logging.getLogger(__name__)
 
 
@@ -81,6 +91,7 @@ class HermesAgent:
     # Keep Hermes children started ahead of their sessions (prewarm), so a session does not
     # wait the ~2 s Hermes takes to import. False: every session starts its own, cold.
     warm: bool = True
+    stagger: float = WARM_STAGGER  # seconds between starting two warm children
     # The models sessions actually ran on, as Hermes resolved them (for the report header).
     models_used: set[str] = field(default_factory=set, init=False)
     _argv: list[str] | None = field(default=None, init=False, repr=False)
@@ -102,6 +113,16 @@ class HermesAgent:
     _idle: list[_Warm] = field(default_factory=list, init=False, repr=False, compare=False)
     _starting: int = field(default=0, init=False, repr=False, compare=False)
     _target: int = field(default=0, init=False, repr=False, compare=False)
+    # Whether the filler thread (_fill) is starting children, one every `stagger` seconds,
+    # and the condition, on `_lock`, that tells sessions waiting for one (_take) and the
+    # filler (woken from its stagger by close() and cancel()) that the pool changed.
+    _filling: bool = field(default=False, init=False, repr=False, compare=False)
+    _filler: threading.Thread | None = field(default=None, init=False, repr=False,
+                                             compare=False)
+    _changed: threading.Condition = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._changed = threading.Condition(self._lock)
 
     def run(self, prompt: str, skill: Skill | None, workspace: Workspace) -> AgentRun:
         if self._cancelled:
@@ -143,6 +164,7 @@ class HermesAgent:
             self._cancelled = True
             running = list(self._children.items())
             idle, self._idle = self._idle, []
+            self._changed.notify_all()  # the filler stops; waiting sessions stop waiting
         for proc, job in running:
             _kill(proc, job)
         for warm in idle:
@@ -153,7 +175,10 @@ class HermesAgent:
         sessions it runs at once), each having imported Hermes, so a session hands its
         request to one rather than starting Hermes itself. Never raises: without them,
         sessions start cold as before. One child serves one session; a replacement starts
-        whenever one is taken. close() stops those still waiting."""
+        whenever one is taken. close() stops those still waiting.
+
+        Returns at once: a filler thread starts them `stagger` seconds apart, so their
+        imports do not all load the CPU together (WARM_STAGGER)."""
         if not self.warm or sessions < 1:
             return
         with self._lock:
@@ -166,48 +191,111 @@ class HermesAgent:
         with self._lock:
             self._target = 0
             idle, self._idle = self._idle, []
+            self._changed.notify_all()  # the filler stops; waiting sessions stop waiting
         for warm in idle:
             warm.discard()
 
     def _take(self) -> _Warm | None:
-        """A warm child still alive, or None (start one cold); starts its replacement."""
+        """A warm child still alive, or None (start one cold); its replacement is started.
+
+        With none waiting while the filler is still starting them, wait for its next one
+        rather than start cold: a cold start imports Hermes as a warm one does, so sessions
+        that all started cold at once would load the CPU together, which the stagger is
+        there to prevent. A child just started is no slower than a cold one, and the filler
+        hands out one every `stagger` seconds; _TAKE_WAIT only bounds a stuck filler."""
         dead, taken = [], None
+        deadline = time.monotonic() + _TAKE_WAIT
         with self._lock:
-            while self._idle:
-                warm = self._idle.pop(0)
-                if warm.proc.poll() is None:
-                    taken = warm
+            while True:
+                while self._idle:
+                    warm = self._idle.pop(0)
+                    if warm.proc.poll() is None:
+                        taken = warm
+                        break
+                    dead.append(warm)
+                left = deadline - time.monotonic()
+                if taken is not None or self._cancelled or not self._filling or left <= 0:
                     break
-                dead.append(warm)
+                self._changed.wait(left)
         for warm in dead:  # exited on its own: idle too long, or Hermes would not import
             warm.discard()
-        if taken is not None:
-            self._refill()
+        self._refill()  # a replacement for the one taken, or for those found dead
         return taken
 
     def _refill(self) -> None:
-        """Start warm children until there are `_target` of them, waiting or starting."""
-        while True:
-            with self._lock:
-                if self._cancelled or len(self._idle) + self._starting >= self._target:
-                    return
-                self._starting += 1
-            warm, keep = None, False
-            try:
-                warm = _Warm.start([*self._runtime_argv(), WARM_FLAG])
-            except Exception:  # no Hermes, or Windows refusing: sessions start cold
-                _log.debug("metaskill: a warm Hermes child could not be started", exc_info=True)
-            finally:
-                # Also on an interrupt, or the count would block every later refill.
-                with self._lock:
-                    self._starting -= 1
-                    keep = warm is not None and not self._cancelled and self._target > 0
-                    if keep:
-                        self._idle.append(warm)
-            if not keep:
-                if warm is not None:
-                    warm.discard()
+        """Have the filler thread start warm children until there are `_target` of them,
+        waiting or starting. Never raises; it starts the thread if none is running."""
+        with self._lock:
+            if self._cancelled or self._filling or not self._short():
                 return
+            self._filling = True
+        try:
+            # Its own copy of the caller's context, as every thread here has (threads.py).
+            filler = threading.Thread(target=contextvars.copy_context().run, args=(self._fill,),
+                                      name="metaskill-prewarm", daemon=True)
+            filler.start()
+        except Exception:  # no thread to spare: sessions start cold
+            _log.debug("metaskill: the warm Hermes filler could not start", exc_info=True)
+            with self._lock:
+                self._filling = False
+                self._changed.notify_all()
+            return
+        self._filler = filler
+
+    def _short(self) -> bool:
+        """Fewer warm children waiting or starting than `_target`. Under `_lock`."""
+        return len(self._idle) + self._starting < self._target
+
+    def _fill(self) -> None:
+        """The filler thread: start a warm child, wait `stagger` seconds, and so on until the
+        pool is full, close() empties its target or cancel() stops it. It clears `_filling`
+        in the same locked step that finds there is nothing to do, so a take right after
+        never finds it set by a filler that has ended."""
+        ended = False
+        try:
+            argv = [*self._runtime_argv(), WARM_FLAG]
+            first = True
+            while True:
+                with self._lock:
+                    if not first and self.stagger > 0 and not self._cancelled:
+                        self._changed.wait(self.stagger)  # cut short by close() or cancel()
+                    first = False
+                    if self._cancelled or not self._short():
+                        ended = self._stop_filling()
+                        return
+                    self._starting += 1
+                warm, keep = None, False
+                try:
+                    warm = _Warm.start(argv)
+                except Exception:  # Windows refusing: sessions start cold
+                    _log.debug("metaskill: a warm Hermes child could not be started",
+                               exc_info=True)
+                finally:
+                    # Also on an interrupt, or the count would block every later refill.
+                    with self._lock:
+                        self._starting -= 1
+                        keep = warm is not None and not self._cancelled and self._target > 0
+                        if keep:
+                            self._idle.append(warm)
+                            self._changed.notify_all()  # a session may be waiting for one
+                        else:
+                            ended = self._stop_filling()
+                if not keep:
+                    if warm is not None:
+                        warm.discard()
+                    return
+        except Exception:  # no Hermes runtime command: sessions start cold, and say why
+            _log.debug("metaskill: no warm Hermes children", exc_info=True)
+        finally:
+            if not ended:
+                with self._lock:
+                    self._stop_filling()
+
+    def _stop_filling(self) -> bool:
+        """Mark the filler ended and wake the sessions waiting on it. Under `_lock`."""
+        self._filling = False
+        self._changed.notify_all()
+        return True
 
     def resume(self) -> None:
         """Take sessions again after cancel(). The runner calls this when a new runner call
