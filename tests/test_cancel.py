@@ -152,6 +152,33 @@ def test_a_stopped_rank_says_so_writes_no_report_and_closes_its_agent(tmp_path, 
     assert {c.skill for c in agent.calls} <= {"a", None}
 
 
+def test_a_stopped_evaluate_stops_as_a_rank_does(tmp_path, monkeypatch):
+    import json
+
+    import metaskill.evaluate as evaluate
+    from test_evaluate_tasks import ReadySandbox, make_skill
+
+    agent = BlockingAgent()
+    sandbox = ReadySandbox()
+    monkeypatch.setattr(evaluate, "_make_agent", lambda config: agent)
+    monkeypatch.setattr(evaluate, "_make_sandbox", lambda config: sandbox)
+    tasks = tmp_path / "evals" / "tasks.json"
+    tasks.parent.mkdir()
+    (tasks.parent / "data.csv").write_text("a\n")
+    tasks.write_text(json.dumps({"tasks": [
+        {"task_id": "t1", "description": "d", "prompt": "p", "fixtures": ["data.csv"],
+         "checks": [{"judge": "deterministic", "kind": "file_exists", "target": "x"}]}]}))
+    threading.Thread(target=lambda: (agent.started.wait(10), cancel.stop_all()),
+                     daemon=True).start()
+    start = time.monotonic()
+    result = evaluate.evaluate_skill(make_skill(tmp_path, "a"), output_path=tmp_path / "out",
+                                     tasks_path=tasks)
+    assert time.monotonic() - start < 10
+    assert result["status"] == "error" and result["stopped"] is True
+    assert not list((tmp_path / "out").rglob("ranked-evaluation.json"))
+    assert all(w.closed for w in sandbox.opened) and agent.cancelled >= 1
+
+
 def test_the_stop_command_reports_what_it_stopped():
     import tools
 

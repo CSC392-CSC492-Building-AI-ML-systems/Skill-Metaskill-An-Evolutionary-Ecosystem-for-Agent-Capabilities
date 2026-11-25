@@ -42,7 +42,7 @@ def agent(tmp_path, monkeypatch):
     child.write_text(f"RESULT = {OK_RESULT!r}\n" + CHILD, encoding="utf-8")
     pids = tmp_path / "warm-pids.txt"
     monkeypatch.setenv("WARM_PIDS", str(pids))
-    made = HermesAgent()
+    made = HermesAgent(stagger=0.02)  # the stagger's own tests set theirs
     made._argv = [sys.executable, str(child)]
     made.pids = pids
     yield made
@@ -278,10 +278,91 @@ def test_an_exited_child_is_not_signalled_again(monkeypatch):
     assert signalled == [running]  # discard() left it alone too
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_an_interrupted_refill_gives_its_slot_back(agent, monkeypatch):
     def interrupted(argv):
         raise KeyboardInterrupt
     monkeypatch.setattr(hermes_agent._Warm, "start", staticmethod(interrupted))
-    with pytest.raises(KeyboardInterrupt):
-        agent.prewarm(2)
-    assert agent._starting == 0  # or every later refill would think one was on its way
+    agent.prewarm(2)
+    agent._filler.join(5)
+    # Or every later refill would think one was on its way, or the filler still running.
+    assert agent._starting == 0 and agent._filling is False
+
+
+# --- The stagger (WARM_STAGGER) ---------------------------------------------------------
+
+
+def record_starts(monkeypatch):
+    """Patch _Warm.start to note when each child starts."""
+    starts, real = [], hermes_agent._Warm.start
+
+    def start(argv):
+        starts.append(time.monotonic())
+        return real(argv)
+    monkeypatch.setattr(hermes_agent._Warm, "start", staticmethod(start))
+    return starts
+
+
+def test_prewarm_returns_at_once_and_starts_children_a_stagger_apart(agent, monkeypatch):
+    starts = record_starts(monkeypatch)
+    agent.stagger = 0.2
+    begin = time.monotonic()
+    agent.prewarm(4)
+    assert time.monotonic() - begin < 0.15  # the filler thread starts them, not the caller
+    assert wait_for(lambda: len(agent._idle) == 4)
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    assert len(starts) == 4 and min(gaps) >= 0.15, gaps
+    assert wait_for(lambda: not agent._filling)  # the filler ends once the pool is full
+    assert not agent._filler.is_alive() or wait_for(lambda: not agent._filler.is_alive())
+
+
+def test_sessions_wait_for_the_next_warm_child_rather_than_start_cold(agent):
+    # Three sessions at once, with one child started so far: starting the other two cold
+    # would import Hermes in two processes together, the burst the stagger is for.
+    agent.stagger = 0.3
+    agent.prewarm(3)
+    results, lock = [], threading.Lock()
+
+    def session():
+        warm = agent._take()
+        with lock:
+            results.append(warm)
+
+    threads = [threading.Thread(target=session) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert None not in results and len({id(w) for w in results}) == 3
+    for warm in results:
+        warm.discard()
+
+
+def test_close_and_cancel_end_the_filler_mid_stagger(agent, monkeypatch):
+    starts = record_starts(monkeypatch)
+    agent.stagger = 5.0  # it would take 40 s to start them all
+    agent.prewarm(8)
+    assert wait_for(lambda: len(starts) == 1)
+    begin = time.monotonic()
+    agent.close()
+    agent._filler.join(5)
+    assert not agent._filler.is_alive() and time.monotonic() - begin < 2
+    assert len(starts) == 1 and agent._idle == []
+
+    agent.prewarm(8)
+    assert wait_for(lambda: len(starts) == 2)
+    agent.cancel()
+    agent._filler.join(5)
+    assert not agent._filler.is_alive() and len(starts) == 2
+
+
+def test_a_session_does_not_wait_when_no_filler_is_running(agent, monkeypatch):
+    def refuse(argv):
+        raise OSError("Windows refused")
+    monkeypatch.setattr(hermes_agent._Warm, "start", staticmethod(refuse))
+    agent.stagger = 5.0
+    agent.prewarm(4)  # the filler fails its first start and ends
+    begin = time.monotonic()
+    assert agent._take() is None
+    assert time.monotonic() - begin < 2  # cold at once, not after _TAKE_WAIT
+    assert wait_for(lambda: not agent._filling)
