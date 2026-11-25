@@ -10,6 +10,7 @@ Hermes session. The integration tests at the end run the real thing and are opt-
 import ast
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -32,11 +33,25 @@ OK_RESULT = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _not_windows(monkeypatch):
-    # HermesAgent refuses Windows outright. These tests drive the adapter itself (with a fake
-    # child, or the integration tests), so they run as on Linux; the refusal has its own test.
-    monkeypatch.setattr(hermes_agent, "_windows", lambda: False)
+def alive(pid: int) -> bool:
+    """Whether process `pid` is running. Not os.kill(pid, 0): on Windows that kills it."""
+    if sys.platform == "win32":
+        listed = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                                capture_output=True, text=True, timeout=30).stdout
+        return f'"{pid}"' in listed
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def wait_gone(pid: int, seconds: float = 5) -> bool:
+    """Whether `pid` is still alive after waiting up to `seconds` for it to go."""
+    deadline = time.monotonic() + seconds
+    while alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    return alive(pid)
 
 
 def make_skill(tmp_path, files=None):
@@ -314,18 +329,132 @@ def test_check_returns_the_result_when_the_tools_worked(tmp_path):
     assert fake_agent(tmp_path, writes(result)).check(docker_workspace())["hermes_version"] == "9.9"
 
 
-def test_windows_is_refused_before_anything_starts(tmp_path, monkeypatch):
-    # No process group to kill on a timeout there, so the child could outlive it and keep calling
-    # the model. Refused up front: no child is started, no model is called.
+class FakeProc:
+    """A Popen that never finishes on its own, for driving _run_child's timeout."""
+
+    def __init__(self, argv, **kwargs):
+        self.pid, self.kwargs, self.killed, self.calls = 4242, kwargs, False, 0
+        FakeProc.last = self
+
+    def communicate(self, timeout=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise subprocess.TimeoutExpired("child", timeout)
+        return None, ""
+
+    def poll(self):
+        return None if not self.killed else -9
+
+    def kill(self):
+        self.killed = True
+
+
+class FakeJob:
+    def __init__(self, kills: bool):
+        self.kills, self.killed, self.closed = kills, False, False
+
+    def kill(self):
+        self.killed = True
+        if self.kills:
+            FakeProc.last.killed = True
+        return self.kills
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize("job_kills, taskkill_works", [
+    (True, True),     # both run: each finds processes the other misses
+    (True, False),    # taskkill could not run: the job still kills
+    (False, True),    # Windows refused to kill the job: taskkill did
+    (None, True),     # Windows refused a job at all: taskkill
+    (None, False),    # neither: the child alone, with kill()
+])
+def test_a_timeout_on_windows_kills_the_childs_whole_tree(monkeypatch, job_kills, taskkill_works):
+    # Windows has no process-group signal: `taskkill /T` walks the tree, and a Job Object holds
+    # orphans it misses. Run on any OS: the Windows calls are faked; the real ones are
+    # exercised by the timeout tests below on Windows.
     monkeypatch.setattr(hermes_agent, "_windows", lambda: True)
-    marker = tmp_path / "started"
-    agent = fake_agent(tmp_path, f"open({str(marker)!r}, 'w').close()\n")
-    with pytest.raises(HermesAgentUnavailable, match="does not support Windows yet") as e:
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(hermes_agent.subprocess, "Popen", FakeProc)
+    job = None if job_kills is None else FakeJob(job_kills)
+    monkeypatch.setattr(hermes_agent, "_contain", lambda proc: job)
+    ran = []
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        if taskkill_works:
+            FakeProc.last.killed = True
+            return SimpleNamespace(returncode=0)
+        raise OSError("no taskkill")
+    monkeypatch.setattr(hermes_agent.subprocess, "run", fake_run)
+    with pytest.raises(TimeoutError):
+        hermes_agent._run_child(["child"], 0.1)
+    proc = FakeProc.last
+    # Its own group, and suspended until it is in the job (_contain resumes it).
+    assert proc.kwargs["creationflags"] == 0x200 | 0x4 and "start_new_session" not in proc.kwargs
+    assert ran == [["taskkill", "/F", "/T", "/PID", "4242"]]
+    assert proc.killed  # by the job, by taskkill, or by kill() when neither could
+    if job is not None:
+        assert job.killed and job.closed
+
+
+def test_a_job_is_closed_after_a_session_that_finished(monkeypatch):
+    # Closing a kill-on-close job is what stops anything the session left running.
+    monkeypatch.setattr(hermes_agent, "_windows", lambda: True)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    job = FakeJob(True)
+    monkeypatch.setattr(hermes_agent, "_contain", lambda proc: job)
+
+    class Finishes(FakeProc):
+        def communicate(self, timeout=None):
+            self.returncode = 0
+            return None, ""
+    monkeypatch.setattr(hermes_agent.subprocess, "Popen", Finishes)
+    assert hermes_agent._run_child(["child"], 5) == (0, "")
+    assert job.closed and not job.killed
+
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Objects")
+# The fake child runs on this interpreter. A Microsoft Store Python's is started by app
+# activation, outside the caller's job, so these show nothing there (Hermes' own is not).
+job_holds_this_python = pytest.mark.skipif(
+    "WindowsApps" in os.path.realpath(getattr(sys, "_base_executable", sys.executable)),
+    reason="a Microsoft Store Python starts its interpreter outside any job")
+
+
+@windows_only
+@job_holds_this_python
+def test_a_timeout_on_windows_kills_processes_whose_parent_has_exited(tmp_path):
+    # taskkill /T walks parent links and misses an orphan; the job holds it all the same.
+    pid_file = tmp_path / "orphan.pid"
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    middle = [sys.executable, "-c", f"import subprocess; p = subprocess.Popen({sleeper!r}); "
+                                    f"open({str(pid_file)!r}, 'w').write(str(p.pid))"]
+    agent = fake_agent(tmp_path, f"subprocess.run({middle!r})\ntime.sleep(60)\n", timeout=4)
+    with pytest.raises(TimeoutError):
         agent.run("p", None, docker_workspace())
-    assert isinstance(e.value, JudgeError)  # the runner records it as an error, not a failed run
-    with pytest.raises(HermesAgentUnavailable, match="does not support Windows yet"):
-        agent.check(docker_workspace())
-    assert not marker.exists()
+    assert not wait_gone(int(pid_file.read_text()))
+
+
+@windows_only
+@job_holds_this_python
+def test_a_finished_session_on_windows_leaves_nothing_running(tmp_path):
+    pid_file = tmp_path / "left.pid"
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    agent = fake_agent(tmp_path, f"p = subprocess.Popen({sleeper!r}, stderr=subprocess.DEVNULL)\n"
+                                 f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
+                                 + writes(OK_RESULT))
+    assert agent.run("p", None, docker_workspace()).output == "60"
+    assert not wait_gone(int(pid_file.read_text()))
+
+
+def test_winjob_imports_only_on_windows():
+    # winjob is Windows-only (kernel32 through ctypes): hermes_agent imports it on the Windows
+    # path only, so nothing of it is loaded on Linux or macOS.
+    tree = ast.parse(Path(hermes_agent.__file__).read_text())
+    top = [a.name for n in tree.body if isinstance(n, ast.ImportFrom) for a in n.names]
+    assert "winjob" not in top
 
 
 def test_a_child_that_dies_without_a_result_is_unavailable(tmp_path):
@@ -358,17 +487,17 @@ def test_unmeasured_tool_calls_stay_none(tmp_path):
 
 def test_a_session_past_its_timeout_is_stopped_with_everything_it_started(tmp_path):
     pid_file = tmp_path / "grandchild.pid"
-    agent = fake_agent(tmp_path, f"p = subprocess.Popen(['sleep', '60'])\n"
+    # The grandchild holds the child's stderr, as `docker exec` does: were it left running,
+    # communicate() would wait for it and the timeout would take the full 60 s.
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    agent = fake_agent(tmp_path, f"p = subprocess.Popen({sleeper!r})\n"
                                  f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
-                                 "time.sleep(60)\n", timeout=1.5)
+                                 "time.sleep(60)\n", timeout=3)
     start = time.monotonic()
     with pytest.raises(TimeoutError):
         agent.run("p", None, docker_workspace())
-    assert time.monotonic() - start < 10
-    pid = int(pid_file.read_text())
-    time.sleep(0.2)
-    with pytest.raises(ProcessLookupError):  # the process group was killed, grandchild too
-        os.kill(pid, 0)
+    assert time.monotonic() - start < 15
+    assert not wait_gone(int(pid_file.read_text()))  # the whole tree was killed, grandchild too
 
 
 def test_a_workspace_that_is_not_docker_is_unavailable():
@@ -410,6 +539,41 @@ def test_docker_argv_runs_bash_in_the_runs_container_under_its_own_timeout():
                     "timeout", "-s", "KILL", "35", "bash", "-c", "ls"]
     argv = hermes_child.docker_argv("docker", "box", "/work", "ls", login=True, timeout=30, stdin=True)
     assert argv[:3] == ["docker", "exec", "-i"] and argv[-4:] == ["bash", "-l", "-c", "ls"]
+
+
+def test_the_backend_names_the_workdir_as_its_default_folder(monkeypatch):
+    # Hermes replaces a TERMINAL_CWD that os.path.isabs rejects with the backend's default,
+    # "/root" unless the backend names one; on Windows, Python 3.13+ rejects "/work". With the
+    # workdir as the default, the tools run there (checked for real by the integration test).
+    registered = []
+    registry = SimpleNamespace(register_provider=registered.append)
+    fakes = {
+        "agent": SimpleNamespace(terminal_env_registry=registry),
+        "agent.terminal_env_registry": registry,
+        "agent.terminal_env_provider": SimpleNamespace(TerminalEnvironmentProvider=object),
+        "tools": SimpleNamespace(),
+        "tools.environments": SimpleNamespace(),
+        "tools.environments.base": SimpleNamespace(BaseEnvironment=object),
+        "tools.environments.base_output": SimpleNamespace(_popen_bash=None),
+    }
+    for name, module in fakes.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    hermes_child._register_backend("docker", "box", "/work")
+    [provider] = registered
+    assert provider.default_cwd == "/work" and provider.name == hermes_child.BACKEND
+    assert provider.is_container and provider.is_remote
+
+
+@pytest.mark.parametrize("version, platform, refused", [
+    ("0.22.2", "win32", True), ("0.21.5", "win32", True), ("0.23.0+381.g6b21d05", "win32", False),
+    ("0.23.2", "win32", False), ("1.0", "win32", False), ("0.22.2", "linux", False),
+    ("unknown", "win32", False), ("0.0.0", "win32", False), ("0.22rc1", "win32", True)])
+def test_windows_needs_hermes_0_23(version, platform, refused):
+    # Older Hermes cannot name the backend's default folder, so its tools ran in /root there.
+    problem = hermes_child.windows_version_problem(version, platform)
+    assert (problem is not None) == refused
+    if refused:
+        assert version in problem and "0.23" in problem
 
 
 def test_tool_calls_are_counted_from_the_models_messages():

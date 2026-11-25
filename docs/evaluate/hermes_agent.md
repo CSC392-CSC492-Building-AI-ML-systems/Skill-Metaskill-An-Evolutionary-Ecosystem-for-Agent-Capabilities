@@ -66,7 +66,7 @@ Links are left out of the file list, as the runner leaves them out of the copy. 
 | The session ended (finished, or ran out of turns) | `AgentRun` | A judged run |
 | The agent raised during the session | `RuntimeError` | A failed run: the agent failing is an outcome of the task |
 | The session ran past `timeout` | `TimeoutError` | A failed run |
-| Hermes not found, Windows, unsupported Hermes, a guard refused, the agent could not be built (no provider), or the child died or wrote an unreadable result | `HermesAgentUnavailable` (a `JudgeError`) | An error in `RunnerResult.errors`, not a failed run: nothing ran, so the skill must not be scored for it |
+| Hermes not found, unsupported Hermes, a guard refused, the agent could not be built (no provider), or the child died or wrote an unreadable result | `HermesAgentUnavailable` (a `JudgeError`) | An error in `RunnerResult.errors`, not a failed run: nothing ran, so the skill must not be scored for it |
 | The environment could not serve the session: Hermes marks it `failed` with a reason such as `model_not_found`, `billing`, `auth`, `rate_limit`, `server_error`, `empty_response` or `loop_error`, or a reason Hermes adds later | `HermesAgentUnavailable`, with Hermes' error and `failure_reason` | An error, not a failed run. Hermes puts its own error text in the final response; judging that as the agent's answer would score the skill on this machine's provider |
 | The session failed for a reason the task caused: `failure_reason` or `turn_exit_reason` is one of `TASK_FAILURES` (`context_overflow`, `truncated`, `content_policy_blocked`, `context_compression_exhausted`, `context_compression_timeout`) | `RuntimeError`, with the reason | A failed run. A skill can drive these, so they count against it |
 
@@ -74,7 +74,18 @@ Which side a `failed` session falls on is decided by `hermes_child.failure_statu
 
 **The pre-flight check.** `HermesAgent.check(workspace)` sets Hermes up and drives its terminal and file tools once each, with no model. Setup being accepted is not enough, because with Docker stopped or on a Hermes whose tools run in another folder every tool call fails and setup still succeeds. So `check_problems` reads each tool's answer: the file tool wrote `check.txt` into the workspace root, the terminal ran there and exited 0, the file tool read back what the terminal wrote, and every guard refused. Anything else raises `HermesAgentUnavailable` with a short reason for each failure (no tool output or stderr in the message). Checked on 0.21.5, 0.22.2 and 0.23.2 against a real container, and against a container that does not exist.
 
-A timeout stops the child's whole process group, so the `docker exec` processes it started stop too; commands inside the container stop with it when the runner removes it.
+A timeout stops the child and every process it started, so the `docker exec` processes stop too; commands inside the container stop with it when the runner removes it. Stopping the child alone would not do: `communicate()` waits for the `docker exec` processes, which hold its stderr open. On Linux and macOS the child starts in a session of its own and its process group is sent `SIGKILL`.
+
+Windows has no group signal, so two mechanisms are used together (`winjob.py`, standard library `ctypes` only):
+
+1. **A Job Object.** The child starts suspended (`CREATE_SUSPENDED`, in a new process group), is put in a job created with `KILL_ON_JOB_CLOSE`, and only then is resumed. Everything it starts is therefore in the job, including processes whose parent has already exited. Closing the job (at the end of every session, or if the evaluator itself dies) kills whatever is still in it.
+2. **`taskkill /F /T /PID <child>`.** On a timeout this runs first, while the tree's parent links are whole, and then the job is killed. It covers what a job cannot hold: a process Windows starts on the caller's behalf outside the job, such as a Microsoft Store Python's interpreter, which app activation starts. Hermes' bundled Python is a plain executable, so its tree is in the job.
+
+If Windows refuses a job, `taskkill` alone is used. If both fail, the child is killed alone. If the suspended child cannot be resumed, it is killed and the run is `HermesAgentUnavailable`. Checked against a real Hermes child stopped inside a `docker exec`: Hermes' Python, `docker.exe` and `conhost.exe` were all gone after the timeout.
+
+**The working folder on Windows.** Hermes drops a `TERMINAL_CWD` that `os.path.isabs` rejects and uses the backend's default instead, which is `/root` unless the backend names one. On Windows, Python 3.13 and later no longer count a path without a drive as absolute, so `/work` was rejected on Hermes' bundled Python (3.14), and every tool ran in `/root`, where the sandbox's user `nobody` may not go. Linux was not affected. The backend now names the workdir as its `default_cwd` (Hermes' provider interface), which Hermes keeps as is. A `cd` still carries to the next command and to relative file paths. Checked on Windows 11 with Docker Desktop 28.5 and Hermes 0.23.0.
+
+**Hermes 0.23 or later on Windows.** `default_cwd` is in Hermes' provider interface from 0.23 on. On Windows the child refuses an older Hermes as a setup error that names its version (`windows_version_problem`), before any tool runs. A version it cannot read (no version info, or the `0.0.0` install stamp) is let through, and the pre-flight check still refuses tools that do not reach `/work`. Linux and macOS have no minimum beyond what section 6 lists.
 
 ## 5. Tests
 
@@ -83,15 +94,15 @@ A timeout stops the child's whole process group, so the `docker exec` processes 
 - The skill message points at `/tmp/skill`, never at a host path, never at `skill_view`, and lists exactly the files the runner copies (`runner.copied`: no links, hard links or paths outside the skill).
 - Hermes' launch command keeps its bootstrap and runs the child; any other shape, or no Hermes, is unavailable.
 - A finished session maps every usage field and the tool calls; the request names the container, the Docker executable and `/work`, and carries a skill message only with the skill.
-- A setup error is a `JudgeError`; an agent error is not; a child that dies without a result is unavailable with its error; a timeout stops the child and what it started; a workspace that is not Docker is unavailable; through the runner, unavailability is an error, not a failed run.
-- The child imports only the standard library at the top (it runs on Hermes' interpreter); its `docker exec` command, tool-call count and transcript are tested directly; a request from another protocol version is refused before Hermes is touched.
+- A setup error is a `JudgeError`; an agent error is not; a child that dies without a result is unavailable with its error; a timeout stops the child and what it started (a real grandchild that holds its stderr, on any OS; on Windows, also an orphan whose parent has exited, and anything left running after a session that finished; and the job, `taskkill` and fallback paths with the calls faked, on any OS). The two Windows job tests skip on a Microsoft Store Python, whose interpreter starts outside any job; a workspace that is not Docker is unavailable; through the runner, unavailability is an error, not a failed run.
+- The child imports only the standard library at the top (it runs on Hermes' interpreter); its backend names the workdir as its default folder; on Windows it refuses a Hermes older than 0.23; its `docker exec` command, tool-call count and transcript are tested directly; a request from another protocol version is refused before Hermes is touched.
 
 Opt-in integration tests need, besides Hermes and Docker:
 
 - **Python 3.12.11, 3.13.4 or later** for the test process. The sandbox refuses older ones because of CVE-2025-4517 (tarfile), and the tests then skip with that reason. Hermes' own bundled Python (3.14) works for a test virtual environment.
 - **The sandbox image pulled first** (`docker pull` of the pinned image in `sandbox.DEFAULT_IMAGE`; [dependencies.md](dependencies.md) lists the command). Without it the tests skip.
 
-Hermes 0.21.5, 0.22.2 and 0.23.2 all pass them; the tests use whichever `hermes` is first on `PATH`.
+Hermes 0.21.5, 0.22.2 and 0.23.2 all pass them on Linux, and 0.23.0 on Windows 11 with Docker Desktop; the tests use whichever `hermes` is first on `PATH`. CI runs the unit tests on Linux and Windows; GitHub's Windows runners cannot run Linux containers, so the integration tests are run by hand: the pull-request checklist asks for them whenever the Hermes adapter or the sandbox changes. Run them from a virtual environment made from a plain Python, such as Hermes' bundled one, not from the Microsoft Store.
 
 Opt-in integration tests:
 
@@ -121,7 +132,7 @@ Built and tested against Hermes 0.21.5 and 0.23.2; the version is recorded in ea
 ## 7. Limits and open questions
 
 - **The tool-search bridge (Hermes 0.21.5 and 0.23.2 both have it).** Hermes puts `tool_search`/`tool_describe`/`tool_call` in front of the tools, and the bridge also reaches the user's connected apps (mail, calendars, issue trackers) and can install MCP servers, none of which runs in the sandbox. The child turns the bridge off for its process (`_turn_off_tool_search`), and `_check_tools` then compares the agent's tools with the terminal and file toolsets (`terminal`, `process_manage`, `read_file`, `write_file`, `patch`, `search_files` on 0.23.2). Any other tool is a setup error and nothing runs. An earlier version of this section said the bridge only searched the enabled tools; the connector and MCP paths show that was wrong.
-- **Windows is not supported yet.** A timeout stops the child with `os.killpg` and a process group of its own, and Windows has neither, so the stop would fail and the Hermes child would keep calling the model until `max_iterations`. `run` and `check` raise `HermesAgentUnavailable` on Windows before anything starts (an error in the report, not a failed run). Supporting it is a separate piece of work: killing the child's process tree with `taskkill /F /T`, checking the `/root` working folder a reviewer saw on Windows, portable tests, and a Windows CI job.
+- **Windows** is supported with Hermes 0.23 or later (section 4: the timeout, the working folder and the minimum version). It was checked on 0.23.0.
 - **The user's own hooks and plugins** load in the child as in any Hermes session, and run on this machine. They are the user's configuration, as trusted as their Hermes; the skill's commands never reach them.
 - **Start-up cost.** Each run starts a Hermes process, about one to two seconds.
 - **Cost.** Every run is real model calls on the user's provider ([evaluate.md](../evaluate.md) 9).
