@@ -1,0 +1,2 @@
+# Fixtures are pinned by SHA-256, so check them out byte for byte (no CRLF conversion).
+tests/fixtures/** -text

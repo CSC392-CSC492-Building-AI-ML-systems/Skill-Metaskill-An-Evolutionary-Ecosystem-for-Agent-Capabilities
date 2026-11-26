@@ -185,7 +185,7 @@ def test_evaluate_routes_with_ctx_and_no_default_output(fake_evaluate):
     result = json.loads(tools.metaskill({"operation": "evaluate", "skill_path": "skills/gcp"},
                                         ctx=ctx))
     assert fake_evaluate["evaluate"] == (
-        "skills/gcp", {"config_path": None, "output_path": None, "ctx": ctx})
+        "skills/gcp", {"config_path": None, "output_path": None, "tasks_path": None, "ctx": ctx})
     assert result["success"] is True and result["operation"] == "evaluate"
 
 
@@ -281,7 +281,7 @@ def test_command_runs_a_path_itself_and_prints_the_result(fake_evaluate):
     out = tools.make_command_handler(ctx)("evaluate skills/gcp")
     assert ctx.injected == []
     assert fake_evaluate["evaluate"] == (
-        "skills/gcp", {"config_path": None, "output_path": None, "ctx": ctx})
+        "skills/gcp", {"config_path": None, "output_path": None, "tasks_path": None, "ctx": ctx})
     assert "report.json" in out
 
 
@@ -779,3 +779,41 @@ def test_suggestions_take_a_part_of_the_name():
 def test_help_says_which_folder_paths_start_from(workspace, installed, request_text):
     out = tools.make_command_handler(SessionCtx(workspace))(request_text)
     assert f"Folder: {workspace} (relative paths start here)" in out
+
+
+# --- tasks_path (evaluate.md section 7) -----------------------------------------------------
+
+
+def test_tasks_path_goes_to_evaluate_resolved_from_the_session(fake_evaluate, workspace):
+    (workspace / "evals").mkdir()
+    (workspace / "evals" / "tasks.json").write_text("{}")
+    result = json.loads(tools.metaskill(
+        {"operation": "rank", "skill_path": "skills/gcp", "tasks_path": "evals/tasks.json"}))
+    assert result["status"] == "ok"
+    _, kwargs = fake_evaluate["rank"]
+    assert os.path.samefile(kwargs["tasks_path"], workspace / "evals" / "tasks.json")
+
+
+@pytest.mark.parametrize("operation, tasks, error", [
+    ("evaluate", "missing.json", "tasks_path does not exist"),
+    ("evaluate", "x", "tasks_path does not exist"),  # a folder, not a file
+    ("generalize", "c.json", "only for evaluate and rank"),
+])
+def test_tasks_path_is_checked_before_anything_runs(fake_evaluate, fake_pipelines, operation,
+                                                    tasks, error):
+    result = json.loads(tools.metaskill(
+        {"operation": operation, "skill_path": "skills/gcp", "tasks_path": tasks}))
+    assert result["status"] == "error" and error in result["error"]
+    assert operation not in fake_evaluate and operation not in fake_pipelines
+
+
+def test_command_passes_tasks_on_with_or_without_config(fake_evaluate, workspace):
+    (workspace / "t.json").write_text("{}")
+    (workspace / "my tasks.json").write_text("{}")
+    handler = tools.make_command_handler(FakeCtx())
+    handler("evaluate skills/gcp --tasks t.json")
+    assert fake_evaluate["evaluate"][1]["tasks_path"].endswith("t.json")
+    assert fake_evaluate["evaluate"][1]["config_path"] is None
+    handler('rank x, skills/gcp --tasks "my tasks.json" --config c.json')
+    _, kwargs = fake_evaluate["rank"]
+    assert kwargs["tasks_path"].endswith("my tasks.json") and kwargs["config_path"].endswith("c.json")

@@ -24,8 +24,9 @@ SKILL_HELP = (
     "or a path. /metaskill skills [text] lists the ones you can use."
 )
 USAGE = (
-    "usage: /metaskill evaluate <skill> | rank <skill>, <skill> | generalize <skill> | "
-    f"personalize <skill> --config <file> | skills [text]\n{SKILL_HELP}"
+    "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
+    "generalize <skill> | "
+    f"personalize <skill> --config <file> | skills [text] | quality-pilot\n{SKILL_HELP}"
 )
 
 # operation -> (module, entry point)
@@ -214,13 +215,14 @@ def _list_skills(text, cwd):
     return "\n".join(lines)
 
 
-def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
+def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tasks_path=None):
     """Validate arguments, route to the pipeline, and return a response dict."""
     if operation not in _ENTRY_POINTS:
         return _error(operation, f"unknown operation; expected one of {', '.join(_ENTRY_POINTS)}")
     cwd = _session_cwd(ctx)
     config_path = config_path and os.path.join(cwd, config_path)
     output_path = output_path and os.path.join(cwd, output_path)
+    tasks_path = tasks_path and os.path.join(cwd, tasks_path)
     names = skill_path if isinstance(skill_path, list) else (
         _skill_names(operation, skill_path, cwd) if skill_path else [])
     paths = [os.path.join(cwd, name) for name in names]
@@ -242,6 +244,10 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
         )
     if operation != "generalize" and config_path and not os.path.exists(config_path):
         return _error(operation, "config_path does not exist")
+    if tasks_path and operation not in EVALUATION:
+        return _error(operation, "tasks_path is only for evaluate and rank")
+    if tasks_path and not os.path.isfile(tasks_path):
+        return _error(operation, "tasks_path does not exist or is not a file")
 
     entry_point = _load_entry_point(operation)
     if entry_point is None:
@@ -250,7 +256,8 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None):
     target = paths if operation == "rank" else paths[0]
     if operation in EVALUATION:
         # output_path stays None by default: the config says where reports go.
-        kwargs = {"config_path": config_path, "output_path": output_path, "ctx": ctx}
+        kwargs = {"config_path": config_path, "output_path": output_path,
+                  "tasks_path": tasks_path, "ctx": ctx}
     else:
         # From the resolved path: skill_path can be a list, which has no name to take.
         default = os.path.join(cwd, default_output_path(operation, target))
@@ -284,6 +291,7 @@ def metaskill(args, ctx=None, **kwargs):
             config_path=args.get("config_path"),
             output_path=args.get("output_path"),
             ctx=ctx,
+            tasks_path=args.get("tasks_path"),
         )
         result["success"] = result["status"] == "ok"
         return json.dumps(result)
@@ -294,18 +302,56 @@ def metaskill(args, ctx=None, **kwargs):
         )
 
 
-_COMMAND = re.compile(r"(\S+)\s+(.+?)(?:\s+--config\s+(.+))?")
+_COMMAND = re.compile(r"(\S+)\s+(.+?)")
+# A trailing `--config FILE` or `--tasks FILE`; FILE is quoted, or runs to the end of the
+# request or to the other option.
+_OPTION = re.compile(r"\s+--(config|tasks)\s+(\"[^\"]*\"|'[^']*'|(?:(?!\s+--(?:config|tasks)\s).)+?)\s*$")
 
 
 def _parse_command(request):
-    """(operation, skills, config file) of `<operation> <skills> [--config FILE]`, or
-    None if the request has another shape."""
+    """(operation, skills, config file, task file) of
+    `<operation> <skills> [--config FILE] [--tasks FILE]`, either option first, or None if
+    the request has another shape."""
+    options = {}
+    while (option := _OPTION.search(request)) is not None:
+        if option[1] in options:
+            return None
+        options[option[1]] = option[2].strip("\"'")
+        request = request[:option.start()]
     match = _COMMAND.fullmatch(request)
     if match is None or match[1] not in _ENTRY_POINTS:
         return None
-    operation, skills, config_path = match.groups()
-    return operation, skills.strip("\"'"), config_path and config_path.strip("\"'")
+    operation, skills = match.groups()
+    return operation, skills.strip("\"'"), options.get("config"), options.get("tasks")
 
+
+def _parse_evaluate_command(request):
+    """Parse evaluation options while preserving quoted Windows paths."""
+    import argparse
+    import shlex
+
+    parser = argparse.ArgumentParser(add_help=False, exit_on_error=False, allow_abbrev=False)
+    parser.add_argument("skill", nargs="+")
+    parser.add_argument("--config")
+    parser.add_argument("--tasks")
+    parser.add_argument("--quality-pilot", action="store_true")
+    try:
+        tokens = shlex.split(request, posix=False)[1:]
+        if "--quality-pilot" not in tokens:
+            return _parse_command(request), False
+        args, unknown = parser.parse_known_args(tokens)
+        if unknown:
+            raise ValueError("Unknown evaluation option or extra argument.")
+    except (ValueError, argparse.ArgumentError, SystemExit):
+        raise ValueError(
+            "Usage: /metaskill evaluate <skill> [--config <file>] [--tasks <file>] [--quality-pilot]"
+        ) from None
+    return (
+        ("evaluate", " ".join(part.strip("\"'") for part in args.skill),
+         args.config.strip("\"'") if args.config else None,
+         args.tasks.strip("\"'") if args.tasks else None),
+        args.quality_pilot,
+    )
 
 _CELL = re.compile(r"(?<!\\)\|")  # a column border, not an escaped | in a name
 _ESCAPED = re.compile(r"\\([\\`\[\]<>|])")  # what rank.py escapes for Markdown
@@ -421,16 +467,44 @@ def make_command_handler(ctx):
             command, _, rest = request.partition(" ")
             if command == "skills":
                 return _list_skills(rest, cwd or os.getcwd())
+            if command == "quality-pilot":
+                if rest.strip():
+                    return "Usage: /metaskill quality-pilot (bundled synthetic task only)"
+                module = "metaskill.evaluate.golden.hermes_pilot"
+                if __package__:
+                    module = f"{__package__}.{module}"
+                pilot = importlib.import_module(module)
+                result = {"status": "ok", **pilot.run_quality_pilot(ctx),
+                          "operation": "quality-pilot"}
+                return "Text-only Quality pilot (no agent tools).\n" + _summary(result)
             if request in _ENTRY_POINTS:
                 return f"metaskill {request}: which skill?\n{SKILL_HELP}\n{where}"
-            parsed = _parse_command(request)
+            quality_pilot = False
+            if command == "evaluate":
+                try:
+                    parsed, quality_pilot = _parse_evaluate_command(request)
+                except ValueError as exc:
+                    return str(exc)
+            else:
+                parsed = _parse_command(request)
             if parsed:
-                operation, skills, config_path = parsed
+                operation, skills, config_path, tasks_path = parsed
                 paths, problems = _find_skills(operation, skills, cwd)
                 if problems or not paths:
                     return "\n".join([*problems, SKILL_HELP, where])
                 target = paths if operation == "rank" else paths[0]
-                result = run(operation, target, config_path=config_path, ctx=ctx)
+                if quality_pilot:
+                    if config_path or tasks_path:
+                        return "The Quality pilot uses fixed settings; omit --config and --tasks."
+                    module = "metaskill.evaluate.golden.hermes_pilot"
+                    if __package__:
+                        module = f"{__package__}.{module}"
+                    pilot = importlib.import_module(module)
+                    result = {"status": "ok", **pilot.run_quality_pilot(ctx, target),
+                              "operation": "evaluate"}
+                    return "Text-only Quality pilot (no agent tools).\n" + _summary(result, paths)
+                result = run(operation, target, config_path=config_path, ctx=ctx,
+                             tasks_path=tasks_path)
                 return _summary(result, paths)
             if not ctx.inject_message(f"Use the metaskill tool to: {request}"):
                 return ("metaskill: could not send the request to the agent. Set "

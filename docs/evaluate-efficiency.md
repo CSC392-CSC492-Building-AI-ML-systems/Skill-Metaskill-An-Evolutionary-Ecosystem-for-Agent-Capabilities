@@ -85,8 +85,10 @@ early and fails is cheap but worthless, so it earns no efficiency credit.
   (the agent loops until it hits a limit), so including them stops a cheap pass from hiding
   an expensive failure. Success decides whether a task counts; cost reflects what the skill
   actually spent.
-- If **no** with-skill run passed on any task, efficiency is `None` / `skipped` — there is
-  nothing to measure, and quality/robustness already record the failures.
+- If **no** with-skill run passed on any task, efficiency is `0` (`ok`): there is no
+  efficient success to credit. It used to be `None` / `skipped`, but a skipped dimension
+  leaves a skill without an `overall`, so the worst possible skill was listed as unranked
+  instead of last. With no with-skill runs at all it is still `skipped`.
 
 ## 4. Smoothing and missing baselines
 
@@ -106,12 +108,12 @@ open questions.
 
 - [`metaskill/evaluate/efficiency.py`](../metaskill/evaluate/efficiency.py) — pure logic
   over runner results, no agent run and no model call.
-  - `score_from_runs(with_skill, baseline)` holds §2–§4; it is what the runner
-    integration calls once task-based dimensions are wired in.
-  - `score(skill, config, llm=...)` is the dimension entry point. The runner is **not yet
-    wired into `evaluate`** (no task-based dimension runs tasks — evaluate.md §3.5), so in
-    the live pipeline it returns `skipped`. The scoring logic is built and tested ahead of
-    that integration, as safety's scoring was.
+  - `score_from_runs(with_skill, baseline)` holds §2–§4.
+  - `score_runs(skill, config, runs)` is what evaluate calls when it ran a task file
+    (evaluate.md §7): it splits the skill's runs by variant and calls `score_from_runs`.
+    Runs the runner could not make (`runs.errors`) are left out, as a task without a
+    baseline is, and `detail` says how many; if none completed, the dimension is `error`.
+  - `score(skill, config, llm=...)` is for a call without a task file: `skipped`.
 - Signals read from `Metrics` (`reproducible_input`, generation = `output_tokens`), so a
   change to what counts touches one place. A signal that returns `None` (not measured —
   `tool_calls` from a usage file) is left out of the mean, not smoothed as a zero.

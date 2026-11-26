@@ -20,6 +20,8 @@ TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
 # A size Docker's tmpfs takes, e.g. 16m. Nothing else: it goes into the mount's options,
 # so a comma would add options of its own.
 DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
+DEFAULT_AGENT_MAX_ITERATIONS = 30  # model turns per task session
+DEFAULT_AGENT_TIMEOUT = 600.0  # seconds per task session
 SANDBOX_MEMORY = "512m"  # the sandbox's memory limit, which its run folder counts against
 
 
@@ -198,6 +200,17 @@ class EvaluationConfig:
     # Size of each run's folder in the sandbox (runner.md 2.6); fixtures must fit too.
     sandbox_disk: str = "16m"
     output_dir: Path = Path("evaluation-reports")  # each run writes [timestamp]/ here
+    # The task file every skill of the call runs (evaluate.md 4.3); None runs no tasks, and
+    # the task-based dimensions are skipped. Giving it is the opt-in to task runs (agent
+    # sessions); dimensions an LLM judges still call the judge without it.
+    tasks_path: Path | None = None
+    # The Hermes model and provider the task runs use; empty is the user's default.
+    agent_model: str = ""
+    agent_provider: str = ""
+    # The task agent's limits per session (hermes_agent.md): model turns, and seconds for the
+    # whole session. They change what an agent can finish, so they are part of the hash.
+    agent_max_iterations: int = DEFAULT_AGENT_MAX_ITERATIONS
+    agent_timeout: float = DEFAULT_AGENT_TIMEOUT
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
@@ -216,20 +229,34 @@ class EvaluationConfig:
             # The folder is in memory, so a larger one could never be filled.
             raise ValueError(f"sandbox_disk must be under the sandbox's memory limit of "
                              f"{SANDBOX_MEMORY}, got {self.sandbox_disk}")
+        if (isinstance(self.agent_max_iterations, bool)
+                or not isinstance(self.agent_max_iterations, int)
+                or self.agent_max_iterations < 1):
+            raise ValueError(
+                f"agent_max_iterations must be an integer >= 1, got {self.agent_max_iterations!r}")
+        if (isinstance(self.agent_timeout, bool) or not isinstance(self.agent_timeout, (int, float))
+                or not 0 < self.agent_timeout < math.inf):  # False for NaN too
+            raise ValueError(
+                f"agent_timeout must be a number of seconds > 0, got {self.agent_timeout!r}")
+        # 600 and 600.0 are the same limit, so they must be the same in the hash.
+        self.agent_timeout = float(self.agent_timeout)
         check_weights(self.weights)
 
     def hash(self) -> str:
         """Hash of the settings that affect scores; becomes ReportMeta.config.
 
-        output_dir is left out, since where reports are written does not change them.
+        output_dir is left out, since where reports are written does not change them, and so
+        is where the task file is: the tasks themselves are what change scores, and the same
+        file read from another folder is the same tasks.
         """
         settings = self.to_dict()
         del settings["output_dir"]
+        del settings["tasks_path"]
         encoded = json.dumps(settings, sort_keys=True).encode()
         return hashlib.sha256(encoded).hexdigest()[:16]
 
     def to_meta(self, timestamp: str, skills: list[str], scanner_version: str,
-                checks_version: str) -> ReportMeta:
+                checks_version: str, clarity_rubric_version: str = "") -> ReportMeta:
         return ReportMeta(
             timestamp=timestamp,
             skills=skills,
@@ -239,6 +266,7 @@ class EvaluationConfig:
             safety_tier=self.safety_tier,
             scanner_version=scanner_version,
             checks_version=checks_version,
+            clarity_rubric_version=clarity_rubric_version,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -253,6 +281,11 @@ class EvaluationConfig:
             "output_max_chars": self.output_max_chars,
             "sandbox_disk": self.sandbox_disk,
             "output_dir": str(self.output_dir),
+            "tasks_path": str(self.tasks_path) if self.tasks_path is not None else None,
+            "agent_model": self.agent_model,
+            "agent_provider": self.agent_provider,
+            "agent_max_iterations": self.agent_max_iterations,
+            "agent_timeout": self.agent_timeout,
         }
 
     @classmethod
@@ -268,6 +301,11 @@ class EvaluationConfig:
             output_max_chars=data.get("output_max_chars", 2000),
             sandbox_disk=data.get("sandbox_disk", "16m"),
             output_dir=Path(data.get("output_dir", "evaluation-reports")),
+            tasks_path=Path(data["tasks_path"]) if data.get("tasks_path") else None,
+            agent_model=data.get("agent_model", ""),
+            agent_provider=data.get("agent_provider", ""),
+            agent_max_iterations=data.get("agent_max_iterations", DEFAULT_AGENT_MAX_ITERATIONS),
+            agent_timeout=data.get("agent_timeout", DEFAULT_AGENT_TIMEOUT),
         )
         if "weights" in data:
             config.weights = {
@@ -369,6 +407,11 @@ class ReportMeta:
     safety_tier: SafetyTier = SafetyTier.STATIC
     scanner_version: str = ""  # empty if the scanner did not run
     checks_version: str = ""  # version of our own safety rule set
+    # The model(s) that ran the task sessions, as Hermes reported them; empty if no task ran.
+    agent_model: str = ""
+    # Tokens and calls the judge used ({input_tokens, output_tokens, calls}); empty if none.
+    judge_usage: dict[str, int] = field(default_factory=dict)
+    clarity_rubric_version: str = ""  # clarity.RUBRIC_VERSION; ratings across versions differ
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -380,6 +423,9 @@ class ReportMeta:
             "safety_tier": self.safety_tier.value,
             "scanner_version": self.scanner_version,
             "checks_version": self.checks_version,
+            "agent_model": self.agent_model,
+            "judge_usage": dict(self.judge_usage),
+            "clarity_rubric_version": self.clarity_rubric_version,
         }
 
     @classmethod
@@ -394,6 +440,9 @@ class ReportMeta:
                 data.get("safety_tier", SafetyTier.STATIC.value)),
             scanner_version=data.get("scanner_version", ""),
             checks_version=data.get("checks_version", ""),
+            agent_model=data.get("agent_model", ""),
+            judge_usage=dict(data.get("judge_usage") or {}),
+            clarity_rubric_version=data.get("clarity_rubric_version", ""),
         )
 
 
@@ -595,6 +644,11 @@ class DimensionScore:
     detail: str = ""  # what was missing or went wrong, when status is not OK
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    # The model(s) an LLM judged this dimension with, as "provider/model" joined by ", ",
+    # and their tokens and calls ({input_tokens, output_tokens, calls}); empty when no model
+    # ran. Evaluate merges these into ReportMeta.judge_model/judge_usage (models.md).
+    judge_model: str = ""
+    judge_usage: dict[str, int] = field(default_factory=dict)
 
     def to_status(self) -> DimensionStatus:
         """The part of this result the report keeps per dimension."""
@@ -609,6 +663,8 @@ class DimensionScore:
             "detail": self.detail,
             "rubric": [r.to_dict() for r in self.rubric],
             "findings": [f.to_dict() for f in self.findings],
+            "judge_model": self.judge_model,
+            "judge_usage": dict(self.judge_usage),
         }
 
     @classmethod
@@ -621,6 +677,8 @@ class DimensionScore:
             detail=data.get("detail", ""),
             rubric=[RubricRating.from_dict(r) for r in data["rubric"]],
             findings=[Finding.from_dict(f) for f in data["findings"]],
+            judge_model=data.get("judge_model", ""),
+            judge_usage=dict(data.get("judge_usage") or {}),
         )
 
     def __post_init__(self) -> None:
@@ -749,6 +807,10 @@ class SkillResult:
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
+    # The folder, inside the report's folder, that holds this skill's run logs. It is not the
+    # name when skills share one (same, same-2), so the report reads it from here. Not in
+    # to_dict(): the JSON report names the log in each run's output.
+    log_folder: str | None = None
 
     def __post_init__(self) -> None:
         # Also refuses NaN, which would make the ranking's order depend on input order.

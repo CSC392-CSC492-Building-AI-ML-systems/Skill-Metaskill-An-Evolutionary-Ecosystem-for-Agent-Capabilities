@@ -80,13 +80,9 @@ Edge-case handling remains part of the task's expected behaviour; an edge-case f
 
 ### Clarity
 
-Clarity uses an LLM judge against anchored rubric criteria from the evaluation design:
+Clarity uses an LLM judge against the eight anchored rubric criteria in [evaluate-clarity.md](../evaluate-clarity.md): purpose and trigger, conciseness, accessible language, readability, structure and flow, actionability, verifiability, and failure handling.
 
-- Trigger specificity.
-- Step ordering.
-- Verifiability of steps.
-- Handling of failure cases.
-- Whether a human reader could follow the workflow as well as an agent.
+A draft pilot of eleven clear skills, eleven unclear variants, and three injection and three rewording controls (for resistance to embedded instructions and sensitivity to equivalent wording) lives in `metaskill/evaluate/golden/synthetic/clarity/` and is described in evaluate-clarity.md, section 4.
 
 Golden annotations identify the relevant text, expected properties, and rationale for an anchored judgment. Each reported rating must quote supporting skill text. Exact rubric anchors still need agreement; unexplained numeric labels are insufficient.
 
@@ -206,7 +202,7 @@ Golden records should reference existing task IDs and fixture paths rather than 
 | --- | --- | --- |
 | Task definition and assertions | `Task`, `Check` | Use existing fields and check kinds; richer assertions need a separately reviewed extension. |
 | Task outcome | `TestResult` | Keep `passed`, `score`, `reason`, `evidence`, `metrics`, and `output`; no additional per-result dimension field. |
-| Clarity expectation | `RubricRating` | Match criterion, normalized rating expectations, and verified quotes. |
+| Clarity expectation | `RubricRating` | Match criterion, normalized rating expectations, and verified quotes. The Clarity pilot currently automates the pair ordering on targeted criteria and the injection and rewording controls ([evaluate-clarity.md](../evaluate-clarity.md), sections 4.2 and 4.5). |
 | Safety/configuration expectation | `Finding` | Match the relevant dimension, category, location, and reviewed severity constraint. |
 | Assessment availability | `DimensionScore`, `DimensionStatus` | Preserve `ok`, `partial`, `skipped`, and `error`; do not add a not-applicable status in this PR. |
 | Overall evidence | `Report`, `ReportMeta`, `SkillResult`, `Scores` | Preserve the documented JSON report shape. |
@@ -232,7 +228,7 @@ For example, this is an illustrative annotation fragment, not the final schema:
 ```json
 {
   "expectation_id": "clarity-inputs",
-  "criterion": "verifiability_of_steps",
+  "criterion": "verifiability",
   "expected_properties": [
     "Required input files are named",
     "The reader can verify that each required input is available"

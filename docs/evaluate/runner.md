@@ -39,7 +39,7 @@ result.tests                        # list[TestResult], the report's `tests`
 | Function | Description |
 |---|---|
 | `run_skill(skill, tasks_file, agent, *, config, run_dir, ctx=None, sandbox=None)` | Loads the tasks with `load_tasks`, then calls `run_tasks` |
-| `run_tasks(skill, tasks, agent, *, config, run_dir, ctx=None, judges=None, sandbox=None)` | Runs already-loaded tasks. `sandbox` runs the commands of `exit_code` checks (2.6); `None` means a `DockerSandbox`. `judges` maps a `JudgeType` to a judge and replaces the ones built from `ctx` and `sandbox`, for tests. Raises `ValueError` before running anything if the skill's name is not a safe folder name (2.4) |
+| `run_tasks(skill, tasks, agent, *, config, run_dir, ctx=None, judges=None, sandbox=None, log_folder=None)` | Runs already-loaded tasks. `sandbox` runs the commands of `exit_code` checks (2.6); `None` means a `DockerSandbox`. `judges` maps a `JudgeType` to a judge and replaces the ones built from `ctx` and `sandbox`, for tests. `log_folder` is the folder under `run_dir` for the logs, the skill's name by default (2.4). Raises `ValueError` before running anything if that folder is not a safe folder name (2.4) |
 | `report_dir(config, now=None)` | `config.output_dir / timestamp(now)`, the folder one evaluate or rank call writes to. Create it once per call and pass it to every skill |
 | `timestamp(now=None)` | `YYYY-MM-DD-THH-MM-SS`, used for the folder name and `ReportMeta.timestamp` |
 
@@ -64,19 +64,21 @@ class Agent(Protocol):
 
 @dataclass
 class AgentRun:
-    output: str           # the agent's final reply
-    tokens: int = 0
-    tool_calls: int = 0
-    transcript: str = ""  # the full session, for the log
+    output: str                    # the agent's final reply
+    input_tokens: int = 0          # also output_tokens, reasoning_tokens, cache_read_tokens,
+    llm_calls: int = 0             # cache_write_tokens: see the class docstring
+    tool_calls: int | None = 0     # None: the agent could not measure them
+    transcript: str = ""           # the full session, for the log and robustness (with_skill)
+    seconds: float | None = None   # the session's own time; None: the runner's clock
 ```
+
+`seconds` lets an agent report its session without its own start-up (Hermes takes a second or two to start); the runner records it in the run's metrics when it is a non-negative number, and uses its own clock otherwise.
 
 The session itself, its model calls, runs on this machine: it needs the user's provider and credentials, which never enter the sandbox. Everything it does runs in `workspace`: every command goes through `workspace.run_command`, every file it reads or writes is in `workspace.root`, and for a `with_skill` run the skill is already in `workspace.skill_dir` (`/tmp/skill`).
 
-**The runner copies the skill, not the agent**, so every `with_skill` run starts from the same files instead of whatever the agent chose to copy. `SKILL.md` and every bundled file in `skill.files` go into `/tmp/skill`, laid out as in the skill's folder and copied as bytes. Links and hard links are left out, as for the judge ([judge.md](judge.md)): either could be a file outside the skill, e.g. `~/.hermes/.env`. The run's log lists them (`skill files left out (links): ...`), so a run that needed one does not fail without a hint. The skill has to fit in `/tmp` (64 MB), which is far above a normal skill. If `SKILL.md` itself is one, the run is an error (2.3), not a run without the skill. `baseline` runs get no skill files. `/tmp/skill` is outside `/work`, so the skill does not use up the run's space and the judges do not read it as the run's work.
+**The runner copies the skill, not the agent**, so every `with_skill` run starts from the same files instead of whatever the agent chose to copy. `SKILL.md` and every bundled file in `skill.files` go into `/tmp/skill`, laid out as in the skill's folder and copied as bytes. Links, hard links and paths that resolve outside the skill are left out, as for the judge ([judge.md](judge.md)): any could be a file outside the skill, e.g. `~/.hermes/.env`. `runner.copied(skill, rel)` is that one rule, used both for the copy and for any list of files shown to the agent, so the agent is never pointed at a file that is not there. The run's log lists them (`skill files left out (links): ...`), so a run that needed one does not fail without a hint. The skill has to fit in `/tmp` (64 MB), which is far above a normal skill. If `SKILL.md` itself is one, the run is an error (2.3), not a run without the skill. `baseline` runs get no skill files. `/tmp/skill` is outside `/work`, so the skill does not use up the run's space and the judges do not read it as the run's work.
 
-The Hermes implementation of `Agent` routes Hermes' terminal and file tools through the workspace with a backend of its own that calls `workspace.run_command`, not Hermes' own Docker backend, so every isolation flag stays in `sandbox.py`.
-
-**[OPEN]** That implementation is not built yet: the backend itself, how to load or leave out the skill, and how to read tokens and tool calls from a Hermes session.
+The Hermes implementation is `HermesAgent` ([hermes_agent.md](hermes_agent.md)). Each session runs in a process of its own on Hermes' interpreter; Hermes' terminal and file tools reach the run's container through a backend of ours that `docker exec`s into it, not through Hermes' own Docker backend, so every isolation flag stays in `sandbox.py`. The skill is given as Hermes preloads one, pointing at `/tmp/skill`; tokens come from the session's usage and tool calls are counted from its messages.
 
 If `agent.run` raises, the run is recorded as failed (`passed: false`, `score: 0`, reason `agent failed: ...`). The agent failing is an outcome of the task, not a runner error. The exception's text can be shaped by the skill, so this reason and the lines in `RunnerResult.errors` go through `judge.clean` ([judge.md](judge.md) 2.3), capped at `MAX_REASON_CHARS` (500).
 
@@ -92,12 +94,13 @@ A run that cannot be judged is left out of `tests` and listed in `RunnerResult.e
 - **The sandbox cannot run** (e.g. Docker is not installed): no run is started, since every run happens in it. The error says why, e.g. `SandboxUnavailable: agent runs and exit_code checks run in a sandbox, which cannot run: Docker is not installed (...)`.
 - **The judge failed** (`JudgeError`), or a check is broken (e.g. an invalid regex): the run is listed with the error. So is a workspace that could not be opened or could not take the fixtures (e.g. they are over `config.sandbox_disk`) or the skill (e.g. a hard-linked `SKILL.md`), and Docker failing during the run, whether the agent or a check met it.
 - **A file operation failed** (`OSError`, e.g. a fixture removed after the task file was loaded, or the log could not be written): the same. The runs before and after it still count.
+- **Anything else unexpected** escaping a run (most likely a bug of ours): the same, with only the exception's type in the error and the traceback in the host's log. It never escapes `run_tasks`, which would cost the skill's other runs and, in `evaluate`, every other dimension of the skill, its safety findings included.
 
-A run that broke its own workspace is different: it stopped the container, left a folder that cannot be copied out, or came with a skill too large to copy in (`RunFailed`, 2.6). That is the run's doing, so it counts as a failed run with score 0, or a skill could leave itself unscored. A skill too large is not given to an agent at all.
+A run that broke its own workspace is different: it stopped the container, left a folder that cannot be copied out, or came with a skill too large to copy in (`RunFailed`, 2.6). That is the run's doing, so it counts as a failed run with score 0, or a skill could leave itself unscored. A skill too large is not given to an agent at all. For the same reason, a check that raises anything but a `JudgeError` while judging what the run left behind (for example a link loop at a `file_exists` target, `ln -s report.txt report.txt`) fails the run (`the run's result could not be judged (...)`); `file_exists` itself counts such a target as missing.
 
 ### 2.4 Logs and output
 
-Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run].txt` (evaluate.md section 2). `[skill]` is the skill's name, which comes from the skill's own frontmatter, so it must be letters, digits, `_`, `.` and `-`, starting with a letter or digit, like a `task_id`; otherwise a name such as `../x` or an absolute path would put the logs outside `run_dir`. The log holds the metrics, any skill files left out of the sandbox (2.2), the verdict, the prompt, the full output and the agent's transcript if it gave one. Text UTF-8 cannot encode, such as a lone surrogate, is written as an escape (`\ud83d`), so it cannot stop the runs left to make.
+Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run].txt` (evaluate.md section 2). `[skill]` is the skill's name (`log_folder` when the caller gives one), which comes from the skill's own frontmatter, so it must be letters, digits, `_`, `.` and `-`, starting with a letter or digit, like a `task_id`; otherwise a name such as `../x` or an absolute path would put the logs outside `run_dir`. Two skills of one `evaluate` call can share a name (a skill and its generalized copy), so evaluate gives the second `[skill]-2`, the next `[skill]-3`, and so on, skipping any folder another skill of the call already has (names that differ only in case count as the same, as they are one folder on Windows and macOS); the response's `warnings` say so. The log holds the metrics, any skill files left out of the sandbox (2.2), the verdict, the prompt, the full output and the agent's transcript if it gave one. Text UTF-8 cannot encode, such as a lone surrogate, is written as an escape (`\ud83d`), so it cannot stop the runs left to make.
 
 `TestResult.output` is the output cut to `config.output_max_chars`, followed by the path to the full log, relative to the run folder: `... (full log: cleanup/logs/write-report-with_skill-r1.txt)`.
 
@@ -108,9 +111,11 @@ Each run writes its full log to `run_dir/[skill]/logs/[task_id]-[variant]-r[run]
 | Field | Description |
 |---|---|
 | `tests` | One `TestResult` per task, variant and run that could be judged, in run order. This is the per-skill `tests` list of the report (evaluate.md 2.1) |
+| `task_ids` | The planned tasks' `task_id`s, in order, whether or not any of their runs is in `tests`. A scorer needs them to count a task that never ran (Quality's `assess` does), rather than infer the plan from the runs that happened; Robustness uses them the same way ([evaluate-robustness.md](../evaluate-robustness.md) 3) |
 | `errors` | `"[task_id] [variant] r[run]: [error]"` for every run left out of `tests` |
 | `judge_model` | `"provider/model"` of every LLM judge reply, for `ReportMeta.judge_model`; empty if no LLM check ran |
 | `judge_usage` | Tokens the LLM judge used (`TokenUsage`) |
+| `transcripts` | `(task_id, run)` to the agent's transcript, for `with_skill` runs in `tests` whose agent gave one; robustness's method term. In memory only: never written to the report |
 
 The runner writes only the logs. Writing `ranked-evaluation.json` and `.md` and computing scores belong to the scoring modules, `rank.py` and `__init__.py`.
 

@@ -119,6 +119,19 @@ def test_symlink_followed_by_the_delete(tmp_path):
     assert w.reasons[0].startswith(f"is a link to `{tmp_path / 'thesis'}`")
 
 
+@pytest.mark.parametrize("raw, shown", [
+    ("\\\\?\\C:\\Users\\me\\thesis", "C:\\Users\\me\\thesis"),       # how os.readlink reads it
+    ("\\\\?\\UNC\\server\\share\\x", "\\\\server\\share\\x"),        # a network target
+    ("C:\\Users\\me\\thesis", "C:\\Users\\me\\thesis"),               # already plain
+    ("..\\thesis", "..\\thesis"),                                     # relative: no prefix
+])
+def test_a_windows_link_target_is_shown_without_the_extended_prefix(raw, shown):
+    # Windows' os.readlink returns absolute targets as \\?\C:\...; the warning shows the path
+    # as people write it, as realpath does for the second path in the same message.
+    from metaskill.evaluate.safety.checks import without_extended_prefix
+    assert without_extended_prefix(raw) == shown
+
+
 def test_symlink_not_followed_removes_only_the_link(tmp_path):
     (tmp_path / "thesis").mkdir()
     symlink(tmp_path / "thesis", tmp_path / "build")
@@ -208,3 +221,38 @@ def test_system_folder_reason_uses_the_shared_check(tmp_path):
     # Own home is reported as home, not as a system folder.
     [w] = warn(tmp_path, target("~"))
     assert w.reasons == ["is your home folder"]
+
+
+# --- Cost (MET-42) --------------------------------------------------------------------
+# A skill can name the same folder thousands of times, or many folders: the lookups must
+# not stall the evaluation, and the user should not get the same warning 300 times.
+
+
+def test_the_same_place_is_looked_up_and_warned_about_once(tmp_path, monkeypatch):
+    files(tmp_path / "drafts", 312, old=True)
+    walked = []
+    real = local._contents
+    monkeypatch.setattr(local, "_contents", lambda folder, deadline: walked.append(folder) or real(folder, deadline))
+    first = DeleteTarget("~/drafts", "SKILL.md:3", "rm -rf ~/drafts", True, "unknown", Severity.HIGH)
+    again = [target(t) for t in ("~/drafts", "~/drafts/", "~/drafts/*", "~/./drafts")] * 100
+    [w] = warn(tmp_path, first, *again)
+    assert w.location == "SKILL.md:3"  # the first delete of it
+    assert walked == [tmp_path / "drafts"]
+
+
+def test_lookups_stop_at_the_total_time_limit_and_say_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(local, "MAX_TOTAL_SECONDS", -1)  # already past, on any clock
+    for name in ("a", "b", "c"):
+        files(tmp_path / name, 200, old=True)
+    # Repeats of one place count once in what was not checked.
+    [w] = warn(tmp_path, target("~/a"), target("~/b"), target("~/c"), target("~/a/"), target("~/b"))
+    assert w.resolved == "(not checked)"
+    assert "Stopped looking up" in w.message and "3 place(s)" in w.message
+
+
+def test_many_deletes_of_a_big_folder_stay_fast(tmp_path):
+    files(tmp_path / "Documents", 3000, old=True)
+    start = time.monotonic()
+    [w] = warn(tmp_path, *[target("~/Documents")] * 2000)
+    assert "is your Documents folder" in w.reasons
+    assert time.monotonic() - start < local.MAX_TOTAL_SECONDS + 2

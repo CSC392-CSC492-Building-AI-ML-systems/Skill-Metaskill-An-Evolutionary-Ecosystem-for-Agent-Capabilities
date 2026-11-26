@@ -65,9 +65,13 @@ Settings for one `evaluate` or `rank` call.
 | `output_max_chars` | `2000` | Truncation length for `TestResult.output`; the full output is in the run's log ([runner.md](runner.md) 2.4) |
 | `sandbox_disk` | `16m` | Size of each run's folder in the sandbox ([runner.md](runner.md) 2.6); the task's fixtures must fit in it too. A number and `k`, `m` or `g`, nothing else, since it goes into the volume's mount options. Must be under the sandbox's 512 MB memory limit, which the folder counts against |
 | `output_dir` | `evaluation-reports` | Each run writes `[timestamp]/` here |
+| `tasks_path` | `None` | The task file every skill of the call runs ([evaluate.md](../evaluate.md) 7). `None` runs no tasks, and the task-based dimensions are `skipped` |
+| `agent_model`, `agent_provider` | `""` | The Hermes model and provider the task sessions use; empty is the user's Hermes default |
+| `agent_max_iterations` | `30` | Model turns the agent may take in one task session. An integer >= 1; a boolean, a float or a string is refused |
+| `agent_timeout` | `600.0` | Seconds for a whole task session, after which the session and everything it started are stopped. A number > 0, finite; `600` and `600.0` are the same limit and hash alike |
 
-- `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, since the output location does not affect scores. The result becomes `ReportMeta.config`.
-- `to_meta(timestamp, skills, scanner_version, checks_version)` builds the `ReportMeta` for a run.
+- `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir` and `tasks_path` (so it covers `agent_max_iterations` and `agent_timeout`: a lower limit can turn a pass into a failure), since where the reports and the task file are does not affect scores (the tasks do, and the agent model is hashed). The result becomes `ReportMeta.config`.
+- `to_meta(timestamp, skills, scanner_version, checks_version, clarity_rubric_version="")` builds the `ReportMeta` for a run.
 - `from_dict` re-validates `weights` after loading them.
 
 ### `Check`
@@ -111,6 +115,7 @@ What every scoring module's `score(skill, ...)` returns.
 | `detail` | What was missing or went wrong when `status` is not `ok` |
 | `rubric` | `RubricRating`s, for Clarity |
 | `findings` | `Finding`s, for Safety and Configuration Cleanliness |
+| `judge_model`, `judge_usage` | The model(s) an LLM judged this dimension with (`provider/model`, `, `-joined) and their tokens and calls; empty when no model ran. Evaluate merges every dimension's into `ReportMeta.judge_model`/`judge_usage`, with the task runs' judge and the run's shared judge. For a dimension that builds a judge of its own (Safety's deep tier); one that uses the shared judge (Clarity) leaves them empty, since evaluate totals the shared judge once |
 
 Invariant: `value` is `None` **exactly** when `status` is `skipped` or `error`. This keeps a skill from being penalised for a missing key or backend (evaluate.md 2.1). `partial` still has a value. `to_status()` returns the `DimensionStatus` part kept in the report.
 
@@ -134,7 +139,7 @@ One Clarity rubric criterion (evaluate.md 3.3), produced by `Judge.rate`.
 
 | Field | Description |
 |---|---|
-| `criterion` | e.g. `trigger_specificity` |
+| `criterion` | e.g. `purpose_and_trigger` |
 | `rating` | Anchored level normalised to `[0, 1]` |
 | `reason` | Why the judge chose this level |
 | `quote` | Verified text from the skill |
@@ -190,6 +195,9 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `safety_tier` | Tier used |
 | `scanner_version` | External scanner version; empty if it did not run |
 | `checks_version` | Version of our own safety rule set |
+| `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
+| `judge_usage` | Tokens and calls the judge(s) used (`input_tokens`, `output_tokens`, `calls`): the task runs' LLM checks, the run's shared judge (Clarity), and any dimension that built its own (`DimensionScore.judge_usage`, the deep safety tier); empty if no model judged |
+| `clarity_rubric_version` | `clarity.RUBRIC_VERSION` for the run; empty in reports written before it was recorded |
 
 ### `Report`
 

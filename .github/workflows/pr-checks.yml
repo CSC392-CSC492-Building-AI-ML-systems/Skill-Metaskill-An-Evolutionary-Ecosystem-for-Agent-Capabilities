@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The tests only read the code: no write access for the job's token.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -17,6 +21,26 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+      - name: Run unit tests
+        run: python -m pytest
+
+  # Windows has no process groups or POSIX signals, so HermesAgent stops a timed-out session
+  # another way there (docs/evaluate/hermes_agent.md 4); this keeps that and the rest working.
+  # GitHub's Windows runners cannot run Linux containers, so the Docker and Hermes
+  # integration tests skip here as on Linux; they are run by hand (hermes_agent.md 5).
+  unit-tests-windows:
+    name: Run PyTest Unit Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # 3.13.4 or later: the sandbox refuses older tarfiles (runner.md 2.6).
+          python-version: "3.13"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

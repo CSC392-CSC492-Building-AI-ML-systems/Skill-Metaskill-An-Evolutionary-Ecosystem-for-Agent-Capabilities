@@ -29,8 +29,20 @@ from metaskill.evaluate.rank import markdown, rank, table
 from metaskill.evaluate.sandbox import DockerSandbox
 
 RISKY = "Run `rm -rf ~/Documents/drafts` to clean up."
-# Safety is scored; efficiency's module is built but needs task runs (handled below).
-NOT_BUILT = [d for d in Dimension if d not in (Dimension.SAFETY, Dimension.EFFICIENCY)]
+# Built dimensions; Safety, Quality, Config Cleanliness and the ones that need task runs
+# have separate assertions below, and Clarity is skipped without a judge
+# (test_clarity_without_model_access_is_skipped).
+NEEDS_RUNS = (Dimension.EFFICIENCY, Dimension.ROBUSTNESS)
+NOT_BUILT = [
+    d for d in Dimension
+    if d not in (
+        Dimension.SAFETY,
+        Dimension.CLARITY,
+        Dimension.QUALITY,
+        Dimension.CONFIG_CLEANLINESS,
+        *NEEDS_RUNS,
+    )
+]
 
 
 def make_skill(root, name, body="# Skill\n\nSummarize the file.\n"):
@@ -51,20 +63,33 @@ def out(tmp_path):
     return tmp_path / "reports"
 
 
+# A dimension scored by plain score(), built or not. The task-based ones (TASK_DIMENSIONS) are
+# scored by score_runs, and only when a task file is given: tests/test_evaluate_tasks.py.
+PLACEHOLDER = Dimension.CONFIG_CLEANLINESS
+
+
 @pytest.fixture
-def scorers(monkeypatch, tmp_path):
-    """Puts a module in metaskill.evaluate for one test: scorers("clarity", source)."""
-    folder = tmp_path / "scorers"
+def placeholder(monkeypatch, tmp_path):
+    """Scores a dimension with a test module for one test: placeholder(dimension, source).
+
+    The module gets a name no real scorer has, and SCORERS points the dimension at it, so
+    these tests do not depend on which dimensions are built. (Adding a module under the
+    dimension's own name only worked while that module did not exist: a real one is found
+    first on the package path.) The source's score() should accept **kwargs, since a
+    judged dimension is also passed judge=."""
+    folder = tmp_path / "placeholders"
     folder.mkdir()
     monkeypatch.setattr(evaluate, "__path__", [*evaluate.__path__, str(folder)])
     added = []
 
-    def add(module, source):
+    def use(dimension, source):
+        module = f"_placeholder_{dimension.value}"
         (folder / f"{module}.py").write_text(source, encoding="utf-8")
+        monkeypatch.setitem(evaluate.SCORERS, dimension, module)
         added.append(f"{evaluate.__name__}.{module}")
         importlib.invalidate_caches()
 
-    yield add
+    yield use
     for name in added:
         sys.modules.pop(name, None)
 
@@ -80,10 +105,39 @@ def test_safety_is_scored_and_unbuilt_dimensions_are_null(tmp_path, out):
         assert getattr(skill.scores, dimension.value) is None
         assert skill.dimensions[dimension].status is Status.SKIPPED
         assert skill.dimensions[dimension].detail == "not built yet"
-    # Efficiency's module is built, but it needs task runs the runner does not feed yet.
-    efficiency = skill.dimensions[Dimension.EFFICIENCY]
-    assert skill.scores.efficiency is None and efficiency.status is Status.SKIPPED
-    assert "task runs" in efficiency.detail
+    # These modules are built, but they need task runs the runner does not feed yet.
+    for dimension in NEEDS_RUNS:
+        assert getattr(skill.scores, dimension.value) is None
+        assert skill.dimensions[dimension].status is Status.SKIPPED
+        assert "task runs" in skill.dimensions[dimension].detail
+    quality = skill.dimensions[Dimension.QUALITY]
+    assert skill.scores.quality is None and quality.status is Status.SKIPPED
+    assert "task" in (quality.reason + quality.detail).lower()  # evaluate skips it: detail
+
+
+@pytest.mark.parametrize("schema, expected_rule", [
+    (None, None),
+    ("{broken", None),
+    ('{"required":["org"],"properties":{"org":{"description":"Organization"}}}', None),
+    ('{"required":["org"],"properties":{"org":{}}}', "missing-required-description"),
+])
+def test_config_cleanliness_reports_findings_without_a_score(tmp_path, out, schema, expected_rule):
+    folder = make_skill(tmp_path, "config-example")
+    if schema is not None:
+        (folder / "config.schema.json").write_text(schema, encoding="utf-8")
+
+    result = evaluate_skill(folder, output_path=out)
+    [skill] = load(result).skills
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    assert skill.scores.config_cleanliness is None
+    assert status.status is Status.SKIPPED
+    assert "incomplete coverage" in status.reason
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
+    assert [f.rule for f in findings] == ([expected_rule] if expected_rule else [])
+    if expected_rule:
+        report = next(p for p in result["artifacts"] if p.endswith(".md"))
+        assert "config.schema.json#/properties/org" in Path(report).read_text(encoding="utf-8")
 
 
 def test_no_tasks_means_no_lift(tmp_path, out):
@@ -98,36 +152,70 @@ def test_a_skill_with_unbuilt_dimensions_is_listed_as_unranked(tmp_path, out):
     assert result["partial"][0].startswith("Partial result") and result["warnings"] == []
 
 
-def test_a_new_dimension_module_is_picked_up(tmp_path, out, scorers):
-    scorers("clarity", "from metaskill.evaluate.models import *\n"
-                       "def score(skill, config, llm=None):\n"
-                       "    return DimensionScore(Dimension.CLARITY, 0.75, reason=str(llm))\n")
+def test_a_dimension_module_is_picked_up(tmp_path, out, placeholder):
+    placeholder(PLACEHOLDER, "from metaskill.evaluate.models import *\n"
+                             "def score(skill, config, llm=None, **_):\n"
+                             f"    return DimensionScore(Dimension.{PLACEHOLDER.name}, 0.75,"
+                             " reason=str(llm))\n")
     ctx = SimpleNamespace(llm="the-llm")
     skill = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out, ctx=ctx)).skills[0]
-    assert skill.scores.clarity == 0.75
-    assert skill.dimensions[Dimension.CLARITY].reason == "the-llm"  # ctx.llm reached it
+    assert getattr(skill.scores, PLACEHOLDER.value) == 0.75
+    assert skill.dimensions[PLACEHOLDER].reason == "the-llm"  # ctx.llm reached it
 
 
-def test_a_module_that_fails_to_import_is_an_error_not_a_skip(tmp_path, out, scorers):
-    scorers("quality", "import a_module_that_is_not_there\n")
+def test_a_module_that_fails_to_import_is_an_error_not_a_skip(tmp_path, out, placeholder):
+    placeholder(PLACEHOLDER, "import a_module_that_is_not_there\n")
     skill = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)).skills[0]
-    status = skill.dimensions[Dimension.QUALITY]
+    status = skill.dimensions[PLACEHOLDER]
     assert status.status is Status.ERROR and status.detail == "failed: ModuleNotFoundError"
-    assert skill.scores.quality is None
+    assert getattr(skill.scores, PLACEHOLDER.value) is None
 
 
-def test_a_scorer_that_raises_is_an_error_without_its_message(tmp_path, out, scorers):
-    scorers("clarity", "def score(skill, config, llm=None):\n"
-                       "    raise RuntimeError('leaky-message-123')\n")
+def test_a_scorer_that_raises_is_an_error_without_its_message(tmp_path, out, placeholder):
+    placeholder(PLACEHOLDER, "def score(skill, config, llm=None, **_):\n"
+                             "    raise RuntimeError('leaky-message-123')\n")
     result = evaluate_skill(make_skill(tmp_path, "a"), output_path=out)
-    assert load(result).skills[0].dimensions[Dimension.CLARITY].status is Status.ERROR
+    assert load(result).skills[0].dimensions[PLACEHOLDER].status is Status.ERROR
     assert "leaky-message-123" not in json.dumps(result)
 
 
-def test_no_judge_is_a_skipped_dimension(tmp_path, out, scorers):
-    scorers("clarity", "from metaskill.evaluate.judge import JudgeUnavailable\n"
-                       "def score(skill, config, llm=None):\n"
-                       "    raise JudgeUnavailable('no provider')\n")
+def test_no_judge_is_a_skipped_dimension(tmp_path, out, placeholder):
+    placeholder(PLACEHOLDER, "from metaskill.evaluate.judge import JudgeUnavailable\n"
+                             "def score(skill, config, llm=None, **_):\n"
+                             "    raise JudgeUnavailable('no provider')\n")
+    status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)
+                  ).skills[0].dimensions[PLACEHOLDER]
+    assert status.status is Status.SKIPPED and status.detail == "no judge model is available"
+
+
+@pytest.mark.parametrize("has_aux_tasks, expected", [(True, "metaskill_judge"), (False, "none")])
+def test_safety_calls_go_through_the_judge_task_where_hermes_has_one(tmp_path, out, placeholder,
+                                                                     has_aux_tasks, expected):
+    # The deep tier's review and Cisco's analyzer ran with task=None, so on the main model,
+    # while every other judge of the call used the model set for "Metaskill judge".
+    placeholder(Dimension.SAFETY, (
+        "from metaskill.evaluate.models import DimensionScore, Dimension\n"
+        "def score(skill, config, llm=None, task=None, **_):\n"
+        "    return DimensionScore(Dimension.SAFETY, 1.0, detail=str(task or 'none'))\n"))
+    ctx = SimpleNamespace(llm=None)
+    if has_aux_tasks:
+        ctx.register_auxiliary_task = lambda *a, **k: None
+    status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out, ctx=ctx)
+                  ).skills[0].dimensions[Dimension.SAFETY]
+    assert status.detail == expected
+
+
+@pytest.mark.parametrize("dimension", [d for d in Dimension if d not in evaluate.TASK_DIMENSIONS],
+                         ids=lambda d: d.value)
+def test_the_placeholder_replaces_built_modules_too(tmp_path, out, placeholder, dimension):
+    placeholder(dimension, "from metaskill.evaluate.models import *\n"
+                           "def score(skill, config, llm=None, **_):\n"
+                           f"    return DimensionScore(Dimension.{dimension.name}, 0.5)\n")
+    skill = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)).skills[0]
+    assert getattr(skill.scores, dimension.value) == 0.5
+
+
+def test_clarity_without_model_access_is_skipped(tmp_path, out):
     status = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out)
                   ).skills[0].dimensions[Dimension.CLARITY]
     assert status.status is Status.SKIPPED and status.detail == "no judge model is available"
@@ -302,3 +390,38 @@ def test_importing_this_package_does_not_import_safety():
             "sys.exit('metaskill.evaluate.safety' in sys.modules)")
     root = Path(__file__).resolve().parent.parent
     assert subprocess.run([sys.executable, "-c", code], cwd=root).returncode == 0
+
+
+@pytest.mark.parametrize("variant, expected", [
+    ("reference", []),
+    ("undocumented", ["missing-required-description"]),
+    ("hardcoded", ["fixed-profile-setting"]),
+    ("unused", ["unused-pilot-setting"]),
+])
+def test_config_cleanliness_reports_pilot_evidence(out, variant, expected):
+    folder = (Path(__file__).resolve().parents[1]
+              / "metaskill/evaluate/golden/synthetic/ticket-summary/skills" / variant)
+    [skill] = load(evaluate_skill(folder, output_path=out)).skills
+    status = skill.dimensions[Dimension.CONFIG_CLEANLINESS]
+    if variant == "reference":
+        assert skill.scores.config_cleanliness == 1.0
+        assert status.status is Status.OK
+    elif variant == "hardcoded":
+        assert skill.scores.config_cleanliness == 0.0
+        assert status.status is Status.OK
+        assert "Separation failure" in status.reason
+    else:
+        assert skill.scores.config_cleanliness is None
+        assert status.status is Status.SKIPPED
+    findings = [f for f in skill.findings
+                if f.dimension is Dimension.CONFIG_CLEANLINESS and f.source == "config-checks"]
+    assert [f.rule for f in findings] == expected
+
+
+def test_a_clarity_module_that_does_not_import_leaves_the_rubric_version_empty(monkeypatch):
+    from metaskill.evaluate.clarity import RUBRIC_VERSION
+
+    assert evaluate._clarity_rubric_version() == RUBRIC_VERSION
+    monkeypatch.delattr(evaluate, "clarity", raising=False)
+    monkeypatch.setitem(sys.modules, "metaskill.evaluate.clarity", None)  # import raises
+    assert evaluate._clarity_rubric_version() == ""

@@ -53,13 +53,15 @@ Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their 
           [task_id]-[variant]-r[run].txt
   ```
 
+- `ranked-evaluation.md` has, for each skill whose tasks ran, a task table: each task's pass rate with and without the skill, the mean tokens, LLM calls and tool calls per variant, the reason for each failed run (cleaned and capped), a note of runs that could not be made, and the log folder above. A call without tasks has no such section ([evaluate/rank.md](evaluate/rank.md) 5).
+- The task agent's limits are settings, `agent_max_iterations` (model turns, default 30) and `agent_timeout` (seconds per session, default 600), in the config ([evaluate/models.md](evaluate/models.md)). They are part of the config hash, since a lower limit can turn a pass into a failure.
 - `[timestamp]` is simply the time the skill was invoked (written as YYYY-MM-DD-T(Hour)-Minute-Seconds).
 - Reports are kept. Nothing is deleted or overwritten automatically.
 - Every ranking is computed fresh. `rank` evaluates the skills it is given in one run and never reads earlier reports or reuses earlier results, so all skills in a ranking are scored under the same settings. Old reports are a record only.
 
 ### 2.1 Report format **[OPEN]**
 
-This is a temporary structure for the file format. Changes might be made to this (notably, rating needs to be changed in accordance to section 3.3 with regards to clarity.)
+This is a temporary structure for the file format. Changes might be made to this.
 
 The structures below are defined in `models.py`. The Markdown report presents the same fields.
 
@@ -75,6 +77,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `safety_tier` | `static` or `deep` |
 | `scanner_version` | Version of the external safety scanner; empty if it did not run |
 | `checks_version` | Version of our own safety rule set ([evaluate-safety.md](evaluate-safety.md), section 3.2) |
+| `clarity_rubric_version` | Version of the Clarity rubric (`clarity.RUBRIC_VERSION`); ratings from different versions do not compare ([evaluate-clarity.md](evaluate-clarity.md), section 1) |
 
 **Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1; `null` if no tasks ran), a status for each dimension (`dimensions`), and four lists: `tests`, `rubric`, `findings` and `local_warnings`.
 
@@ -109,7 +112,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 
 | Field | Description |
 |---|---|
-| `criterion` | Rubric criterion, e.g. `trigger_specificity`, `step_ordering` |
+| `criterion` | Rubric criterion, e.g. `purpose_and_trigger`, `actionability` ([evaluate-clarity.md](evaluate-clarity.md), section 1) |
 | `rating` | Anchored level for this criterion, normalised to `[0, 1]` |
 | `reason` | Why the judge chose this level |
 | `quote` | Text from the skill supporting the rating |
@@ -149,7 +152,8 @@ Example (abridged):
     "judge_model": "...",
     "safety_tier": "static",
     "scanner_version": "...",
-    "checks_version": "..."
+    "checks_version": "...",
+    "clarity_rubric_version": "3"
   },
   "skills": [{
     "name": "gcp-file-transfer",
@@ -178,7 +182,7 @@ Example (abridged):
       "output": "... (full log: gcp-file-transfer/logs/upload-single-file-with_skill-r1.txt)"
     }],
     "rubric": [{
-      "criterion": "trigger_specificity",
+      "criterion": "purpose_and_trigger",
       "rating": 0.75,
       "reason": "Names the service and action, but not when to prefer it over gsutil directly",
       "quote": "Use this skill to transfer files to and from GCP buckets."
@@ -214,7 +218,7 @@ Each criterion from the Purpose is scored in `[0, 1]` with supporting evidence. 
 |---|---|---|---|
 | **Quality** | Run test tasks, with vs. without the skill | high | Task pass rate and lift over baseline |
 | **Robustness** | Repeat the same tasks `n` times | high | Agreement of outcomes across runs |
-| **Clarity** | LLM judge against a rubric | low | Specific trigger, ordered and actionable steps, failure handling |
+| **Clarity** | LLM judge against a rubric | low | Purpose and trigger, conciseness, plain language, readability, structure, actionability, verifiability, failure handling |
 | **Configuration Cleanliness** | Static + LLM | low | Number and necessity of config entries, documented placeholders, setup steps |
 | **Efficiency** | Measured during task runs | medium | Tokens, wall-clock time, tool calls per task |
 | **Safety** | External scanner + own checks; optional LLM tier | none (static), low (deep) | Malicious content, destructive actions without confirmation, credentials printed or logged, untrusted sources, excess scope |
@@ -227,11 +231,11 @@ Does the skill do its job? Run each test task with the skill and without it. Qua
 
 ### 3.2 Robustness
 
-Does the skill behave consistently? Run each task `n` times (default 3) and measure agreement between runs: the fraction of tasks with the same pass/fail result, plus the spread of the quality scores. A skill that passes 3/3 or fails 3/3 is robust; one that passes 1/3 is not, even if its mean pass rate looks acceptable.
+Does the skill behave consistently? Run each task `n` times (default 3) and measure agreement between runs: the same pass/fail result, the spread of the quality scores, how alike the outputs are (a line diff), and how alike the runs' methods are. A skill that passes 3/3 or fails 3/3 with the same flaw is robust; one that passes 1/3 is not, even if its mean pass rate looks acceptable, and one that passes 3/3 by very different routes is less so. The method is in [evaluate-robustness.md](evaluate-robustness.md).
 
 ### 3.3 Clarity (LLM judge)
 
-Fixed rubric with anchored levels per criterion: trigger specificity, step ordering, verifiability of steps, handling of failure cases, and whether a human reader could follow it as well as an agent. The judge must quote the text supporting each rating.
+Fixed rubric with five anchored levels per criterion: purpose and trigger (including whether the description matches the body), conciseness, accessible language, readability (the goal is clear at a glance), structure and flow (including contradictions), actionability (each step can be carried out without guessing), verifiability, and failure handling. The judge must quote the text supporting each rating. The rubric, scoring rule and golden set are in [evaluate-clarity.md](evaluate-clarity.md).
 
 ### 3.4 Configuration Cleanliness
 
@@ -342,6 +346,8 @@ metaskill/evaluate/
 
   runner.py          # Task runner: executes tasks n times, with and without
                      #   the skill; records outcomes, tokens, time, tool calls
+  hermes_agent.py    # The runner's Agent as a real Hermes session, tools in the sandbox
+  hermes_child.py    #   ...its Hermes side, run on Hermes' interpreter (evaluate/hermes_agent.md)
   tasks.py           # Test task loading (human-written, 4.3)
 
   quality.py         # 3.1: pass rate and lift, from runner results
@@ -353,15 +359,19 @@ metaskill/evaluate/
                      #   (layout in evaluate-safety.md)
 
   rank.py            # 5: overall score, comparison and ordering
+
+  golden/            # Golden datasets and evaluator-owned comparisons
+    clarity.py       #   loads the Clarity pilot; compares a live report against it
+    synthetic/clarity/  # skills and cases.json (evaluate-clarity.md, section 4)
 ```
 
 Dependencies:
 
-- `runner.py` is the only module that executes the agent. `quality.py`, `robustness.py` and `efficiency.py` are pure functions over its results, so they share one execution pass and are testable without an LLM.
+- `runner.py` is the only module that executes the agent, through an `Agent`; `hermes_agent.py` is the Hermes one ([evaluate/hermes_agent.md](evaluate/hermes_agent.md)). `quality.py`, `robustness.py` and `efficiency.py` are pure functions over its results, so they share one execution pass and are testable without an LLM.
 - `clarity.py`, `safety/` and the LLM part of `config_cleanliness.py` call `judge.py`, never a model directly.
   - Exception: the safety scanner's LLM analyzer makes its own calls, routed through Hermes's `ctx.llm` by its adapter rather than through `judge.py`. See [evaluate-safety.md](evaluate-safety.md), section 4, and [safety/cisco.md](safety/cisco.md).
 - `judge.py` itself is documented in [evaluate/judge.md](evaluate/judge.md).
-- Each scoring module exposes the same shape (`score(skill, ...) -> DimensionScore` from `models.py`), so `rank.py` treats all six uniformly.
+- Each scoring module exposes the same shape, so `rank.py` treats all six uniformly: `score(skill, config, llm=...) -> DimensionScore`, or, for the task-based dimensions (Quality, Robustness, Efficiency; `TASK_DIMENSIONS` in `__init__.py`), `score_runs(skill, config, runs) -> DimensionScore`, given the skill's `RunnerResult`. Evaluate runs a skill's tasks once and gives every task-based dimension the same runs.
 
 
 ## 7. Tool surface
@@ -373,6 +383,11 @@ Exposed through the existing `metaskill` tool and the `/metaskill` command, e.g.
 | `skill_path` | A skill's folder or its `SKILL.md`. For `rank`, a comma separated list (section 2) |
 | `config_path` | Optional JSON file for `EvaluationConfig.from_dict` |
 | `output_path` | Optional; replaces `EvaluationConfig.output_dir` |
+| `tasks_path` | Optional task file (section 4.3) that every skill of the call runs; replaces `EvaluationConfig.tasks_path`. Giving it is the opt-in to **task runs** (agent sessions, each real model calls): without it no task runs. The file must lie outside every evaluated skill's folder (a skill's folder is copied into the sandbox, so the checks and expected answers would go to the with-skill agent and not the baseline); evaluate and rank refuse such a file before any run. Dimensions an LLM judges (Clarity; Safety at the `deep` tier) still call the judge either way |
+
+The command takes the same as `--config FILE` and `--tasks FILE`, in either order: `/metaskill rank s3-sync, gcp-transfer --tasks evals/file-transfer/tasks.json`.
+
+**Task runs.** With a task file, evaluate loads it once (a file that cannot be used is an error before anything runs), checks Docker with `require_dependencies()` ([evaluate/dependencies.md](evaluate/dependencies.md)), checks once that the agent can be set up (`HermesAgent.check()`, no model call, so a missing or unsupported Hermes is one error before any run rather than a failure of every run), and runs each skill's tasks once through the runner with a Hermes agent ([evaluate/hermes_agent.md](evaluate/hermes_agent.md)), every skill on the same tasks. The task-based dimensions (Quality, Robustness, Efficiency) all score those same runs. The runs' logs go into the call's report folder (section 2), and the report's `tests` hold every run. A run the runner could not make (the sandbox or the agent's setup failed) is left out, never scored as the skill failing: `warnings` gives the count and the error's type, and the report the message (in the task-based dimensions' `detail`), since it can hold local paths. The response adds `task_runs`: the number of tasks, sessions run and runs that could not be made. `ReportMeta.agent_model` records the model the sessions ran on (`agent_model` in the config chooses it; empty is the user's Hermes default). `ReportMeta.judge_model` and `judge_usage` record every judge that ran and what it used: the judge of the tasks' LLM checks; the run's shared judge, which Clarity uses (built once per call, so its totals are the call's); and any dimension that builds a judge of its own (the deep safety tier), which reports it on its `DimensionScore`. A dimension that uses the shared judge does not report it again.
 
 A relative path, `EvaluationConfig.output_dir` included, means the folder of the user's session (`ctx.session_cwd()`), since the plugin runs in the Hermes gateway, whose own folder is the Hermes install.
 
@@ -380,14 +395,15 @@ If a request does not name the skills, such as "rank my skills", the agent asks 
 
 The tool's response goes into the agent's context, so it holds the table with its notes and recommendation, the report paths, counts, warnings, a `partial` notice when a skill is not ranked, and any missing `dependencies`. Quotes, finding text and local paths stay in the reports. A skill that cannot be loaded is listed in `warnings`, and the others go on.
 
-**Current state.** Each dimension's module is listed in `SCORERS` in `__init__.py`. A module that does not exist yet gives a `skipped` dimension with a `null` score; one that exists but fails to import or raises gives `error`. Only Safety is built, so every skill is unranked, no skill is recommended, and `warnings` says the result is partial (section 5.2). No built dimension runs tasks, so `lift` is `null` and Docker is not asked for ([evaluate/dependencies.md](evaluate/dependencies.md)).
+**Current state.** Each dimension's module is listed in `SCORERS` in `__init__.py`. A module that does not exist yet gives a `skipped` dimension with a `null` score; one that exists but fails to import or raises gives `error`. Safety is built, Clarity is scored when a judge model is available, and Quality, Robustness and Efficiency are scored when a task file is given; without one, the task-based dimensions are `skipped` ("no tasks were given") and Docker is not asked for. Configuration Cleanliness reports its findings but no score yet, so every skill is unranked, no skill is recommended, and `warnings` says the result is partial (section 5.2). `lift` comes from Quality's assessment of the same runs (`quality.assess_runs`): `null` without tasks, or when Quality cannot compare (incomplete evidence or runner errors), never an invented 0.
 
 ## 8. Testing
 
 - Structure checks: fixture skills in `tests/` (one valid, several each broken in one specific way).
 - Judge and quality: fake judge returning canned output; assert report shape, null handling, and score aggregation.
 - Ranking: example tests of ordering and every tie-break, plus checks that the order does not depend on input order and the same input gives the same output; null handling, `partial` safety flags, the recommendation, and cleaning of untrusted names.
-- Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately.
+- Clarity: `test_clarity.py` scores canned judge replies (rubric shape, missing-as-0, `partial`, the rubric version in the report); `test_golden_clarity.py` checks the golden annotations against the rubric, and the pair comparison on synthetic reports.
+- Real LLM runs are excluded from CI (`pr-checks.yml` runs pytest only) and marked separately. The Clarity live check against the golden set is run by hand ([evaluate-clarity.md](evaluate-clarity.md), section 4.4).
 
 ## 9. Limitations
 
@@ -399,7 +415,7 @@ The tool's response goes into the agent's context, so it holds the table with it
 ## 10. Open questions
 
 1. The structuring and eventual scoring of generalized skills; whether we can accurately create tests surrounding these skills at this stage in development (week 4).
-2. How close two `overall` scores must be to count as a tie, so lift decides. The runner reduces variance (every run starts from the same files, each task runs `n` times) but does not compute a spread; mean and spread come from the quality and robustness modules (section 4.5), which are not built yet. Until then, scores are compared at 9 decimal places. Options: keep that, compare at the 2 displayed decimals, or count scores within the measured spread as tied once it exists.
+2. How close two `overall` scores must be to count as a tie, so lift decides. The runner reduces variance (every run starts from the same files, each task runs `n` times) but does not compute a spread; mean and spread come from the quality and robustness modules (section 4.5), which do not report a spread `rank.py` could use yet. Until they do, scores are compared at 9 decimal places. Options: keep that, compare at the 2 displayed decimals, or count scores within the measured spread as tied once it exists.
 3. The weights of `overall` (section 5.1). The current defaults, safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1, are in use but may still change.
 4. How we measure the accuracy of an evaluation as a whole: whether a skill's scores, and the order of a ranking, match what a careful human reviewer would conclude. Parts of it are covered: safety detection ([evaluate-safety.md](evaluate-safety.md), section 7), and judge agreement and detection against reviewed labels ([the golden dataset](evaluation/golden_dataset.md)). Nothing yet says what accuracy means for `overall` or the order. To decide: what the reference is (e.g. reviewed scores, or a reviewed order for a set of skills), what is measured (e.g. distance from reviewed scores, rank correlation, whether the top skill agrees), how many skills that takes, and what result is good enough, chosen before looking at the results.
 
