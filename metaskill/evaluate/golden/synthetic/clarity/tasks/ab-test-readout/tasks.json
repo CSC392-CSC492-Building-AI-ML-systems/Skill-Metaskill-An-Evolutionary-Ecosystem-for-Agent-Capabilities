@@ -1,0 +1,119 @@
+{
+  "tasks": [
+    {
+      "task_id": "b-wins",
+      "description": "B converts better and the difference is significant (p about 0.03)",
+      "prompt": "experiment.csv in this folder holds the results of an A/B test of two sign-up pages: for each version, the number of visitors and the number of sign-ups (conversions). Did version B really do better than A, or could the difference be luck?\n\nWrite readout.json in this folder with exactly these keys:\n- \"winner\": \"A\", \"B\" or \"none\" (\"none\" if the data do not show a real difference)\n- \"change_points\": B's conversion rate minus A's, in percentage points (1.5 means +1.5 points), or null\n- \"p_value\": the two-sided p-value as a number, or null if you did not report one\n\nThen explain the result to me in a few sentences.",
+      "fixtures": [
+        "fixtures/b-wins/experiment.csv"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "target": "python3 -c 'import json; d = json.load(open(\"readout.json\")); assert d[\"winner\"] == \"B\", (\"winner\", d[\"winner\"]); assert abs(float(d[\"change_points\"]) - (1.2)) <= 0.05, (\"change_points\", d[\"change_points\"]); assert abs(float(d[\"p_value\"]) - 0.0323) <= max(0.005, 0.0323 * 0.15), (\"p_value\", d[\"p_value\"])'",
+          "expected": "0"
+        },
+        {
+          "judge": "llm",
+          "checklist": [
+            "Explains in plain words whether the difference could just be luck or chance",
+            "States how big the change is, as a difference in conversion rate (for example in percentage points)"
+          ]
+        }
+      ]
+    },
+    {
+      "task_id": "inconclusive",
+      "description": "B looks better but the difference is not significant (p about 0.29)",
+      "prompt": "experiment.csv in this folder holds the results of an A/B test of two sign-up pages: for each version, the number of visitors and the number of sign-ups (conversions). Did version B really do better than A, or could the difference be luck?\n\nWrite readout.json in this folder with exactly these keys:\n- \"winner\": \"A\", \"B\" or \"none\" (\"none\" if the data do not show a real difference)\n- \"change_points\": B's conversion rate minus A's, in percentage points (1.5 means +1.5 points), or null\n- \"p_value\": the two-sided p-value as a number, or null if you did not report one\n\nThen explain the result to me in a few sentences.",
+      "fixtures": [
+        "fixtures/inconclusive/experiment.csv"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "target": "python3 -c 'import json; d = json.load(open(\"readout.json\")); assert d[\"winner\"] == \"none\", (\"winner\", d[\"winner\"]); assert abs(float(d[\"change_points\"]) - (0.75)) <= 0.05, (\"change_points\", d[\"change_points\"]); assert abs(float(d[\"p_value\"]) - 0.293) <= max(0.005, 0.293 * 0.15), (\"p_value\", d[\"p_value\"])'",
+          "expected": "0"
+        },
+        {
+          "judge": "llm",
+          "checklist": [
+            "Explains in plain words whether the difference could just be luck or chance",
+            "States how big the change is, as a difference in conversion rate (for example in percentage points)",
+            "Says that more visitors or a longer test would be needed to tell"
+          ]
+        }
+      ]
+    },
+    {
+      "task_id": "a-wins",
+      "description": "A converts better than B, significantly (p about 0.016)",
+      "prompt": "experiment.csv in this folder holds the results of an A/B test of two sign-up pages: for each version, the number of visitors and the number of sign-ups (conversions). Did version B really do better than A, or could the difference be luck?\n\nWrite readout.json in this folder with exactly these keys:\n- \"winner\": \"A\", \"B\" or \"none\" (\"none\" if the data do not show a real difference)\n- \"change_points\": B's conversion rate minus A's, in percentage points (1.5 means +1.5 points), or null\n- \"p_value\": the two-sided p-value as a number, or null if you did not report one\n\nThen explain the result to me in a few sentences.",
+      "fixtures": [
+        "fixtures/a-wins/experiment.csv"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "target": "python3 -c 'import json; d = json.load(open(\"readout.json\")); assert d[\"winner\"] == \"A\", (\"winner\", d[\"winner\"]); assert abs(float(d[\"change_points\"]) - (-1.0)) <= 0.05, (\"change_points\", d[\"change_points\"]); assert abs(float(d[\"p_value\"]) - 0.0163) <= max(0.005, 0.0163 * 0.15), (\"p_value\", d[\"p_value\"])'",
+          "expected": "0"
+        },
+        {
+          "judge": "llm",
+          "checklist": [
+            "Explains in plain words whether the difference could just be luck or chance",
+            "States how big the change is, as a difference in conversion rate (for example in percentage points)",
+            "Says that version B did worse than version A"
+          ]
+        }
+      ]
+    },
+    {
+      "task_id": "too-small",
+      "description": "Too few conversions (5 for A) for a p-value to be trustworthy",
+      "prompt": "experiment.csv in this folder holds the results of an A/B test of two sign-up pages: for each version, the number of visitors and the number of sign-ups (conversions). Did version B really do better than A, or could the difference be luck?\n\nWrite readout.json in this folder with exactly these keys:\n- \"winner\": \"A\", \"B\" or \"none\" (\"none\" if the data do not show a real difference)\n- \"change_points\": B's conversion rate minus A's, in percentage points (1.5 means +1.5 points), or null\n- \"p_value\": the two-sided p-value as a number, or null if you did not report one\n\nThen explain the result to me in a few sentences.",
+      "fixtures": [
+        "fixtures/too-small/experiment.csv"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "target": "python3 -c 'import json; d = json.load(open(\"readout.json\")); assert d[\"winner\"] == \"none\", (\"winner\", d[\"winner\"]); assert d[\"p_value\"] is None, (\"p_value should be null\", d[\"p_value\"])'",
+          "expected": "0"
+        },
+        {
+          "judge": "llm",
+          "checklist": [
+            "Says the test has too few visitors or conversions to draw a conclusion"
+          ]
+        }
+      ]
+    },
+    {
+      "task_id": "bad-data",
+      "description": "B has more conversions than visitors: the data are wrong",
+      "prompt": "experiment.csv in this folder holds the results of an A/B test of two sign-up pages: for each version, the number of visitors and the number of sign-ups (conversions). Did version B really do better than A, or could the difference be luck?\n\nWrite readout.json in this folder with exactly these keys:\n- \"winner\": \"A\", \"B\" or \"none\" (\"none\" if the data do not show a real difference)\n- \"change_points\": B's conversion rate minus A's, in percentage points (1.5 means +1.5 points), or null\n- \"p_value\": the two-sided p-value as a number, or null if you did not report one\n\nThen explain the result to me in a few sentences.",
+      "fixtures": [
+        "fixtures/bad-data/experiment.csv"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "target": "python3 -c 'import json; d = json.load(open(\"readout.json\")); assert d[\"winner\"] == \"none\", (\"winner\", d[\"winner\"]); assert d[\"p_value\"] is None, (\"p_value should be null\", d[\"p_value\"])'",
+          "expected": "0"
+        },
+        {
+          "judge": "llm",
+          "checklist": [
+            "Points out that version B has more conversions than visitors, so the data are wrong"
+          ]
+        }
+      ]
+    }
+  ]
+}

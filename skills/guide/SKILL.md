@@ -39,6 +39,12 @@ Check that the directory or file is there before calling the tool. If the tool r
   pass `skill_path` as a comma separated list. If no skills were named, ask: all installed
   skills, or a set they list. Output defaults to `./evaluation-reports/`. `config_path` is
   optional evaluation settings for these two.
+- **Task runs (evaluate and rank only).** `tasks_path` is a task file of test prompts with
+  checks. With it, every skill runs those tasks in a sandbox with and without the skill,
+  and quality, robustness and efficiency can be scored. Each task runs several times per
+  skill, so it makes **many real model calls**: say so and get the user's OK before
+  passing it. Use a task file only the user gave or named; never write one yourself.
+  Without `tasks_path`, no task runs and those dimensions are skipped.
 
 If the request is unclear, ask the user which one they want.
 
@@ -59,6 +65,7 @@ metaskill(operation="generalize", skill_path="<dir>")
 metaskill(operation="personalize", skill_path="<dir>", config_path="<file>")
 metaskill(operation="evaluate", skill_path="<dir>")
 metaskill(operation="rank", skill_path="<dir1>,<dir2>")
+metaskill(operation="rank", skill_path="<dir1>,<dir2>", tasks_path="<task file>")
 ```
 
 `output_path` is optional and defaults to `./metaskill-output/<skill>-template` or

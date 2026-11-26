@@ -47,11 +47,13 @@ def test_costlier_than_baseline_scores_below_half():
 
 
 def test_failed_with_skill_task_earns_no_credit():
-    # A cheap run that failed must not be scored as efficient.
+    # A cheap run that failed must not be scored as efficient: with nothing passed, the
+    # score is 0, not skipped, so the skill ranks last instead of going unranked.
     withs = [result("a", m(input=1, output=1, llm_calls=1, tool_calls=1), passed=False)]
     base = [result("a", m(**EVEN), variant=Variant.BASELINE)]
     s = score_from_runs(withs, base)
-    assert s.value is None and s.status is Status.SKIPPED
+    assert s.value == 0.0 and s.status is Status.OK
+    assert "No task passed" in s.reason
 
 
 def test_reproducible_input_counts_cache_tokens():

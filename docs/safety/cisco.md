@@ -64,13 +64,14 @@ The sketch's `except SkillScannerError` would catch neither: a setup failure wou
 
 ### `available()`
 
-True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. Hermes installs the scanner from `plugin.yaml`, so this is normally true. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
+True if `skill_scanner` can be imported, checked with `importlib.util.find_spec` so the heavy package is not loaded. The scanner is the optional `metaskill-cisco` add-on ([evaluate-safety.md](../evaluate-safety.md) 3.1), so this is true once the user has installed it. Before evaluation starts, the tool calls it and, if false, reports the scanner as missing with the command that installs it (section 3.1 of the safety design).
 
 ### `scan(skill, tier)`
 
 1. **Not installed:** return `not-installed`, no findings, `detail` with the install command.
    - **Frontmatter that would stall the scanner:** return `error` without running it, when the frontmatter holds more than `MAX_FRONTMATTER_VALUES` (100,000) values once its YAML aliases are expanded, or is nested too deep to count (`frontmatter_too_large` in checks.py). The scanner parses the frontmatter itself, and its time doubles with each level of nested aliases: with 2.2.1, 6 s at 2^24 values and minutes past 2^28, from a frontmatter of a few hundred bytes. Real skills have a few hundred values. Safety is then `partial`, and our own checks report the frontmatter as a HIGH `frontmatter-aliases` finding ([checks.md](checks.md)).
-2. **Static:** run `SkillScanner().scan_skill(skill.path)`.
+   - **A copy without links:** the scanner reads the skill folder itself and, at the deep tier, sends what it reads to the model provider. A skill from git can hold a link such as `notes.md -> ../../.hermes/.env`, so it scans a temporary copy of the folder under the same name: every regular file and folder, hidden ones included, but no symlink (file or folder) and no hard link, which could be a file outside the skill. This is the rule `judge.skill_sources` applies to what the judge reads. The paths left out are listed in `detail` (`N link(s) left out, not scanned: ...`). If `SKILL.md` itself is a link or hard link, the scan does not run and the result is `error`, as the judge refuses it too. Finding locations are unchanged, since the scanner reports paths relative to the skill folder.
+2. **Static:** run `SkillScanner().scan_skill(copy)`.
 3. **Deep:**
    1. Without `ctx.llm` (outside Hermes, as in tests and CI), run the static scan and return `llm-unavailable`, with `detail` saying there is no Hermes LLM access.
    2. Otherwise route the model through `ctx.llm` (next section) and build the analyzers with the adapter's model name and a placeholder key.
@@ -113,7 +114,7 @@ Hermes never gives plugins API keys: a plugin asks Hermes for a completion throu
 1. It registers a LiteLLM custom provider, `metaskill_hermes`, added to LiteLLM's provider list rather than replacing it.
 2. For each scan, it gives Cisco a model name `metaskill_hermes/<scan id>` and a placeholder key (`not-a-key`). Cisco requires some key value; this one is never used or sent anywhere. Nothing is read from the environment.
 3. Each request Cisco makes is translated for `ctx.llm.complete_structured`: Cisco's system message becomes `instructions`, its user message `input`, and temperature and max tokens pass through. Requests `ctx.llm` cannot express (tools, streaming, multi-turn history) are refused with a clear error, never silently changed.
-4. The reply and its token usage go back to Cisco, which parses them as usual.
+4. The reply and its token usage go back to Cisco, which parses them as usual. The backend's `LlmUsage` also records each call (the `provider/model` that answered, tokens, a retry included), so the report header can say what Cisco's LLM analyzer used ([score.md](score.md), "Judge model and usage").
 
 So Cisco's LLM layer runs on whichever model the user has configured in Hermes, with Hermes's auth and permission settings. Without `ctx.llm`, Cisco runs static only.
 
@@ -170,3 +171,12 @@ The scanner calls are wrapped in one small method so tests can replace it with a
 
 - The deep tier only partly reads large skills. A `deep` result on a large skill is partly static-only; `detail` says which files were skipped.
 - Static false positives remain, such as the CRITICAL `Function constructor` finding on Playwright's `page.waitForFunction('...')` in `p5js`.
+
+## Pinned version: 2.1.0
+
+The add-on pins scanner 2.1.0 although the behaviour above was verified on 2.2.1. From 2.2.0 the scanner needs `pyjwt>=2.15.0`, and Hermes pins `pyjwt[crypto]==2.13.0`, so Hermes refuses to enable the add-on with 2.2.x (issue #54). Differences that matter to the adapter:
+
+- 2.1.0 has no `AnalyzerConfigurationError`. When the LLM analyzer cannot be built it logs a warning and returns the static analyzers only. The adapter then sees no `llm_analyzer` in `analyzers_used` and reports `llm-unavailable`, as for any other deep scan whose LLM layer did not run.
+- 2.1.0 has no `analyzers_failed` key; the adapter reads it with a default. An LLM analyzer that loads and then fails during the scan stays in `analyzers_used` and is reported only by the `LLM_ANALYSIS_FAILED` diagnostic finding, so the adapter treats that diagnostic as `llm-unavailable` too, with the error it records as the reason.
+- Static detection was compared on the hand-written fixtures and on 300 + 300 MaliciousSkillBench skills (test and validation splits, SKILL.md text only). Findings are identical on 291 of the first 300 and 294 of the second. Recall at MEDIUM or above is the same on the first sample (23/150 for both) and 42 vs 39 of 150 in 2.1.0's favour on the second. 2.1.0 flags about twice as many benign skills (18 vs 9 and 4 vs 2 of 150). A severity cap on the noisiest rule removed false positives on the first sample and lost four real detections on the second, so it is not applied.
+- The deep tier was not compared.

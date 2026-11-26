@@ -16,12 +16,16 @@ import time
 from pathlib import Path
 
 from ..models import LocalWarning, Skill
-from .checks import DeleteTarget, is_system_path
+from .checks import DeleteTarget, is_system_path, link_text
 
 MANY_FILES = 100
 RECENT_DAYS = 7
 MAX_ENTRIES = 10_000  # stop counting here and report "at least"
 MAX_SECONDS = 1.0  # per target
+# For all of a skill's targets together. Each distinct place is looked up once, but a skill
+# can still name many places, so the lookups share this limit (MET-42). Not scored, so a
+# time limit is fine here: stopping early only shortens the list, and says so.
+MAX_TOTAL_SECONDS = 5.0
 IMPORTANT_HOME_FOLDERS = {"Documents", "Desktop", "Pictures", "Downloads", "Music", "Videos"}
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}")
@@ -43,11 +47,34 @@ def local_warnings(skill: Skill, targets: list[DeleteTarget],
     env = dict(os.environ) if env is None else env
     home = Path(home) if home is not None else Path.home()
     warnings = []
-    for target in targets:
+    seen: set[tuple[Path, bool]] = set()
+    deadline = time.monotonic() + MAX_TOTAL_SECONDS
+    for index, target in enumerate(targets):
         path = _resolve(target.target, config or {}, env, home)
-        if path is None or not os.path.lexists(path):
+        if path is None:
             continue
-        reasons = _reasons(path, target.follows_links, home)
+        # One warning per place on this machine, at the first delete of it: the same
+        # folder deleted on 300 lines is one thing to know, and one lookup (MET-42).
+        key = (path, target.follows_links)
+        if key in seen:
+            continue
+        seen.add(key)
+        if time.monotonic() > deadline:
+            # Resolving reads nothing from disk, so counting what is left is cheap.
+            left = {(p, t.follows_links) for t in targets[index:]
+                    if (p := _resolve(t.target, config or {}, env, home)) is not None} - seen
+            left.add(key)
+            warnings.append(LocalWarning(
+                target=target.target, resolved="(not checked)", location=target.location,
+                reasons=[f"stopped after {MAX_TOTAL_SECONDS:g} s"],
+                message=(f"Stopped looking up `{skill.name}`'s delete targets on this machine "
+                         f"after {MAX_TOTAL_SECONDS:g} s; {len(left)} place(s) deleted from "
+                         f"{target.location} on were not checked."),
+            ))
+            break
+        if not os.path.lexists(path):
+            continue
+        reasons = _reasons(path, target.follows_links, home, deadline)
         if reasons:
             warnings.append(LocalWarning(
                 target=target.target,
@@ -98,12 +125,12 @@ def _env_value(env: dict[str, str], name: str) -> str:
     return next((v for k, v in env.items() if k.upper() == name.upper()), "")
 
 
-def _reasons(path: Path, follows_links: bool, home: Path) -> list[str]:
+def _reasons(path: Path, follows_links: bool, home: Path, deadline: float) -> list[str]:
     if path.is_symlink():
         if not follows_links:
             return []  # the delete removes only the link
         real = os.path.realpath(path)
-        return [f"is a link to `{os.readlink(path)}`; deleting through it removes `{real}`"]
+        return [f"is a link to `{link_text(path)}`; deleting through it removes `{real}`"]
 
     reasons = []
     if path == home:
@@ -113,15 +140,16 @@ def _reasons(path: Path, follows_links: bool, home: Path) -> list[str]:
     elif is_system_path(str(path)):
         reasons.append("is a system folder")
     if path.is_dir():
-        reasons += _contents(path)
+        reasons += _contents(path, deadline)
     return reasons
 
 
-def _contents(folder: Path) -> list[str]:
-    """Git repository, file count and recent changes, from metadata only."""
+def _contents(folder: Path, total_deadline: float) -> list[str]:
+    """Git repository, file count and recent changes, from metadata only. Stops at
+    MAX_SECONDS for this folder, or earlier if the skill's total time runs out."""
     files, repo, recent, capped = 0, False, False, False
     cutoff = time.time() - RECENT_DAYS * 86400
-    deadline = time.monotonic() + MAX_SECONDS
+    deadline = min(time.monotonic() + MAX_SECONDS, total_deadline)
     stack = [folder]
     while stack and not capped:
         try:

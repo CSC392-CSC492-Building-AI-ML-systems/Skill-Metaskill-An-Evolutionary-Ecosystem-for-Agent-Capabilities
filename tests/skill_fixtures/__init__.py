@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
+import pytest
+
 from metaskill.generalize.detect import MASK, Action, Category
 from metaskill.generalize.inventory import SkipReason
 
@@ -72,8 +74,21 @@ def materialize(fixture: SkillFixture, base: Path) -> Path:
     for link, target in fixture.symlinks.items():
         resolved = (base / "outside" / target[len("outside:"):]
                     if target.startswith("outside:") else Path(target))
-        os.symlink(resolved, root / link)
+        symlink(resolved, root / link)
     return root
+
+
+def symlink(target: Path, link: Path) -> None:
+    """Create a symlink, or skip the test on Windows without Developer Mode or admin rights.
+
+    Only Windows skips: anywhere else a failure is a broken test and must stay visible.
+    """
+    try:
+        os.symlink(target, link, target_is_directory=Path(target).is_dir())
+    except OSError:
+        if os.name != "nt":
+            raise
+        pytest.skip("cannot create symlinks here")
 
 
 FRONTMATTER = ("---", "name: fixture", "description: A fixture skill", "---")

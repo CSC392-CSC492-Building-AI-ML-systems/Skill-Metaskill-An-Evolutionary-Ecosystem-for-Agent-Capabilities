@@ -28,6 +28,7 @@ from .models import (
     Severity,
     SkillResult,
     Status,
+    Variant,
     check_weights,
 )
 
@@ -337,14 +338,15 @@ def markdown(meta: ReportMeta, ranking: Ranking) -> str:
         f"- Safety tier: {meta.safety_tier}",
         f"- Scanner version: {_md(meta.scanner_version) or 'not run'}",
         f"- Checks version: {_md(meta.checks_version)}",
+        f"- Clarity rubric version: {_md(meta.clarity_rubric_version) or 'unknown'}",
         "", table(ranking),
     ]
     for entry in ranking.entries:
-        lines += _details(entry)
+        lines += _details(entry, meta.runs_per_task)
     return "\n".join(lines) + "\n"
 
 
-def _details(entry: RankedSkill) -> list[str]:
+def _details(entry: RankedSkill, runs_per_task: int) -> list[str]:
     result = entry.result
     lift = "not measured" if result.lift is None else f"{result.lift:+.2f}"
     return [
@@ -352,6 +354,7 @@ def _details(entry: RankedSkill) -> list[str]:
         *_section("Dimensions", [
             f"{d.value}: {s.status}" + "".join(f". {_md(t)}" for t in (s.reason, s.detail) if t)
             for d, s in result.dimensions.items()]),
+        *_task_results(result, runs_per_task),
         *_section("Tests", [
             f"{_md(t.task_id)} ({_md(t.description)}), {t.variant} r{t.run}: "
             f"{'passed' if t.passed else 'failed'}, score {t.score:.2f}, judge {t.judge}, "
@@ -374,6 +377,81 @@ def _details(entry: RankedSkill) -> list[str]:
             f"at {_md(w.location)}. Why: {_md(', '.join(w.reasons))}"
             for w in result.local_warnings]),
     ]
+
+
+MAX_LISTED_FAILURES = 10  # failed runs named in a skill's task section; the log has the rest
+
+
+def _task_results(result: SkillResult, runs_per_task: int) -> list[str]:
+    """A skill's task section: one row per task and variant with its pass rate and mean
+    cost, the failed runs with their reasons, a note for runs that were not made, and the
+    log folder. Empty when no task ran, so a report without tasks has no such section.
+    Everything from a task or a run goes through _md, and `|` is escaped for the table."""
+    if not result.tests:
+        return []
+    groups: dict[tuple[str, str], list] = {}
+    for t in result.tests:
+        groups.setdefault((t.task_id, str(t.variant)), []).append(t)
+    variants = [Variant.WITH_SKILL.value, Variant.BASELINE.value]
+    order = list(dict.fromkeys(task for task, _ in groups))
+    rows = ["| Task | Variant | Passed | Mean tokens | Mean LLM calls | Mean tool calls "
+            "| vs baseline |", "|---|---|---|---|---|---|---|"]
+    short = 0
+    for task in order:
+        for variant in variants:
+            runs = groups.get((task, variant))
+            if runs is None:  # none of this variant's runs for the task were made
+                short += runs_per_task
+                continue
+            passed = sum(1 for t in runs if t.passed)
+            measured = [t.metrics.tool_calls for t in runs if t.metrics.tool_calls is not None]
+            short += max(runs_per_task - len(runs), 0)
+            rows.append("| " + " | ".join([
+                _cell_text(task), variant, f"{passed}/{len(runs)} ({passed / len(runs):.0%})",
+                f"{_mean(t.metrics.total_tokens for t in runs):.0f}",
+                f"{_mean(t.metrics.llm_calls for t in runs):.1f}",
+                f"{_mean(measured):.1f}" if measured else "?",
+                _versus(groups, task, variant)]) + " |")
+    failed = [t for t in result.tests if not t.passed]
+    lines = ["", "### Task results", "", *rows]
+    if failed:
+        lines += ["", "Failed runs:", *(
+            f"- {_md(t.task_id)}, {t.variant} r{t.run}: {_md(t.reason)}"
+            for t in failed[:MAX_LISTED_FAILURES])]
+        if len(failed) > MAX_LISTED_FAILURES:
+            lines.append(f"- and {len(failed) - MAX_LISTED_FAILURES} more failed run(s)")
+    if short:
+        lines += ["", f"{short} run(s) could not be made and are not counted above; the "
+                  "dimension notes say why."]
+    # The folder the runs wrote to: not the name when two skills share one (same, same-2).
+    folder = result.log_folder or result.name
+    lines += ["", f"Logs: {_md(folder)}/logs/ in this report's folder, one file per run."]
+    return lines
+
+
+def _versus(groups: dict, task: str, variant: str) -> str:
+    """Whether the skill's pass rate on a task is above, below or the same as the baseline's,
+    from the rates themselves, shown on the with_skill row (`-` on the baseline's). `incomplete`
+    when a variant has no runs, on whichever row is left to say so."""
+    with_skill, baseline = (groups.get((task, v)) for v in (Variant.WITH_SKILL.value,
+                                                            Variant.BASELINE.value))
+    if variant == Variant.BASELINE.value:
+        return "-" if with_skill else "incomplete"
+    if not baseline:
+        return "incomplete"
+    a, b = sum(t.passed for t in with_skill), sum(t.passed for t in baseline)
+    delta = a * len(baseline) - b * len(with_skill)  # the two rates, over a common denominator
+    return "improved" if delta > 0 else "regressed" if delta < 0 else "unchanged"
+
+
+def _mean(values) -> float:
+    values = list(values)
+    return sum(values) / len(values)
+
+
+def _cell_text(text: object) -> str:
+    """Untrusted text for a table cell: _md, and `|` escaped so it cannot end the cell."""
+    return _md(text).replace("|", "\\|")
 
 
 def _section(title: str, items: list[str]) -> list[str]:

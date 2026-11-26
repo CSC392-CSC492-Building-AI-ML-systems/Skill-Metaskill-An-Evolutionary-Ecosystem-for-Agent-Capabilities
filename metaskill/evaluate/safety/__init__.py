@@ -10,12 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..judge import JUDGE_TASK, Judge
+from ..judge import JUDGE_TASK, Judge, TokenUsage
 from ..models import (
     Dimension, DimensionScore, EvaluationConfig, Finding, LocalWarning, SafetyTier, Skill, Status)
 from . import local
 from .checks import CHECKS_VERSION, ChecksBackend, delete_targets
-from .cisco import INSTALL_COMMAND, PACKAGE, CiscoBackend
+from .cisco import PACKAGE, CiscoBackend, not_installed_hint
 from .findings import (
     BackendResult, BackendStatus, SafetyBackend, merge, score_from_findings)
 from .hermes_bridge import PluginLlm
@@ -48,13 +48,15 @@ def score(skill: Skill, config: EvaluationConfig,
     llm is Hermes's ctx.llm, needed for the deep tier's model calls. task is the registered
     auxiliary task to route those calls through; it defaults to None so a direct
     `score(skill, config, llm=ctx.llm)` never sends an unregistered task on an old Hermes.
-    The plugin should build backends with `backends_from_context(ctx, config)`, which sets
-    the task only where Hermes supports it (register_auxiliary_task), matching
-    Judge.from_context. backends defaults to the ones for config.safety_tier; tests pass fakes.
+    evaluate passes it (TASKED in evaluate/__init__.py) only where Hermes supports it
+    (register_auxiliary_task), matching Judge.from_context, so the deep tier runs on the
+    same model as every other judge. backends defaults to the ones for
+    config.safety_tier; tests pass fakes.
     """
     tier = config.safety_tier
     if backends is None:
         backends = default_backends(config, llm, task)
+    before = [_spent(backend) for backend in backends]
     results = [backend.scan(skill, tier) for backend in backends]
 
     usable = [r for r in results if r.status in _USABLE]
@@ -62,6 +64,7 @@ def score(skill: Skill, config: EvaluationConfig,
     status = _status(results, usable)
     value = score_from_findings(findings) if usable else None
 
+    judge_model, judge_usage = _judged(backends, before)
     return DimensionScore(
         dimension=Dimension.SAFETY,
         value=value,
@@ -69,7 +72,57 @@ def score(skill: Skill, config: EvaluationConfig,
         reason=_reason(findings, usable, tier),
         detail="\n".join(f"{r.backend}: {r.detail}" for r in results if r.detail),
         findings=findings,
+        judge_model=judge_model,
+        judge_usage=judge_usage,
     )
+
+
+def _spent(backend: SafetyBackend) -> tuple[TokenUsage, dict[str, int]]:
+    """What a backend's model calls have used so far, and the replies each model has given:
+    the review's judge (`judge`) and Cisco's LLM analyzer (`llm_usage`). Both count for their
+    whole life, so score() takes this before and after a scan and keeps the difference.
+    A backend that gives no per-model counts (`model_calls`) is credited with all its calls
+    on the models it names."""
+    usage = TokenUsage()
+    by_model: dict[str, int] = {}
+
+    def add(spent: TokenUsage, counted: dict[str, int] | None, named: str) -> None:
+        nonlocal usage
+        usage = usage + spent
+        if not isinstance(counted, dict):
+            counted = {m: spent.calls for m in named.split(", ") if m}
+        for model, calls in counted.items():
+            by_model[model] = by_model.get(model, 0) + calls
+
+    judge = getattr(backend, "judge", None)
+    if judge is not None and hasattr(judge, "total_usage"):
+        add(judge.total_usage, getattr(judge, "model_calls", None), judge.judge_model)
+    tracker = getattr(backend, "llm_usage", None)
+    if tracker is not None and hasattr(tracker, "calls"):
+        add(TokenUsage(tracker.input_tokens, tracker.output_tokens, tracker.calls),
+            getattr(tracker, "model_calls", None), tracker.model)
+    return usage, by_model
+
+
+def _judged(backends: list[SafetyBackend],
+            before: list[tuple[TokenUsage, dict[str, int]]]) -> tuple[str, dict[str, int]]:
+    """The model(s) this scan's LLM passes ran on and what they used; empty when no model
+    call was made, as at the static tier. Only this scan's calls count, so a backend that
+    scored other skills before does not add theirs, nor the models it used for them."""
+    models: set[str] = set()
+    used = TokenUsage()
+    for backend, (earlier, earlier_models) in zip(backends, before):
+        now, now_models = _spent(backend)
+        delta = TokenUsage(now.input_tokens - earlier.input_tokens,
+                           now.output_tokens - earlier.output_tokens, now.calls - earlier.calls)
+        if delta.calls:
+            models.update(m for m, calls in now_models.items()
+                          if calls > earlier_models.get(m, 0))
+            used = used + delta
+    if not used.calls:
+        return "", {}
+    return ", ".join(sorted(models)), {"input_tokens": used.input_tokens,
+                                       "output_tokens": used.output_tokens, "calls": used.calls}
 
 
 def local_warnings(skill: Skill, config_values: dict[str, str] | None = None) -> list[LocalWarning]:
@@ -117,10 +170,9 @@ def missing_dependencies() -> list[Dependency]:
     """
     if CiscoBackend().available():
         return []
-    # No install_command: Hermes asks the user to consent, so the commands need the user's
-    # terminal. Run by the agent without one, they can leave the plugin disabled.
-    return [Dependency(CiscoBackend.name, PACKAGE, "",
-                       reason=f"run `{INSTALL_COMMAND}` in a terminal, then restart Hermes")]
+    # No install_command: the scanner is the optional metaskill-cisco add-on, and Hermes asks
+    # the user to consent to installing it, so the command needs the user's terminal.
+    return [Dependency(CiscoBackend.name, PACKAGE, "", reason=not_installed_hint())]
 
 
 def versions() -> dict[str, str]:

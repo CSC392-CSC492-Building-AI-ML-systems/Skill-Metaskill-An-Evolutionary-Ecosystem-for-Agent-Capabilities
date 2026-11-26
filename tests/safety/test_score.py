@@ -175,3 +175,137 @@ def test_versions_has_both_header_fields():
     versions = safety.versions()
     assert set(versions) == {"scanner_version", "checks_version"}
     assert versions["checks_version"] == CHECKS_VERSION
+
+
+# --- What the deep tier's model calls used (MET-51) -------------------------------------
+
+
+from types import SimpleNamespace  # noqa: E402
+
+from metaskill.evaluate.judge import TokenUsage  # noqa: E402
+from metaskill.evaluate.safety.hermes_bridge import LlmUsage  # noqa: E402
+
+
+class Spending(FakeBackend):
+    """A backend whose model calls happen during its scan, as the review's and Cisco's do:
+    `spend()` runs inside scan()."""
+
+    def __init__(self, name, spend, **attrs):
+        super().__init__(name, OK)
+        self.spend = spend
+        for key, value in attrs.items():
+            setattr(self, key, value)
+
+    def scan(self, skill, tier):
+        self.spend(self)
+        return super().scan(skill, tier)
+
+
+def review_spending(model, usage):
+    """The review backend: its judge reports `model` and has used `usage` by the end."""
+    def spend(backend):
+        backend.judge.judge_model, backend.judge.total_usage = model, usage
+    return Spending("llm-review", spend, judge=SimpleNamespace(judge_model="", total_usage=TokenUsage()))
+
+
+def cisco_spending(*calls):
+    """Cisco's backend: its tracker records `calls` ((provider, model, in, out)) during the scan."""
+    def spend(backend):
+        for provider, model, tokens_in, tokens_out in calls:
+            backend.llm_usage.record(SimpleNamespace(provider=provider, model=model), tokens_in, tokens_out)
+    return Spending("cisco", spend, llm_usage=LlmUsage())
+
+
+def test_static_tier_reports_no_judge():
+    result = run(FakeBackend("cisco", OK), FakeBackend("own-checks", OK))
+    assert result.judge_model == "" and result.judge_usage == {}
+
+
+def test_the_review_and_cisco_judges_are_merged_into_the_score():
+    review = review_spending("openai/gpt-5.4-nano", TokenUsage(1200, 80, 3))
+    cisco = cisco_spending(("openai", "gpt-5.4-nano", 3000, 300), ("openai", "gpt-5.4-nano", 2000, 100))
+    result = run(cisco, review, FakeBackend("own-checks", OK), config=DEEP)
+    assert result.judge_model == "openai/gpt-5.4-nano"
+    assert result.judge_usage == {"input_tokens": 6200, "output_tokens": 480, "calls": 5}
+
+
+def test_a_judge_that_made_no_call_is_not_reported():
+    assert run(review_spending("", TokenUsage()), cisco_spending(), config=DEEP).judge_usage == {}
+
+
+def test_a_fallback_model_is_visible():
+    review = review_spending("openai/a, openai/b", TokenUsage(1, 1, 2))
+    assert run(review, config=DEEP).judge_model == "openai/a, openai/b"
+
+
+def test_a_backend_reused_across_skills_reports_only_this_scans_calls():
+    # Judge and LlmUsage count for their whole life; a caller that builds backends once
+    # (backends_from_context) and scores several skills must not get earlier skills' usage.
+    cisco = cisco_spending(("openai", "m", 1000, 10))
+    first, second = run(cisco, config=DEEP), run(cisco, config=DEEP)
+    assert first.judge_usage == second.judge_usage == {"input_tokens": 1000, "output_tokens": 10, "calls": 1}
+    assert cisco.llm_usage.calls == 2  # the tracker itself still counts everything
+
+
+def per_scan_cisco(*scans):
+    """Cisco's backend, reused: scan N records scans[N], a list of (provider, model) replies."""
+    queue = list(scans)
+
+    def spend(backend):
+        for provider, model in queue.pop(0):
+            backend.llm_usage.record(SimpleNamespace(provider=provider, model=model), 10, 1)
+    return Spending("cisco", spend, llm_usage=LlmUsage())
+
+
+def test_a_reused_backend_reports_only_the_models_this_scan_used():
+    cisco = per_scan_cisco([("p", "A")], [("p", "B")])
+    assert run(cisco, config=DEEP).judge_model == "p/A"
+    assert run(cisco, config=DEEP).judge_model == "p/B"  # not "p/A, p/B"
+
+
+def test_a_model_used_in_an_earlier_scan_is_still_reported_when_it_answers_again():
+    # A plain set difference would drop A from the second and third scans.
+    cisco = per_scan_cisco([("p", "A")], [("p", "A"), ("p", "B")], [("p", "A")])
+    assert [run(cisco, config=DEEP).judge_model for _ in range(3)] == ["p/A", "p/A, p/B", "p/A"]
+
+
+def test_the_review_judge_is_tracked_per_model_too():
+    answers = iter([{"p/A": 1}, {"p/A": 1, "p/B": 2}, {"p/A": 3, "p/B": 2}])
+    usage = iter([TokenUsage(1, 1, 1), TokenUsage(4, 4, 4), TokenUsage(5, 5, 6)])
+
+    def spend(backend):
+        backend.judge.model_calls, backend.judge.total_usage = next(answers), next(usage)
+    review = Spending("llm-review", spend, judge=SimpleNamespace(
+        judge_model="", model_calls={}, total_usage=TokenUsage()))
+    assert [run(review, config=DEEP).judge_model for _ in range(3)] == ["p/A", "p/B", "p/A"]
+
+
+def test_judge_and_bridge_count_replies_by_model():
+    from metaskill.evaluate.judge import Judge
+    usage = LlmUsage()
+    usage.record(SimpleNamespace(provider="p", model="A"), 1, 1)
+    usage.record(SimpleNamespace(provider="p", model="A"), 1, 1)
+    assert usage.model_calls == {"p/A": 2}
+    assert Judge(SimpleNamespace()).model_calls == {}
+
+
+def test_the_cisco_backend_tracks_its_own_calls():
+    backend = CiscoBackend()
+    assert isinstance(backend.llm_usage, LlmUsage) and backend.llm_usage.calls == 0
+    assert CiscoBackend().llm_usage is not backend.llm_usage  # one tracker per backend
+
+
+def test_a_real_judge_is_read_as_the_review_uses_it():
+    from metaskill.evaluate.judge import Judge
+
+    class Llm:  # ctx.llm: one reply that fits the schema, with its usage
+        def complete_structured(self, **kwargs):
+            return SimpleNamespace(parsed={"ok": True}, text="", provider="openai", model="gpt-5.4-nano",
+                                   content_type="json", usage=SimpleNamespace(input_tokens=300, output_tokens=20))
+
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
+    review = Spending("llm-review", lambda b: b.judge.ask("Check it.", "material", schema, "review"),
+                      judge=Judge(Llm(), retries=0))
+    result = run(review, config=DEEP)
+    assert result.judge_model == "openai/gpt-5.4-nano"
+    assert result.judge_usage == {"input_tokens": 300, "output_tokens": 20, "calls": 1}

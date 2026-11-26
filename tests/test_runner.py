@@ -21,7 +21,8 @@ from metaskill.evaluate.models import (
     TestResult,
     Variant,
 )
-from metaskill.evaluate import efficiency
+from metaskill.evaluate import efficiency, robustness
+from sandbox_helpers import FakeSandbox, FakeWorkspace
 from metaskill.evaluate.runner import (
     AgentRun,
     agent_run_from_hermes_usage,
@@ -30,7 +31,7 @@ from metaskill.evaluate.runner import (
     run_tasks,
     timestamp,
 )
-from metaskill.evaluate.sandbox import CommandResult, RunFailed
+from metaskill.evaluate.sandbox import RunFailed
 
 
 class FakeAgent:
@@ -55,67 +56,12 @@ class FakeLlm:
 
     def complete_structured(self, **kwargs):
         reply = self.replies.pop(0)
-        return SimpleNamespace(provider="fake", model="judge-model", parsed=reply,
-                               content_type="json",
+        # Like Hermes: parsed only when JSON output is asked for; the judge asks for text.
+        structured = bool(kwargs.get("json_mode") or kwargs.get("json_schema"))
+        return SimpleNamespace(provider="fake", model="judge-model", text=json.dumps(reply),
+                               parsed=reply if structured else None,
+                               content_type="json" if structured else "text",
                                usage=SimpleNamespace(input_tokens=50, output_tokens=5))
-
-
-class FakeWorkspace:
-    """A workspace that is a folder on this machine. Nothing runs in it: commands get
-    their exit code from the sandbox's `code(folder)`. What goes anywhere but root is
-    recorded in `skill`, as {folder: file contents}."""
-
-    root = "/work"
-    skill_dir = "/tmp/skill"
-
-    def __init__(self, sandbox):
-        self.sandbox, self.path = sandbox, Path(tempfile.mkdtemp(prefix="fake-workspace-"))
-        self.closed, self.skill = False, {}
-
-    def run_command(self, command, timeout, input=None):
-        self.sandbox.commands.append((command, sorted(p.name for p in self.path.iterdir())))
-        code = self.sandbox.code(self.path)
-        return CommandResult(code, "", "" if code == 0 else "AssertionError")
-
-    def put(self, paths, folder):
-        if folder != self.root:
-            self.skill.setdefault(folder, {}).update(
-                {p.name: p.read_bytes() for p in paths})
-            return
-        for path in paths:
-            if path.is_dir():
-                shutil.copytree(path, self.path / path.name)
-            else:
-                shutil.copy2(path, self.path / path.name)
-
-    def export(self, dest):
-        shutil.copytree(self.path, dest, dirs_exist_ok=True)
-
-    def close(self):
-        shutil.rmtree(self.path, ignore_errors=True)
-        self.closed = True
-
-
-class FakeSandbox:
-    """Stands in for DockerSandbox: `code(workdir)` gives the exit code of each command."""
-
-    def __init__(self, code=lambda workdir: 0, reason="", disk="16m"):
-        self.code, self.reason, self.disk = code, reason, disk
-        self.asked, self.commands, self.opened = 0, [], []
-
-    def unavailable(self):
-        self.asked += 1
-        return self.reason
-
-    def open(self, fixtures):
-        workspace = FakeWorkspace(self)
-        self.opened.append(workspace)
-        try:
-            workspace.put(fixtures, workspace.root)
-        except BaseException:
-            workspace.close()
-            raise
-        return workspace
 
 
 @pytest.fixture(autouse=True)
@@ -235,6 +181,60 @@ def test_runner_results_feed_the_efficiency_scorer(skill, run_dir):
     dimension = efficiency.score_from_runs(with_skill, baseline)
     assert dimension.status is Status.OK
     assert dimension.value > 0.5  # the skill made the task cheaper than no skill
+
+
+def with_transcript(prompt, skill, workdir):
+    run = writes_report_with_skill(prompt, skill, workdir)
+    run.transcript = "read SKILL.md\nwrite report.txt" if skill else "gave up"
+    return run
+
+
+def test_runner_keeps_planned_tasks_and_with_skill_transcripts(skill, run_dir):
+    result = run_tasks(skill, [task("a"), task("b")], FakeAgent(with_transcript),
+                       config=config(runs=2), run_dir=run_dir)
+    assert result.task_ids == ["a", "b"]
+    # Only with_skill runs, keyed by (task_id, run); baseline transcripts stay in the logs.
+    assert result.transcripts == {(t, n): "read SKILL.md\nwrite report.txt"
+                                  for t in ("a", "b") for n in (1, 2)}
+
+
+def test_runner_results_feed_the_robustness_scorer(skill, run_dir):
+    # End to end: a RunnerResult goes straight into robustness.score_from_runner.
+    result = run_tasks(skill, [task("a"), task("b")], FakeAgent(with_transcript),
+                       config=config(runs=3), run_dir=run_dir)
+    dimension = robustness.score_from_runner(result, config(runs=3))
+    assert dimension.status is Status.OK and dimension.value == 1.0
+    assert "from transcripts" in dimension.detail
+    assert "baseline outcome agreement 1.00" in dimension.detail  # context only
+    # Evaluate's entry point (score_runs) scores the same runner result.
+    assert robustness.score_runs(skill, config(runs=3), result) == dimension
+
+
+def test_a_task_that_lost_every_run_is_a_robustness_error(skill, run_dir):
+    # No judge for the LLM task, so none of its runs is made (they are runner errors).
+    result = run_tasks(skill, [task("judged", checks=[LLM_CHECK]), task("other")],
+                       FakeAgent(writes_report_with_skill), config=config(runs=2),
+                       run_dir=run_dir)
+    assert {t.task_id for t in result.tests} == {"other"}
+    dimension = robustness.score_from_runner(result, config(runs=2))
+    assert dimension.status is Status.ERROR and dimension.value is None
+    assert "judged" in dimension.detail
+
+
+def test_one_lost_run_is_a_robustness_error(skill, run_dir):
+    calls = []
+
+    def fails_once(prompt, skill, workdir):
+        calls.append(skill)
+        if skill is not None and len(calls) == 2:  # the second with_skill run
+            raise JudgeError("docker went away")
+        return writes_report_with_skill(prompt, skill, workdir)
+
+    result = run_tasks(skill, [task()], FakeAgent(fails_once), config=config(runs=3),
+                       run_dir=run_dir)
+    assert len(result.errors) == 1
+    dimension = robustness.score_from_runner(result, config(runs=3))
+    assert dimension.status is Status.ERROR and "incomplete run matrix" in dimension.detail
 
 
 def test_each_run_gets_a_fresh_workspace_with_the_fixtures(skill, run_dir, tmp_path):
@@ -512,6 +512,41 @@ def test_with_skill_runs_get_the_skill_in_skill_dir_and_baselines_none(skill, ru
     assert baseline.skill == {}
 
 
+def test_copied_is_the_one_rule_for_what_reaches_the_sandbox(skill, tmp_path):
+    from metaskill.evaluate.runner import copied
+
+    (skill.path / "scripts").mkdir()
+    (skill.path / "scripts/go.sh").write_text("exit 0\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.env").write_text("KEY=x", encoding="utf-8")
+    try:
+        (skill.path / "linked-dir").symlink_to(outside, target_is_directory=True)
+        os.link(outside / "secret.env", skill.path / "hard.md")
+    except OSError:
+        pytest.skip("cannot create links here")
+    assert copied(skill, Path("scripts/go.sh"))
+    assert not copied(skill, Path("linked-dir/secret.env"))  # not a link itself, but outside the skill
+    assert not copied(skill, Path("hard.md"))
+    assert not copied(skill, Path("missing.md"))
+
+
+def test_the_agents_own_seconds_replace_the_runners_clock(skill, run_dir):
+    # The runner's clock includes the agent's start-up; an agent that measures its session says so.
+    agent = FakeAgent(lambda prompt, s, workdir: AgentRun(output="done", seconds=1.25))
+    [with_skill, baseline] = run_tasks(skill, [task()], agent, config=config(runs=1),
+                                       run_dir=run_dir, sandbox=FakeSandbox()).tests
+    assert with_skill.metrics.seconds == baseline.metrics.seconds == 1.25
+
+
+@pytest.mark.parametrize("seconds", [None, -1, True, "5"])
+def test_an_unusable_agent_time_falls_back_to_the_runners_clock(skill, run_dir, seconds):
+    agent = FakeAgent(lambda prompt, s, workdir: AgentRun(output="done", seconds=seconds))
+    [with_skill, _] = run_tasks(skill, [task()], agent, config=config(runs=1),
+                                run_dir=run_dir, sandbox=FakeSandbox()).tests
+    assert 0 <= with_skill.metrics.seconds < 5
+
+
 @pytest.mark.parametrize("make_link", [
     lambda secret, link: link.symlink_to(secret),
     lambda secret, link: os.link(secret, link),
@@ -552,6 +587,50 @@ def test_a_hard_linked_skill_md_is_a_run_error(skill, run_dir, tmp_path):
     assert [t.variant for t in result.tests] == [Variant.BASELINE]
     assert "SKILL.md is a link or hard link" in result.errors[0]
     assert all(w.closed for w in sandbox.opened) and len(agent.calls) == 1
+
+
+class RaisingJudge:
+    """A judge that raises `error`, as one did on a link loop the run left behind."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def judge(self, task, check, run):
+        raise self.error
+
+
+def test_a_check_that_raises_on_what_the_run_left_fails_the_run(skill, run_dir):
+    # Raised past the runner, it dropped the whole skill (safety included) from evaluate.
+    result = run_tasks(skill, [task()], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1), run_dir=run_dir, sandbox=FakeSandbox(),
+                       judges={JudgeType.DETERMINISTIC: RaisingJudge(RuntimeError("loop"))})
+    assert result.errors == []
+    assert [t.passed for t in result.tests] == [False, False]
+    assert all("could not be judged (RuntimeError)" in t.reason for t in result.tests)
+
+
+def test_a_judge_error_is_still_a_run_error(skill, run_dir):
+    result = run_tasks(skill, [task()], FakeAgent(writes_report_with_skill),
+                       config=config(runs=1), run_dir=run_dir, sandbox=FakeSandbox(),
+                       judges={JudgeType.DETERMINISTIC: RaisingJudge(JudgeError("broken check"))})
+    assert result.tests == [] and len(result.errors) == 2
+
+
+def test_an_unexpected_failure_costs_that_run_only(skill, run_dir):
+    # Anything else that escapes a run (here an agent result the runner cannot use) is an
+    # error for that run; the other runs are still made and the call returns.
+    calls = []
+
+    def bad_once(prompt, skill, workdir):
+        calls.append(skill)
+        if len(calls) == 1:
+            return AgentRun(output=None)  # not text: the runner's _truncate raises TypeError
+        return writes_report_with_skill(prompt, skill, workdir)
+
+    result = run_tasks(skill, [task()], FakeAgent(bad_once), config=config(runs=2),
+                       run_dir=run_dir, sandbox=FakeSandbox())
+    assert len(result.errors) == 1 and "TypeError" in result.errors[0]
+    assert len(result.tests) == 3
 
 
 class BrokenWorkspace(FakeWorkspace):
@@ -644,3 +723,12 @@ def test_a_skill_too_large_for_the_sandbox_is_a_failed_run(skill, run_dir):
     assert [c.skill for c in agent.calls] == [None]
     assert all(w.closed for w in sandbox.opened)
     assert (run_dir / "cleanup" / "logs" / "write-report-with_skill-r1.txt").is_file()
+
+
+def test_planned_task_ids_include_tasks_whose_runs_all_failed_to_be_made(skill, run_dir):
+    # Quality's assess counts a task that never ran against the skill, so the plan comes
+    # from the loaded tasks, not from the runs that happened.
+    result = run_tasks(skill, [task("judged", checks=[LLM_CHECK]), task("other")], FakeAgent(),
+                       config=config(runs=1), run_dir=run_dir)
+    assert [t.task_id for t in result.tests] == ["other", "other"]  # "judged" had no judge
+    assert result.task_ids == ["judged", "other"]
