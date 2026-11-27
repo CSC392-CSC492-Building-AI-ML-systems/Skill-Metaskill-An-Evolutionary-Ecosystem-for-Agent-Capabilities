@@ -1054,6 +1054,12 @@ def test_hostile_input_cannot_stall_the_scan(tmp_path, name, body):
     "console.log(s.match(/a`b/), password, `x`)",
     "console.log(/* ` */ s, password, `x`)",
     "console.log(ok ? /`/ : s, password, `x`)",
+    "console.log(i++ / `a/b`.length, password, `c`)",
+    "console.log(n-- / `x/y`.length, password, `c`)",
+    "console.log((a) / `/`.length, password, `c`)",
+    "if (x) /`/.test(s), console.log(password, `c`)",
+    "console.log(/`/g + password + `c`)",
+    "console.log(/[`]/ + password + `/`)",
     "console.log(/'/g, `'`, password, '.')",
     "console.log(`'` + /* ' */ s + password + '.')",
 ])

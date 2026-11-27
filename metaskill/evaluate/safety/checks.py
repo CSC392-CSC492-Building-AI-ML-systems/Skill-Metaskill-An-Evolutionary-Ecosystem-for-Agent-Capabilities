@@ -987,7 +987,12 @@ _TEMPLATE_MARKS = re.compile(r"""\$\{|[`'"{}\\/]""")
 _QUOTES = re.compile(r"""['"`]""")
 # A JavaScript pattern, /.../, and what a `/` must follow to open one rather than divide.
 _PATTERN = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\[])+/")
-_BEFORE_PATTERN = re.compile(r"(?:\A|[(,=:\[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case))\s*\Z")
+_BEFORE_PATTERN = re.compile(
+    r"(?:\A|[(,=:\[!&|?{};*%<>~^]|(?<!\+)\+|(?<!-)-|\b(?:return|typeof|case))\s*\Z")
+# What can follow a pattern: its flags, then an operator or the end. After a `)` it also
+# has to be used at once, as in `if (x) /'/.test(s)`, or it is a division.
+_AFTER_PATTERN = re.compile(r"[dgimsuvy]{0,8}\s*(?:[.,;:)\]}?|&=!+\-*%<>^]|\Z)")
+_USED_PATTERN = re.compile(r"[dgimsuvy]{0,8}\.(?:test|exec)\b")
 
 
 def _quotes_in(text: str, start: int, stop: int) -> list[int]:
@@ -1007,6 +1012,7 @@ def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
     unmatched: set[str] = set()  # quotes, comments and patterns with no end further on
     idle: list[int] = []  # quotes in comments and patterns, which open no string either
     end, skip = len(text), 0
+    tried = 0  # no pattern is looked for inside the last candidate (MET-42)
     # Only these characters matter, so the rest is skipped at the regex engine's speed.
     for mark in _TEMPLATE_MARKS.finditer(text):
         i, c = mark.start(), mark.group(0)
@@ -1042,14 +1048,19 @@ def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
                         skip = close + 2
                         spans.append((i, skip))
                         idle += _quotes_in(text, i, skip)
-            elif "/" not in unmatched and _BEFORE_PATTERN.search(text, max(0, i - 20), i):
-                pattern = _PATTERN.match(text, i)
-                if pattern:
-                    skip = pattern.end()
-                    spans.append((i, skip))
-                    idle += _quotes_in(text, i, skip)
-                else:
-                    unmatched.add("/")
+            elif "/" not in unmatched and i >= tried:
+                before = _BEFORE_PATTERN.search(text, max(0, i - 20), i)
+                if before or text[max(0, i - 20):i].rstrip().endswith(")"):
+                    pattern = _PATTERN.match(text, i)
+                    if not pattern:
+                        unmatched.add("/")
+                    else:
+                        tried = pattern.end() - 1  # its closing slash may open the next
+                        follows = _AFTER_PATTERN if before else _USED_PATTERN
+                        if follows.match(text, pattern.end()):
+                            skip = pattern.end()
+                            spans.append((i, skip))
+                            idle += _quotes_in(text, i, skip)
         elif c in ("'", '"') and c not in unmatched:
             quoted = _STRING.match(text, i)
             if quoted:
