@@ -3,7 +3,7 @@
     {
       "task_id": "march",
       "description": "A month with several categories and two refunded rows",
-      "prompt": "expenses.csv in this folder lists expenses. Rows whose status is \"refunded\" do not count. Write summary.json in this folder with exactly these keys:\n- \"total\": the sum of the amounts that count, as a number\n- \"by_category\": an object giving each category that has a counted amount its sum\n- \"largest\": the category with the highest sum, or null if nothing counts\n\nThen tell me which category cost the most, and how much.",
+      "prompt": "expenses.csv in this folder lists expenses. Rows whose status is \"refunded\" do not count. Write summary.json in this folder with exactly these keys:\n- \"total\": the sum of the amounts that count, as a number\n- \"by_category\": an object giving each category that has a counted amount its sum\n- \"largest\": the category with the highest sum, or null if nothing counts\n\nThen tell me which category cost the most.",
       "fixtures": [
         "fixtures/march/expenses.csv"
       ],
@@ -20,11 +20,9 @@
           "expected": "0"
         },
         {
-          "judge": "llm",
-          "checklist": [
-            "Says that travel is the category that cost the most",
-            "Gives 308.75 as the amount for that category"
-          ]
+          "judge": "deterministic",
+          "kind": "output_matches",
+          "expected": "(?i)\\btravel\\b"
         }
       ]
     },
@@ -46,6 +44,22 @@
           "judge": "deterministic",
           "kind": "output_matches",
           "expected": "^TOTAL=0\\.00\\s*$"
+        }
+      ]
+    },
+    {
+      "task_id": "explain-total",
+      "description": "Explain why the total leaves some rows out",
+      "prompt": "expenses.csv in this folder lists expenses. Rows whose status is \"refunded\" do not count. What is the total of the rows that count? Explain why it is lower than the sum of every row in the file. Answer in two plain sentences, with no formatting.",
+      "fixtures": [
+        "fixtures/march/expenses.csv"
+      ],
+      "checks": [
+        {
+          "judge": "llm",
+          "checklist": [
+            "Says that the refunded rows were left out of the total"
+          ]
         }
       ]
     }

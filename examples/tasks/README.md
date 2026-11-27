@@ -6,8 +6,8 @@ your own is in [docs/writing-tasks.md](../../docs/writing-tasks.md).
 | Path | What it is |
 |---|---|
 | `expense-summary/skill/` | The skill being scored |
-| `expense-summary/tasks.json` | Two tasks, using all three deterministic checks and an `llm` checklist |
-| `expense-summary/fixtures/` | The files each task starts with, one folder per task |
+| `expense-summary/tasks.json` | Three tasks: two use the three deterministic checks, one an `llm` checklist |
+| `expense-summary/fixtures/` | The files the tasks start with |
 
 The task file and fixtures sit beside the skill's folder, not in it, so the agent cannot
 read the checks.
@@ -19,7 +19,7 @@ From the repository's folder, check the file first. This runs nothing:
 ```
 
 Then run it. This needs Docker and the sandbox image ([README](../../README.md#install)),
-and **makes real model calls**: 12 agent sessions and up to 6 judge calls for the `llm`
+and **makes real model calls**: 18 agent sessions and up to 6 judge calls for the `llm`
 check at the default 3 runs per task, besides the judge calls `evaluate` makes anyway.
 
 ```text

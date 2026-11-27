@@ -139,8 +139,8 @@ def test_evaluate_reports_the_files_problems_and_warnings(tmp_path):
 def test_the_example_passes_the_check(nothing_runs):
     result = check_task_file(EXAMPLE / "tasks.json")
     assert result["status"] == "ok" and result["warnings"] == []
-    assert result["task_ids"] == ["march", "all-refunded"]
-    assert result["sessions_per_skill"] == 12 and result["llm_judge_calls_per_skill"] == 6
+    assert result["task_ids"] == ["march", "all-refunded", "explain-total"]
+    assert result["sessions_per_skill"] == 18 and result["llm_judge_calls_per_skill"] == 6
 
 
 class LocalWorkspace(FakeWorkspace):
@@ -180,13 +180,17 @@ def summarize(workdir, skip_refunds=True):
     return summary
 
 
-ANSWER = "The category that cost the most is travel, at 308.75."
+ANSWER = "The category that cost the most is travel."
+EXPLANATION = "The total is 571.80, because the refunded rows were left out."
 
 
 def agent(skip_refunds_without_the_skill):
     def act(prompt, skill, workdir):
-        summary = summarize(workdir, skill is not None or skip_refunds_without_the_skill)
+        right = skill is not None or skip_refunds_without_the_skill
+        summary = summarize(workdir, right)
         output = ANSWER if summary["total"] else "TOTAL=0.00"
+        if "every row in the file" in prompt:
+            output = EXPLANATION if right else "The total is 811.80, counting every row."
         return AgentRun(output=output, input_tokens=100, output_tokens=10, llm_calls=2,
                         tool_calls=1)
     return act
@@ -194,7 +198,8 @@ def agent(skip_refunds_without_the_skill):
 
 class Judge:
     def complete_structured(self, **kwargs):
-        items = [{"item": n, "met": True, "reason": "r", "quote": ANSWER} for n in (1, 2)]
+        met = "refunded rows were left out" in kwargs["input"][0]["text"]
+        items = [{"item": 1, "met": met, "reason": "r", "quote": EXPLANATION if met else ""}]
         return SimpleNamespace(provider="fake", model="judge", parsed=None,
                                content_type="text", text=json.dumps({"items": items}),
                                usage=SimpleNamespace(input_tokens=1, output_tokens=1))
@@ -210,11 +215,11 @@ def test_the_example_runs_through_evaluate(tmp_path, monkeypatch, baseline_right
         tmp_path / "example/skill", tasks_path=tmp_path / "example/tasks.json",
         output_path=tmp_path / "out", ctx=SimpleNamespace(llm=Judge()),
         agent=FakeAgent(agent(baseline_right)), sandbox=LocalSandbox())
-    assert result["task_runs"] == {"tasks": 2, "sessions": 12, "errors": 0}
+    assert result["task_runs"] == {"tasks": 3, "sessions": 18, "errors": 0}
     path = next(p for p in result["artifacts"] if p.endswith(".json"))
     skill = Report.from_dict(json.loads(Path(path).read_text(encoding="utf-8"))).skills[0]
     assert skill.dimensions[Dimension.QUALITY].status is Status.OK
     with_skill = [t for t in skill.tests if t.variant.value == "with_skill"]
     assert all(t.passed for t in with_skill), [t.reason for t in with_skill]
-    # A baseline that counts refunded rows fails both tasks' checks.
+    # A baseline that counts refunded rows fails every task.
     assert skill.lift == lift

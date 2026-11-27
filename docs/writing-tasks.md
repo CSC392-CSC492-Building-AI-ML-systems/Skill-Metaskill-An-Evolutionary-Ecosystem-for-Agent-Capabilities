@@ -43,7 +43,16 @@ list of tasks, or an object with a `tasks` list.
       "checks": [
         {"judge": "deterministic", "kind": "file_exists", "target": "total.txt"},
         {"judge": "deterministic", "kind": "exit_code", "target": "grep -qx '571.80' total.txt", "expected": "0"},
-        {"judge": "llm", "checklist": ["States that the total is 571.80"]}
+        {"judge": "deterministic", "kind": "output_matches", "expected": "571\\.80?"}
+      ]
+    },
+    {
+      "task_id": "explain",
+      "description": "Explaining what was left out",
+      "prompt": "expenses.csv in this folder lists expenses. Rows whose status is \"refunded\" do not count. Explain why the total is lower than the sum of every row.",
+      "fixtures": ["fixtures/march/expenses.csv"],
+      "checks": [
+        {"judge": "llm", "checklist": ["Says that the refunded rows were left out of the total"]}
       ]
     }
   ]
@@ -112,8 +121,16 @@ quoting the answer. All items must be met. **Use it for what the answer says**, 
 whether it explains a result.
 
 - It sees only the answer, not the files. Test files with `exit_code`.
-- Make each item one concrete statement that is true or false: "States that the total is
-  571.80", not "Is a good answer".
+- Make each item one concrete statement that is true or false: "Says that refunded rows
+  were left out", not "Is a good answer".
+- Do not use it for what a deterministic check can test, such as a number or a name.
+- A "met" verdict counts only if the judge's quote is found word for word in the answer.
+  Small models often drop Markdown marks when quoting, which fails a right answer, so ask
+  for plain text in the prompt.
+- The judge is also shown the prompt, and a small model can mix the prompt's requirements
+  up with your checklist: asked about the answer, it may fail it because nothing shows a
+  file was written. Give an `llm` check a task whose prompt asks only for something said
+  in the answer, and read its reasons in the run logs.
 - Each item is judged by a model, so it costs calls and can vary between runs.
 
 ## Fixtures
