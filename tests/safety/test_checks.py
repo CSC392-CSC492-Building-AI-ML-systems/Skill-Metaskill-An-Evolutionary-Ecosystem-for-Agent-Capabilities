@@ -1536,6 +1536,8 @@ def test_a_string_that_is_only_part_of_a_command_is_not_judged_alone(tmp_path, n
     'x(`ls /*`); execSync("ls | xargs rm -rf")',
     'const g = `${folder}/*`; execSync(`ls | xargs rm -rf`)',
     's.replace(/`/g, ""); execSync("ls | xargs rm -rf")',
+    's.match(/a`b/); execSync(`ls | xargs rm -rf`)',
+    's.split(/(`)/); execSync(`ls | xargs rm -rf`)',
 ])
 def test_a_slash_star_in_a_template_literal_opens_no_comment(tmp_path, line):
     result = scan(make(tmp_path, {"a.js": line + "\n"}))
@@ -1545,3 +1547,10 @@ def test_a_slash_star_in_a_template_literal_opens_no_comment(tmp_path, line):
 def test_a_delete_only_printed_in_a_template_literal_is_not_run(tmp_path):
     result = scan(make(tmp_path, {"a.js": "console.log(`blocked: rm -rf`)\n"}))
     assert "recursive-delete" not in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("piece", ["(/[", "(/`", "(/", " / ", "/* "])
+def test_many_slashes_in_a_script_are_read_quickly(tmp_path, piece):
+    started = time.monotonic()
+    scan(make(tmp_path, {"a.js": "x(" + piece * 40_000 + ")\nrm -rf\n"}))
+    assert time.monotonic() - started < 10

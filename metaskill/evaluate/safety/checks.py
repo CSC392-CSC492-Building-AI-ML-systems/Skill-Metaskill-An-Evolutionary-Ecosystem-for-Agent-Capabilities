@@ -1644,13 +1644,9 @@ _BACKUP = re.compile(r"(?:make|take|create|keep|back)\b", re.I)
 _DESCRIBED_BEFORE = re.compile(r"\b(?:we|they|i)\s+(?:\w+ly\s+)?$", re.I)
 _BATCH_COMMENT = re.compile(r"\s*(?:rem\b|::)", re.I)
 _SLASH_COMMENTS = {".js", ".mjs", ".cjs", ".ts"}
-
-
-def _in_pattern(line: str, i: int) -> bool:
-    """Whether the backtick at i is a character of a JavaScript pattern such as /`/g or
-    /[`]/, so it opens no template literal."""
-    before = line[max(0, i - 2):i]
-    return before.endswith(("/", "'", '"')) or before == "/["
+# A JavaScript pattern, /.../, and what a `/` must follow to open one rather than divide.
+_JS_PATTERN = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\[])+/")
+_BEFORE_JS_PATTERN = re.compile(r"(?:\A|[(,=:\[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case))\s*\Z")
 
 
 @lru_cache(maxsize=4)
@@ -1665,6 +1661,7 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
     block = (("<#", "#>") if suffix in (".ps1", ".psm1")
              else ("/*", "*/") if suffix in _SLASH_COMMENTS else None)
     spans, quote, opened, i, ansi = [], "", 0, 0, False
+    patterns = suffix in _SLASH_COMMENTS
     while i < len(line):
         c = line[i]
         if quote:
@@ -1675,8 +1672,7 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
                 quote = ""
         elif c == "\\" and escapes:
             i += 1  # `don\'t` opens no string
-        elif c in "'\"" or (c == "`" and suffix in _SLASH_COMMENTS
-                           and not _in_pattern(line, i)):
+        elif c in "'\"" or (c == "`" and suffix in _SLASH_COMMENTS):
             quote, opened = c, i
             ansi = c == "'" and line[i - 1:i] == "$"  # bash's $'it\\'s'
         elif (block and line.startswith(block[0], i)
@@ -1691,6 +1687,13 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
                                                           or suffix in MARKDOWN_SUFFIXES))):
             spans.append((i, len(line), "comment"))
             break
+        elif (c == "/" and patterns and not line.startswith(("//", "/*"), i)
+                and _BEFORE_JS_PATTERN.search(line, max(0, i - 20), i)):
+            # A quote in a pattern such as /`/g or /["']/ opens no string.
+            if found := _JS_PATTERN.match(line, i):
+                i = found.end()
+                continue
+            patterns = False  # none closes further on: do not look again (MET-42)
         i += 1
     if quote:
         spans.append((opened, len(line), "string"))
