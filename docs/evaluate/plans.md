@@ -35,7 +35,9 @@ Edit any of them before approving.
 when it has no description), not its steps: tasks written around one skill's steps would favour
 that skill. If the model finds no common purpose, no plan is made. It asks for up to 3 tasks, each
 with input files, `exit_code` check commands and an example answer. The reply is untrusted: names
-must be plain file names, sizes and counts are capped, and anything else rejects the draft.
+must be plain file names, sizes and counts are capped (the model is told the limits), a check may
+span several lines but holds no other control characters, and anything else rejects the draft with
+the reason.
 
 ## 3. Validation
 

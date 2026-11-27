@@ -40,7 +40,7 @@ PLAN_ID = re.compile(r"plan-[0-9a-f]{6}")
 DRAFT, APPROVED = "draft", "approved"
 RUNS_PER_TASK = 2  # in a new plan's config.json; Robustness needs at least two
 MAX_TASKS, MAX_FILES, MAX_CHECKS = 3, 4, 4
-MAX_FILE_CHARS, MAX_COMMAND_CHARS, MAX_TEXT_CHARS = 4_000, 1_000, 1_000
+MAX_FILE_CHARS, MAX_COMMAND_CHARS, MAX_TEXT_CHARS = 4_000, 2_000, 1_000
 MAX_DESCRIPTION_CHARS = 600
 CHECK_TIMEOUT = 60  # seconds for one check command while validating
 DRAFT_ATTEMPTS = 2  # a draft that fails validation is asked for once more, with why
@@ -58,11 +58,14 @@ Rules:
   the skills have no common purpose, set `comparable` to false and give no tasks.
 - `prompt` says what to do and names the file to write. It must not contain the answer.
 - `files` are the input files, small and made up. No real personal data.
-- Each check is one shell command, on one line, that exits 0 only if the work is right, e.g.
+- Each check is one shell command that exits 0 only if the work is right, e.g.
   python3 -c '...' reading the written file. Check facts any good solution would get right,
   not wording or a layout the prompt does not ask for. A check must fail if nothing was done.
 - `example` holds files that, added to the input files, make every check pass.
-- File names are plain names such as data.csv: no folders."""
+- File names are plain names such as data.csv: no folders.
+- Limits: 1 to {MAX_CHECKS} checks per task, each at most {MAX_COMMAND_CHARS} characters; at most
+  {MAX_FILES} files in `files` and in `example`, each at most {MAX_FILE_CHARS} characters; a prompt and a
+  description of at most {MAX_TEXT_CHARS} characters; a task_id of letters, digits, _ . - only."""
 
 _FILES = {"type": "array", "items": {
     "type": "object", "properties": {"name": {"type": "string"}, "content": {"type": "string"}},
@@ -257,7 +260,9 @@ def summary(plan: Plan) -> str:
                   "  Passes only if every command exits as expected:"]
         for check in task.checks:
             command = check.target if check.target else " ".join(check.checklist)
-            lines.append(f"    {command}")
+            first, *rest = command.rstrip("\n").split("\n")
+            # Marked, so a command of several lines cannot pass for part of this summary.
+            lines += [f"    $ {first}", *(f"    | {line}" for line in rest)]
     lines += ["", f"A run makes {sessions} agent sessions ({len(tasks)} task(s) x {runs} "
                   f"run(s) x with and without x {len(skills)} skill(s)), plus judge calls.",
               f"Files: {plan.folder}"]
@@ -306,10 +311,9 @@ def _write_draft(folder: Path, reply: dict[str, Any]) -> None:
                 and task_id not in examples):
             raise PlanError("each task needs its own task_id of letters, digits, _ . -")
         checks = item.get("checks")
-        if not (isinstance(checks, list) and 1 <= len(checks) <= MAX_CHECKS and all(
-                isinstance(c, str) and c.strip() and len(c) <= MAX_COMMAND_CHARS
-                and c.isprintable() for c in checks)):
-            raise PlanError(f"{task_id}: expected 1 to {MAX_CHECKS} one-line check commands")
+        problem = _checks_problem(checks)
+        if problem:
+            raise PlanError(f"{task_id}: {problem}")
         texts = [item.get("description"), item.get("prompt")]
         if not all(isinstance(t, str) and t.strip() and len(t) <= MAX_TEXT_CHARS
                    for t in texts):
@@ -330,6 +334,24 @@ def _write_draft(folder: Path, reply: dict[str, Any]) -> None:
         })
     _write_json(folder / "tasks.json", {"tasks": tasks})
     _write_json(folder / "examples.json", examples)
+
+
+def _checks_problem(checks: Any) -> str:
+    """Why a task's check commands cannot be used, or "". A command may run over several
+    lines, but holds no other control characters, which could hide text from the review."""
+    if not isinstance(checks, list) or not checks:
+        return "needs at least one check command"
+    if len(checks) > MAX_CHECKS:
+        return f"has {len(checks)} checks; at most {MAX_CHECKS} are allowed"
+    for command in checks:
+        if not isinstance(command, str) or not command.strip():
+            return "every check must be a command, given as a non-empty string"
+        if len(command) > MAX_COMMAND_CHARS:
+            return (f"a check command is {len(command)} characters; at most "
+                    f"{MAX_COMMAND_CHARS} are allowed")
+        if not all(c.isprintable() or c in "\n\t" for c in command):
+            return "a check command holds a control character other than a newline or tab"
+    return ""
 
 
 def _files(items: Any, task_id: str) -> dict[str, str]:

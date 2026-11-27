@@ -144,7 +144,9 @@ def test_the_drafter_is_given_what_a_skill_is_for(root, tmp_path, monkeypatch):
     task(files=[{"name": "a/b", "content": ""}]),
     task(task_id="../x"),
     task(checks=[]),
-    task(checks=["x" * 2000]),
+    task(checks=["x" * 3000]),
+    task(checks=[CHECK] * 5),
+    task(checks=["true\r\nfalse"]),
     task(files=[{"name": "big", "content": "x" * 5000}]),
     task(prompt=""),
 ])
@@ -153,6 +155,32 @@ def test_a_bad_draft_is_asked_again_then_refused(root, skills, bad):
         configure(skills, draft(bad), draft(bad))
     assert saved(root) == []
     assert not (root.parent / "escape").exists()
+
+
+def test_a_check_may_run_over_several_lines_and_each_line_is_shown(root, skills):
+    command = ("python3 -c '\nimport sys\n"
+               "sys.exit(0 if open(\"total.txt\").read().strip() == \"6\" else 1)\n'")
+    plan, _ = configure(skills, draft(task(checks=[command])))
+    shown = plans.summary(plan).split("\n")
+    assert "    $ python3 -c '" in shown and "    | import sys" in shown
+    plans.approve(plan.id, sandbox=LocalSandbox())
+
+
+@pytest.mark.parametrize("bad, why", [
+    (task(checks=[CHECK] * 5), "has 5 checks; at most 4"),
+    (task(checks=[]), "at least one check"),
+    (task(checks=["x" * 3000]), "3000 characters; at most 2000"),
+    (task(checks=["a\x1bb"]), "control character"),
+])
+def test_the_reason_a_check_is_refused_is_named(root, skills, bad, why):
+    with pytest.raises(plans.PlanError, match=why):
+        configure(skills, draft(bad), draft(bad))
+
+
+def test_the_drafter_is_told_the_limits(root, skills):
+    _, llm = configure(skills)
+    sent = llm.calls[0]["instructions"]
+    assert "1 to 4 checks" in sent and "2000 characters" in sent and "4000 characters" in sent
 
 
 def test_the_second_draft_is_told_why_the_first_failed(root, skills):
