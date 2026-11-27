@@ -6,14 +6,19 @@ and approves, and every later run reuses unchanged. Tasks are still never genera
 is made.
 
 ```
-/metaskill configure meeting-action-items, document-to-action-items [--name <label>] [--note "<text>"]
-/metaskill approve plan-1a2b3c
-/metaskill rank plan-1a2b3c          # evaluate plan-1a2b3c for a plan with one skill
+/metaskill configure meeting-action-items, document-to-action-items [--name <name>] [--note "<text>"]
+/metaskill approve plan-1a2b3c       # or the name
+/metaskill rank plan-1a2b3c          # evaluate <plan> for a plan with one skill
 /metaskill plans
 ```
 
 A `/metaskill` command cannot stop to ask a question, so the review is a step of its own between
 `configure` and `approve`. `evaluate` and `rank` with skill names and `--tasks` work as before.
+
+**Names.** `--name demo` lets `approve`, `rank` and `evaluate` take `demo` in place of the ID. A
+name is one word of up to 40 letters, digits, `-` and `_`, does not start with `plan-`, and is
+unique among plans, in any case. If a name is also a skill's, `rank` and `evaluate` run nothing
+and say how to give either one. The ID always works, and reports record the ID.
 
 ## 1. What a plan holds
 
@@ -21,7 +26,7 @@ A `/metaskill` command cannot stop to ask a question, so the review is a step of
 
 | File | Content |
 |---|---|
-| `plan.json` | skills (name, path, fingerprint), status, label, which model drafted it, dates |
+| `plan.json` | skills (name, path, fingerprint), status, name (`label`), which model drafted it, dates |
 | `tasks.json` | an ordinary task file |
 | `fixtures/<task_id>/` | the tasks' input files |
 | `examples.json` | for each task, files that make its checks pass; used only to validate, never given to an agent |

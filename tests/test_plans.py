@@ -339,13 +339,13 @@ def command(monkeypatch, tmp_path, root):
 
 def test_configure_approve_and_rank(command, skills, root, tmp_path):
     assert "No evaluation plans" in command("plans")
-    shown = command("configure skills/adder, skills/summer --name my sums")
+    shown = command("configure skills/adder, skills/summer --name my-sums")
     [plan_id] = saved(root)
     assert plan_id in shown and CHECK in shown and "not approved yet" in shown
     assert "is a draft" in command(f"rank {plan_id}")
-    assert f"/metaskill rank {plan_id}" in command(f"approve {plan_id}")
+    assert "/metaskill rank my-sums" in command(f"approve {plan_id}")
     listed = command("plans")
-    assert plan_id in listed and '"my sums"' in listed and "approved" in listed
+    assert plan_id in listed and '"my-sums"' in listed and "approved" in listed
 
     out = command(f"rank {plan_id}")
     assert out.startswith(f"Plan {plan_id}") and "adder" in out and "summer" in out
@@ -368,6 +368,57 @@ def test_configure_takes_a_name_and_a_note_in_either_order(command, skills, root
     assert "Your note:" in out
 
 
+def test_a_plan_is_approved_and_run_by_its_name(command, skills, root, tmp_path):
+    shown = command("configure skills/adder, skills/summer --name Sales_demo")
+    [plan_id] = saved(root)
+    assert "/metaskill approve Sales_demo" in shown
+    assert "is a draft" in command("rank sales_demo")
+    assert "/metaskill rank Sales_demo" in command("approve SALES_DEMO")
+    assert "takes nothing else" in command("rank Sales_demo --tasks t.json")
+    out = command("rank Sales_demo")
+    assert out.startswith(f"Plan {plan_id}") and "adder" in out
+    assert "use /metaskill rank" in command("evaluate Sales_demo")
+
+
+def test_a_name_that_is_also_a_skill_is_not_guessed(command, skills, root, tmp_path):
+    command("configure skills/adder --name demo")
+    [plan_id] = saved(root)
+    (tmp_path / "demo").mkdir()
+    out = command("evaluate demo")
+    assert "nothing was run" in out and plan_id in out and "./demo" in out
+
+
+def test_a_list_of_skills_is_not_read_as_a_plan(command, skills, root):
+    command("configure skills/adder --name demo")
+    assert "No skill found" in command("rank demo, skills/adder")
+
+
+@pytest.mark.parametrize("name", ["two words", "plan-abc", "PLAN-1", "-x", "a/b", "x" * 41, "a.b"])
+def test_a_name_that_commands_could_not_take_is_refused_before_drafting(root, skills, name):
+    with pytest.raises(plans.PlanError, match="a plan name is one word"):
+        configure(skills, draft(task()), label=name)
+    assert saved(root) == []
+
+
+def test_a_name_is_used_once_in_any_case(root, skills):
+    first, _ = configure(skills, label="demo")
+    llm = Drafter()
+    with pytest.raises(plans.PlanError, match=f"already used by {first.id}"):
+        plans.configure(skills, ctx=SimpleNamespace(llm=llm), sandbox=LocalSandbox(), label="Demo")
+    assert llm.calls == [] and saved(root) == [first.id]
+    assert plans.resolve("DEMO") == first.id and plans.resolve("other") is None
+    assert plans.resolve(first.id) == first.id
+
+
+def test_two_plans_edited_to_share_a_name_need_the_id(root, skills):
+    first, _ = configure(skills, label="a")
+    second, _ = configure(skills, label="b")
+    second.data["label"] = "a"
+    (second.folder / "plan.json").write_text(json.dumps(second.data))
+    with pytest.raises(plans.PlanError, match="use the ID"):
+        plans.resolve("a")
+
+
 @pytest.mark.parametrize("request_text, expected", [
     ("configure", "Usage: /metaskill configure"),
     ("configure --name x", "Usage: /metaskill configure"),
@@ -376,6 +427,7 @@ def test_configure_takes_a_name_and_a_note_in_either_order(command, skills, root
     ("configure nothing-here", "No skill found"),
     ("approve", "Usage: /metaskill approve"),
     ("approve plan-000000", "there is no plan"),
+    ("approve nothing", "there is no plan nothing"),
     ("plans extra", "Usage: /metaskill plans"),
     ("rank plan-000000", "there is no plan"),
     ("rank plan-000000 --tasks t.json", "takes nothing else"),

@@ -37,6 +37,9 @@ from .models import EvaluationConfig, Skill
 from .tasks import SAFE_NAME, TaskError, load_tasks
 
 PLAN_ID = re.compile(r"plan-[0-9a-f]{6}")
+# A plan's name (`--name`), which commands accept in place of its ID: one word, and never
+# starting like an ID, so the two cannot be confused.
+PLAN_NAME = re.compile(r"(?!(?i:plan-))[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
 DRAFT, APPROVED = "draft", "approved"
 RUNS_PER_TASK = 2  # in a new plan's config.json; Robustness needs at least two
 MAX_TASKS, MAX_FILES, MAX_CHECKS = 3, 4, 4
@@ -147,12 +150,16 @@ def plans_root() -> Path:
 
 def configure(skill_paths: list[str | Path], *, ctx: Any = None, sandbox: Any = None,
               label: str = "", note: str = "", root: Path | None = None) -> Plan:
-    """Draft a plan for these skills, validate its checks and save it as a draft. `note` is
-    the user's own request about what the tasks should test."""
+    """Draft a plan for these skills, validate its checks and save it as a draft. `label` is
+    the plan's name, unique among plans; `note` is the user's own request about what the
+    tasks should test."""
     config = EvaluationConfig(runs_per_task=RUNS_PER_TASK)
     skills = [_load_skill(path) for path in skill_paths]
     if not skills:
         raise PlanError("name at least one skill")
+    label = label.strip()
+    if label:
+        _check_name(label, root)  # before any model call
     note = note.strip()
     if len(note) > MAX_NOTE_CHARS:
         raise PlanError(f"the note is {len(note)} characters; at most {MAX_NOTE_CHARS}")
@@ -176,9 +183,11 @@ def configure(skill_paths: list[str | Path], *, ctx: Any = None, sandbox: Any = 
             _write_draft(staging, reply)
             problems = validate(staging, sandbox)
             if not problems:
+                if label:
+                    _check_name(label, root)  # another may have taken it meanwhile
                 plan_id = _new_id(root)
                 data = {
-                    "status": DRAFT, "label": clean(label, 80),
+                    "status": DRAFT, "label": label,
                     **({"note": note} if note else {}), "created": _now(),
                     "drafted_by": judge.judge_model,
                     "skills": [{"name": str(s.name), "path": str(Path(s.path).absolute())}
@@ -238,6 +247,33 @@ def ready(plan_id: str, operation: str, *, root: Path | None = None
             warnings.append(f"{skill['name']} has changed since {plan.id} was approved; the "
                             "same tasks are run")
     return plan, warnings
+
+
+def resolve(reference: str, root: Path | None = None) -> str | None:
+    """The ID of the plan `reference` names: an ID as it is, or a plan's name, in any case.
+    None if no plan has that name."""
+    if PLAN_ID.fullmatch(reference):
+        return reference
+    if not PLAN_NAME.fullmatch(reference):
+        return None
+    found = [plan.id for plan in all_plans(root) if _has_name(plan, reference)]
+    if len(found) > 1:  # only if plan.json was edited
+        raise PlanError(f"{len(found)} plans are named {reference}: use the ID, one of "
+                        f"{', '.join(found)}")
+    return found[0] if found else None
+
+
+def _has_name(plan: Plan, name: str) -> bool:
+    return str(plan.data.get("label", "")).casefold() == name.casefold()
+
+
+def _check_name(name: str, root: Path | None) -> None:
+    if not PLAN_NAME.fullmatch(name):
+        raise PlanError("a plan name is one word of up to 40 letters, digits, - and _, and "
+                        "does not start with plan-")
+    taken = [plan.id for plan in all_plans(root) if _has_name(plan, name)]
+    if taken:
+        raise PlanError(f"the name {name} is already used by {taken[0]}; choose another")
 
 
 def load(plan_id: str, root: Path | None = None) -> Plan:
