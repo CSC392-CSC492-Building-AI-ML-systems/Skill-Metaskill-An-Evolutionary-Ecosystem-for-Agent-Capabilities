@@ -577,6 +577,8 @@ class Judge:
             except JudgeCallFailed as e:
                 if attempt == self.backoff.attempts or not is_rate_limited(e):
                     raise
+                if self.backoff.cancelled:  # stopped: no retry, and no longer pause for others
+                    raise
                 self.backoff.limited()
                 continue
             self.backoff.succeeded()

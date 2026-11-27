@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from . import cancel
+from . import cancel, host
 from .backoff import Backoff
 from .threads import submit
 from .judge import (
@@ -48,6 +48,8 @@ from .tasks import SAFE_NAME, load_tasks
 
 VARIANTS = (Variant.WITH_SKILL, Variant.BASELINE)
 _log = logging.getLogger(__name__)
+# run_tasks(host_room=) left out: read the host's memory there (host.capacity).
+MEASURE: Any = object()
 
 
 @dataclass
@@ -159,7 +161,8 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
               config: EvaluationConfig, run_dir: Path, ctx: Any = None,
               judges: Mapping[JudgeType, TaskJudge] | None = None,
               sandbox: Sandbox | None = None, log_folder: str | None = None,
-              backoff: Backoff | None = None) -> RunnerResult:
+              backoff: Backoff | None = None,
+              host_room: int | None | object = MEASURE) -> RunnerResult:
     """Run every task `config.runs_per_task` times per variant and judge each run.
 
     `ctx` is the Hermes plugin context, needed only for LLM checks. `sandbox` opens the
@@ -171,6 +174,9 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     the caller's rate-limit pause, when other model calls share the provider with these
     runs (evaluate's background scoring); the runs wait on it through a view of their own
     (Backoff.linked), so stopping them does not cancel it for the caller. None: a new one.
+    `host_room` is how many sessions the host's memory holds (host.capacity), None if
+    unknown; evaluate reads it once, before its warm children start, since they would count
+    as used. Left out, it is read here.
 
     Raises ValueError if the skill's name or log_folder cannot be a folder name: the name
     comes from the skill's own frontmatter, so `../x` or an absolute path would put the
@@ -215,16 +221,26 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
 
     stopped: list[bool] = []
     stop_lock = threading.Lock()
+    stop_done = threading.Event()
 
     def stop() -> None:
         # Interrupted (Ctrl-C), stopped (/metaskill stop, cancel.py) or failed past every
         # run's own handling: no new session starts, every container still open is removed,
         # and the agent stops what it runs. Once, under a lock: the stop watcher's thread
-        # and this one can both get here.
+        # and this one can both get here. The second waits for the first to finish, so
+        # the call does not return while the watcher is still removing containers.
         with stop_lock:
-            if stopped:
-                return
+            first = not stopped
             stopped.append(True)
+        if not first:
+            stop_done.wait()
+            return
+        try:
+            _stop_once()
+        finally:
+            stop_done.set()
+
+    def _stop_once() -> None:
         # No new session or judge call first, then the sessions themselves, and only then
         # the containers: removing up to 16 takes seconds, during which live sessions would
         # go on calling the model against containers that are gone.
@@ -234,7 +250,10 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
             cancel()
         pool.stop()
 
-    workers = pool.workers(config.max_parallel_runs, len(todo))
+    # Read at the moment the count is decided, so a max_parallel_runs changed during a call
+    # is held to the same caps.
+    room = host.capacity() if host_room is MEASURE else host_room
+    workers = pool.workers(config.max_parallel_runs, len(todo), room)
     # An agent whose sessions must run in plan order says so (the Quality pilot's route
     # check: the first run in the plan fixes the route, as before parallel runs).
     limit = getattr(agent, "max_parallel_runs", None)
@@ -610,10 +629,17 @@ class _Judges:
                 self.llm = judge
             return judge
 
-    def workers(self, requested: int, runs: int) -> int:
+    def workers(self, requested: int, runs: int, host_room: Any = None) -> int:
         """Sessions to run at once: `requested` (max_parallel_runs), no more than there are
-        runs, and no more than the sandbox can hold (DockerSandbox.capacity)."""
+        runs, no more than the sandbox can hold (DockerSandbox.capacity), and no more than
+        `host_room`, the Hermes processes the host's memory holds (host.capacity)."""
         limit = max(1, min(requested, runs))
+        if isinstance(host_room, int) and not isinstance(host_room, bool) \
+                and 1 <= host_room < limit:
+            _log.info("metaskill: running %d sessions at once, not %d: the host's memory has "
+                      "room for %d Hermes sessions at %d MB each", host_room, limit,
+                      host_room, host.HERMES_MEMORY // (1024 * 1024))
+            limit = host_room
         capacity = getattr(self.sandbox, "capacity", None)
         if limit > 1 and callable(capacity):
             room = capacity()

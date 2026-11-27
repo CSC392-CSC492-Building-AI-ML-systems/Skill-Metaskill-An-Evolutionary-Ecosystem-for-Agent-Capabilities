@@ -474,7 +474,10 @@ class _Warm:
         stderr = tempfile.TemporaryFile()
         try:
             proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                    stderr=stderr, text=True, errors="replace", **_group())
+                                    stderr=stderr, text=True, encoding="utf-8",
+                                    errors="replace", **_group())
+            # UTF-8 both ways, not the locale's codepage: the request path is under %TEMP%,
+            # which holds the user's name, and cp1252 would turn 林 into "?" (hermes_child).
         except BaseException:
             stderr.close()
             raise

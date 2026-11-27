@@ -25,7 +25,7 @@ Once `evaluate` runs test tasks, it also needs [Docker](https://docs.docker.com/
 docker pull python:3.12-slim@sha256:e70237b264442328526ff29d6b3c43bd8abcf6cbab78a949322fb69b7d91d6b6
 ```
 
-Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not need Docker. If something is missing, the plugin lists it ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
+Running tasks also needs Python 3.12.11, 3.13.4 or later, and enough memory for the sessions that run at once: about 300 MB each, outside Docker, so 8 GB of RAM at least for the default 16. With less available, fewer run at once ([docs/evaluate/runner.md](docs/evaluate/runner.md) 2.7). `generalize` does not need Docker. If something is missing, the plugin lists it ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
 
 ## Usage
 

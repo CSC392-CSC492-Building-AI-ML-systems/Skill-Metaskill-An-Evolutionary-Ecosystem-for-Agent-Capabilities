@@ -69,6 +69,10 @@ def wait_for(condition, seconds=20):
 
 def test_the_child_waits_for_its_request_line():
     assert hermes_child.wait_for_request(io.StringIO("/tmp/request.json\n")) == "/tmp/request.json"
+    # As bytes (the real stdin), UTF-8 whatever the child's locale: a user name in %TEMP%.
+    path = "C:/Users/林é/AppData/Local/Temp/request.json"
+    assert hermes_child.wait_for_request(io.BytesIO((path + "\n").encode("utf-8"))) == path
+    assert hermes_child.wait_for_request(io.BytesIO(b"")) is None
 
 
 def test_the_child_gives_up_on_eof_or_when_idle_too_long():

@@ -823,3 +823,39 @@ def test_submit_runs_in_a_copy_of_the_callers_context():
             assert executor.submit(PROFILE.get).result() is None  # what the bug was
     finally:
         PROFILE.reset(token)
+
+
+def test_a_rate_limit_after_a_view_was_cancelled_does_not_lengthen_the_shared_pause():
+    """A runner's view cancelled while its call was in flight: the call's 429 is raised, not
+    retried, and the pause the other views (evaluate's background scoring) share stays."""
+    from metaskill.evaluate.backoff import Backoff
+
+    shared = Backoff(sleep=lambda s: None, jitter=0)
+    view = shared.linked()
+
+    def limited_after_cancel():
+        view.cancel()
+        raise RuntimeError("429 Too Many Requests")
+
+    with pytest.raises(RuntimeError, match="429"):
+        view.call(limited_after_cancel)
+    assert shared.limits == 0 and not shared.cancelled
+
+
+def test_a_judge_whose_backoff_was_cancelled_does_not_lengthen_the_shared_pause():
+    from metaskill.evaluate.backoff import Backoff
+    from metaskill.evaluate.judge import JudgeCallFailed
+
+    shared = Backoff(sleep=lambda s: None, jitter=0)
+    from metaskill.evaluate.judge import Judge
+    judge = Judge.__new__(Judge)
+    judge.backoff = shared.linked()
+
+    def limited_after_cancel(*args):
+        judge.backoff.cancel()
+        raise JudgeCallFailed("429 Too Many Requests")
+
+    judge._complete_once = limited_after_cancel
+    with pytest.raises(JudgeCallFailed):
+        judge._complete("i", "m", "s", "p", None, None, None)
+    assert shared.limits == 0

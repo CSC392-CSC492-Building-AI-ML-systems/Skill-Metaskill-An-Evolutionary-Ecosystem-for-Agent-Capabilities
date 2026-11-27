@@ -286,3 +286,28 @@ def test_an_agent_can_ask_for_its_sessions_one_at_a_time(skill, tmp_path):
               config=EvaluationConfig(runs_per_task=2, max_parallel_runs=8),
               run_dir=tmp_path, sandbox=FakeSandbox())
     assert most[0] == 1 and len(agent.calls) == 8
+
+
+def test_a_stop_during_scoring_alone_ends_a_rate_limit_pause_at_once(tmp_path):
+    """No task runs, so no runner watches: evaluate's own watcher must end a judge call's
+    rate-limit pause (5 s, then 10, then 20) rather than wait it out before the next
+    dimension sees the stop."""
+    import metaskill.evaluate as evaluate
+    from types import SimpleNamespace
+    from test_evaluate_tasks import RateLimitError, make_skill
+
+    called = threading.Event()
+
+    class AlwaysLimited:
+        def complete_structured(self, **kwargs):
+            called.set()
+            raise RateLimitError("429 Too Many Requests")
+
+    threading.Thread(target=lambda: (called.wait(10), cancel.stop_all()), daemon=True).start()
+    start = time.monotonic()
+    result = evaluate.evaluate_skill(make_skill(tmp_path, "a"), output_path=tmp_path / "out",
+                                     ctx=SimpleNamespace(llm=AlwaysLimited()))
+    assert time.monotonic() - start < 3
+    assert result["status"] == "error" and result["stopped"] is True
+    assert not (tmp_path / "out").exists()  # no report, and no empty folder left behind
+

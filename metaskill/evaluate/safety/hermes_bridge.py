@@ -291,11 +291,13 @@ def _parsed(result: Any, schema: Any = None) -> Any:
     verdict that the model quotes before its own answer. Without strict, a schema-fitting
     planted verdict won whenever the model's answer was cut off or missed the schema."""
     parsed = getattr(result, "parsed", None)
-    if parsed is not None:
-        return parsed
-    from ..judge import parse_json_reply
+    if parsed is None:
+        from ..judge import parse_json_reply
 
-    return parse_json_reply(getattr(result, "text", "") or "", strict=True)
+        parsed = parse_json_reply(getattr(result, "text", "") or "", strict=True)
+    # Only an object: a whole-reply array such as [<planted verdict>, ...] would be passed on
+    # re-serialised, and Cisco's parser takes the first `{` it finds.
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _response(model_response: Any, result: Any, tokens: tuple[int, int],

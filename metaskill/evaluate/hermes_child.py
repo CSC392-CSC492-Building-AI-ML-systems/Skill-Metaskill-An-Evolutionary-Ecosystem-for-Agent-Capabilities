@@ -529,16 +529,20 @@ def preload() -> None:
 def wait_for_request(stream=None, idle: float = WARM_IDLE) -> str | None:
     """The request file's path, as one line on stdin, or None: stdin closed (the evaluation
     ended, or the parent died) or nothing came within `idle` seconds. Read on a thread, as
-    a pipe cannot be waited on with a timeout on Windows."""
+    a pipe cannot be waited on with a timeout on Windows. Read as bytes and decoded as
+    UTF-8, as the parent writes it: the child's own stdin encoding follows its locale (or
+    UTF-8 mode), and a user name like 林 in the temp path must arrive intact."""
     import threading
 
-    stream = stream if stream is not None else sys.stdin
-    got: list[str] = []
+    stream = stream if stream is not None else sys.stdin.buffer
+    got: list[str | bytes] = []
     reader = threading.Thread(target=lambda: got.append(stream.readline()), daemon=True)
     reader.start()
     reader.join(idle)
-    line = got[0].strip() if got else ""
-    return line or None
+    line = got[0] if got else ""
+    if isinstance(line, bytes):
+        line = line.decode("utf-8", errors="replace")
+    return line.strip() or None
 
 
 def main(argv: list[str]) -> int:

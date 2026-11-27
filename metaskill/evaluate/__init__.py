@@ -55,9 +55,9 @@ from .models import (
 # Under another name: `rank` here would hide the rank module.
 from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
-from . import cancel
+from . import cancel, host
 from .backoff import BackedOffLlm, Backoff
-from .runner import RunnerResult, report_dir, run_tasks, timestamp
+from .runner import MEASURE, RunnerResult, report_dir, run_tasks, timestamp
 from .tasks import TaskError, load_tasks
 from .threads import submit
 
@@ -165,6 +165,7 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
             config.tasks_path = Path(session_cwd()) / config.tasks_path
 
     tasks = None
+    host_room: int | None = None  # how many sessions the host's memory holds (host.py)
     if config.tasks_path is None:
         # Nothing runs, so only what safety needs; Docker is not asked for.
         missing = safety.missing_dependencies()
@@ -195,7 +196,9 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
         resume = getattr(agent, "resume", None)
         if callable(resume):
             resume()
-        _prewarm(agent, config, tasks, sandbox)  # starts while the check below runs
+        # Before any warm child starts: they would count as used memory (host.py).
+        host_room = host.capacity()
+        _prewarm(agent, config, tasks, sandbox, host_room)  # starts while the check below runs
         problem = _check_agent(agent, sandbox)
         if problem:  # one clear error now, not one per run
             return {"status": "error",
@@ -230,8 +233,7 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
     # Every skill is loaded first. With tasks, the dimensions that do not read the runs
     # (Clarity, Safety, Config Cleanliness) are then scored on a background thread while the
     # sessions run here, each skill's in turn, so they add nothing to the call's time
-    # (evaluate.md). One thread: their judge calls are not retried on a rate limit, so they
-    # are not made several at a time next to the sessions.
+    # (evaluate.md). One thread, so they add few model calls at a time next to the sessions.
     loaded: list[Skill | Exception] = []
     for path in paths:
         try:
@@ -246,6 +248,10 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
             if isinstance(skill, Skill):
                 static[i] = submit(background, _static_scores, skill, config, llm, judge,
                                               task_name)
+    # A stop while only scoring runs (no task runs, or the background thread still on its
+    # last skill) is seen at once, not at the next dimension: a judge call waiting out a
+    # rate-limit pause then raises instead of being made. The runner watches its own runs.
+    watcher = cancel.watch(scoring.cancel)
     try:
         for i, (path, skill) in enumerate(zip(paths, loaded)):
             cancel.check()  # stopped: no later skill starts
@@ -262,7 +268,7 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
                 result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                                agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
                                                log_folder=log_folder, backoff=backoff,
-                                               static=static[i].result if i in static else None)
+                                               host_room=host_room, static=static[i].result if i in static else None)
                 result.log_folder = log_folder
             except cancel.EvaluationStopped:
                 raise  # the whole call stops, not this skill alone
@@ -283,7 +289,13 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
             background.shutdown(wait=True)
         # Stopped while the last skill was scored: no report, as the stop command said.
         cancel.check()
+    except cancel.EvaluationStopped:
+        # No report: a run folder no run wrote a log into is not left behind either.
+        _remove_if_empty(run_dir, config.output_dir if created else None)
+        raise
     finally:
+        if watcher is not None:
+            watcher.close()
         if background is not None:
             # Interrupted (Ctrl-C) or done: no skill's scoring starts after this, and the call
             # does not wait for one under way, whose result nobody reads.
@@ -430,10 +442,12 @@ def _make_sandbox(config: EvaluationConfig) -> Any:
     return DockerSandbox(disk=config.sandbox_disk)
 
 
-def _prewarm(agent: Any, config: EvaluationConfig, tasks: list, sandbox: Any) -> None:
+def _prewarm(agent: Any, config: EvaluationConfig, tasks: list, sandbox: Any,
+             host_room: int | None = None) -> None:
     """Start the agent's processes for the first sessions now (HermesAgent.prewarm), so they
     are ready when the runs start: as many as the runner will run at once, which is
-    max_parallel_runs, at most one skill's runs, and at most what the sandbox holds."""
+    max_parallel_runs, at most one skill's runs, at most what the sandbox holds, and at
+    most `host_room`, what the host's memory holds (host.capacity)."""
     prewarm = getattr(agent, "prewarm", None)
     if not callable(prewarm):
         return
@@ -442,6 +456,8 @@ def _prewarm(agent: Any, config: EvaluationConfig, tasks: list, sandbox: Any) ->
     room = capacity() if callable(capacity) else None
     if isinstance(room, int) and room >= 1:
         sessions = min(sessions, room)
+    if isinstance(host_room, int) and host_room >= 1:
+        sessions = min(sessions, host_room)
     if sessions >= 1:
         prewarm(sessions)
 
@@ -500,14 +516,15 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
             judge: Judge | None = None, agent: Any = None, sandbox: Any = None,
             run_dir: Path | None = None, ctx: Any = None, log_folder: str | None = None, judges: Any = None,
             static: Callable[[], dict[Dimension, DimensionScore]] | None = None,
-            backoff: Backoff | None = None,
+            backoff: Backoff | None = None, host_room: Any = MEASURE,
             ) -> tuple[SkillResult, RunnerResult | None, list[tuple[str, dict[str, int]]]]:
     """The skill's result, its task runs (None when no tasks ran), and the (judge_model,
     judge_usage) of every dimension that judged with a judge of its own. judge is the
     run's shared Judge, for the dimensions in JUDGED; evaluate totals its use itself.
     `static` gives the scores of the dimensions that do not read the runs, when they were
     scored elsewhere (on _evaluate's background thread); None scores them here. `backoff`
-    is the call's rate-limit pause, which the task runs share (run_tasks)."""
+    is the call's rate-limit pause, which the task runs share (run_tasks), and `host_room`
+    what the host's memory holds, read before the warm children started (host.py)."""
     from . import safety
 
     runs = None
@@ -515,7 +532,7 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
         try:
             runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
                              sandbox=sandbox, log_folder=log_folder, judges=judges,
-                             backoff=backoff)
+                             backoff=backoff, host_room=host_room)
         except ValueError as e:  # a skill name that cannot be a log folder: no run made
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
                                 errors=[clean(str(e), MAX_REASON_CHARS)])

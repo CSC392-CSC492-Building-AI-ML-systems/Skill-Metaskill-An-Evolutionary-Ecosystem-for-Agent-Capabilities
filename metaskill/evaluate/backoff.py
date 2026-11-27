@@ -153,6 +153,8 @@ class Backoff:
             except Exception as e:
                 if attempt == self.attempts or not is_rate_limited(e):
                     raise
+                if self.cancelled:  # stopped: no retry, and no longer pause for others
+                    raise
                 self.limited()
                 continue
             self.succeeded()
