@@ -61,6 +61,7 @@ MAX_COMMANDS_PER_LINE = 200
 # Characters the Python-level parsers (shell arguments, call arguments, print arguments)
 # may read per skill. Real skills read a few hundred; past this, the rest is not parsed
 # and the skill gets a CRITICAL scan-limit finding.
+MAX_KEY_CHARS = 200  # how far into a frontmatter line its key's colon is looked for
 MAX_PARSED_CHARS = 1_000_000
 
 DESTRUCTIVE = "destructive-unconfirmed"
@@ -693,6 +694,9 @@ def _decode(name: str, raw: bytes, notes: list[str]) -> str:
 # The frontmatter as Skill.load reads it (models.py): only SKILL.md has one.
 _FRONTMATTER = re.compile(r"---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", re.DOTALL)
 _YAML_KEY = re.compile(r"^(?:[^\s#][^:]*:(?:\s|$)|\s*-\s)")
+# A line that holds one `key: value` pair or one list item, and what it holds.
+_PAIR = re.compile(r"(?:-[ \t]+)?([^\s:#\[{\-][^:]*):[ \t]+(.*)")
+_ITEM = re.compile(r"\s*-[ \t]+(.*)")
 
 
 def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
@@ -710,6 +714,34 @@ def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
     if block:
         units.append(_Unit(path, "prose", block, frontmatter=True))
     return units
+
+
+def _is_all_of(line: str, value: str) -> bool:
+    """Whether a frontmatter line already reads as value does: value is its key, its whole
+    value or its whole list item, perhaps quoted. Not one entry of a [...] or {...} on the
+    line, where another entry's warning or confirmation would apply to it; and not with a
+    comment or an escape, as the line then says more, or something else."""
+    if "#" in line or "\\" in line:
+        return False
+    line = line.rstrip()
+    held: list[str] = []
+    if pair := _PAIR.match(line):
+        held += pair.groups()
+    if item := _ITEM.match(line):
+        held.append(item[1])
+    return any(h in (value, f'"{value}"', f"'{value}'") for h in held)
+
+
+def _key_lines(block: str) -> dict[str, int]:
+    """{what stands before a colon at the start of a line: the first such line}, read once,
+    so that finding each key's line does not take a search of the block per key."""
+    found: dict[str, int] = {}
+    for lineno, line in enumerate(block.split("\n"), 1):
+        at = line.find(":", 0, MAX_KEY_CHARS)
+        while at != -1:
+            found.setdefault(line[:at].rstrip(" \t"), lineno)
+            at = line.find(":", at + 1, MAX_KEY_CHARS)
+    return found
 
 
 def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
@@ -735,9 +767,7 @@ def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
     def scan(value: str, lineno: int) -> None:
         if not value.strip() or value in done:
             return
-        written = one_line.get(lineno, "")
-        # Not with a comment or an escape: then the line says more, or something else.
-        if "#" not in written and "\\" not in written and value.strip() in written:
+        if _is_all_of(one_line.get(lineno, ""), value.strip()):
             return
         done.add(value)
         lines = [line for line in value.replace("\x00", "").splitlines() if line.strip()]
@@ -760,9 +790,12 @@ def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
             for child in children:
                 walk(child, lineno)
 
+    key_lines = _key_lines(block)
     for key, value in skill.frontmatter.items():
-        at = re.search(rf"(?m)^{re.escape(str(key)[:200])}[ \t]*:", block)
-        lineno = block.count("\n", 0, at.start()) + 1 if at else 1
+        try:
+            lineno = key_lines.get(str(key), 1)
+        except ValueError:  # an integer too long for Python to write out, from 0x...
+            lineno = 1
         walk(key, lineno)
         walk(value, lineno)
     return units, limited
@@ -859,12 +892,14 @@ def _command_end(text: str, start: int = 0) -> int:
     return len(text)
 
 
-def _args(text: str, end: int) -> list[str]:
+def _args(text: str, end: int, limit: int | None = None) -> list[str]:
     """Shell-like arguments after position end, up to the end of the command. Charged
     to the scan's parse budget; nothing once it has run out (MET-42)."""
     if _parsing_stopped():
         return []
     stop = _command_end(text, end)
+    if limit is not None:
+        stop = min(stop, limit)
     if not _parse(stop - end):
         return []
     segment = text[end:stop]
@@ -942,6 +977,8 @@ _CMD_DELETE = re.compile(r"(?<![\w.%$-])(?:rmdir|rd|del|erase)(?=\s|/[a-z?](?![\
 _CMD_SWITCHES = re.compile(r"(?:/[A-Za-z?](?::[-\w]*)?)+")
 # PowerShell's Remove-Item and its aliases. `rm` is an alias too, and is read as rm above.
 _PS_DELETE = re.compile(r"(?<![\w.%$-])(?:Remove-Item|ri|rd|rmdir|del|erase)(?![\w-])", re.I)
+# A path written onto its parameter: -Path:$HOME, -LiteralPath:C:\x.
+_PS_PATH = re.compile(r"-(?:literalpath|path|lp):(.+)", re.I)
 # -Recurse, and any shorter form of it, unless it is switched off with :$false.
 _PS_RECURSE = re.compile(r"-r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?(?::(?!\$?(?:false|0)\b).*)?", re.I)
 
@@ -1024,7 +1061,10 @@ def _follows(target: str) -> bool:
 _RUNS_STRING = re.compile(
     r"(?:\b(?:ba|z|da|k)?sh[\"']?[\s,]+(?:[\"']?-[A-Za-z]+[\"']?[\s,]+){0,5}[\"']?-[A-Za-z]*c[\"']?[\s,]+"
     r"|\beval\s+|\bssh\s+[^;&|]{0,80}\s"
-    r"|\b(?:os\.system|os\.popen|subprocess\.\w+|execSync|exec|system|popen)\s*\(\s*)"
+    r"|\b(?:os\.system|os\.popen|subprocess\.\w+|execSync|exec|system|popen)\s*\(\s*"
+    r"|(?i:\b(?:iex|Invoke-Expression)\s+(?:-Command\s+)?"
+    r"|\bcmd(?:\.exe)?\s+/[ck]\s+"
+    r"|\b(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+\s+){0,5}-(?:c|Command)\s+))"
     r"[rRbBfF]{0,2}\Z")
 _RUNS_STRING_REACH = 120  # characters before the quote the pattern is searched in
 
@@ -1049,11 +1089,25 @@ def _no_target(text: str, start: int, prose: bool, path: str) -> bool:
                                     or text.find("`", opened, start) >= 0)
 
 
+def _delete_args(text: str, start: int, end: int, prose: bool, path: str,
+                 cmd: bool = False) -> list[str]:
+    """The arguments of a delete command found at start. One written inside a string ends
+    where the string does, so that in `os.system("rm -rf /")` the target is `/`. Not when
+    that leaves no target, as in `"rm -rf " + folder`: what follows may name it."""
+    span = None if prose else _span_at(path, text, start)
+    if span and span[2] == "string" and span[0] < start and text[span[1] - 1] == text[span[0]]:
+        inside = _args(text, end, span[1] - 1)
+        if any(not a.startswith("-") and not (cmd and _CMD_SWITCHES.fullmatch(a))
+               for a in inside):
+            return inside
+    return _args(text, end)
+
+
 def _deletes(text: str, prose: bool, path: str = "",
              aliases: frozenset[str] = frozenset()) -> list[_Hit]:
     hits = []
     for m in _RM.finditer(text):
-        args = _args(text, m.end())
+        args = _delete_args(text, m.start(), m.end(), prose, path)
         flags, targets, ended = [], [], False
         for a in args:
             if not ended and a == "--":
@@ -1103,13 +1157,15 @@ def _deletes(text: str, prose: bool, path: str = "",
 
     powershell: set[int] = set()  # where a delete was read as PowerShell, not as cmd.exe
     for m in _PS_DELETE.finditer(text):
-        args = _args(text, m.end())
-        if not any(_PS_RECURSE.fullmatch(a) for a in args):
+        args = _delete_args(text, m.start(), m.end(), prose, path, cmd=True)
+        # A quote left on the last word closes the string the command is in.
+        if not any(_PS_RECURSE.fullmatch(a.rstrip("'\"")) for a in args):
             continue
         # rd, del and the rest are cmd.exe's too, whose switches are not targets. To
         # Remove-Item and ri, `/a/b` is a path.
         cmd_too = m.group(0).lower() not in ("remove-item", "ri")
-        targets = [a for a in args if not a.startswith("-")
+        targets = [p[1] if (p := _PS_PATH.fullmatch(a)) else a for a in args
+                   if _PS_PATH.fullmatch(a) or not a.startswith("-")
                    and not (cmd_too and _CMD_SWITCHES.fullmatch(a))]
         if not targets:
             if not _no_target(text, m.start(), prose, path):
@@ -1124,8 +1180,8 @@ def _deletes(text: str, prose: bool, path: str = "",
     for m in _CMD_DELETE.finditer(text):
         if m.start() in powershell:
             continue
-        args = _args(text, m.end())
-        switches = [a for a in args if _CMD_SWITCHES.fullmatch(a)]
+        args = _delete_args(text, m.start(), m.end(), prose, path, cmd=True)
+        switches = [a for a in args if _CMD_SWITCHES.fullmatch(a.rstrip("'\""))]
         if not any(part.lower() == "s" for a in switches for part in a.split("/")):
             continue  # not recursive
         targets = [a for a in args if not a.startswith("/")]
@@ -1331,10 +1387,14 @@ def _shell_trace(unit: _Unit) -> list[Finding]:
 # An interpreter runs what it is piped only when given no script of its own:
 # "| bash" runs the download, "| python3 -c '...'" only parses it as data.
 _CURL_PIPE = re.compile(
-    # sudo's flags, some with a separate argument. That argument cannot start with "-", so
-    # a run of flags is read one way only, not in exponentially many.
+    # sudo and env, with their flags (some taking a separate argument) and variables. The
+    # argument cannot start with "-" or hold "=", so a run of words is read one way only,
+    # not in exponentially many.
     r"(?<![\w-])(?:curl|wget)\b[^\n|]*\|\s*"
-    r"(?:sudo(?:\s+(?:(?:-[ug]|--user|--group)\s+(?!-)[\w.-]+|-[\w=.-]+))*\s+)?"
+    r"(?:(?:(?:/usr)?/bin/)?(?:sudo|env)"
+    r"(?:\s+(?:(?:-[ugp]|--user|--group|--prompt)\s+(?!-)[^\s|;&=<>]+(?=\s)"
+    r"|-[\w=.-]+|[A-Za-z_]\w*=[^\s|;&]*))*\s+){0,3}"
+    r"(?:(?:/usr)?(?:/local)?/bin/)?"
     r"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
     r"(?!\s+(?:-[a-zA-Z]*c\b|-m\b|[^\s-]))"
     r"|(?<![\w-])(?:sh|bash|zsh)\b[^\n]*<\(\s*(?:curl|wget)\b"
@@ -1589,11 +1649,14 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
         return ((0, len(line), "comment"),)
     # PowerShell and cmd.exe do not escape with a backslash: "C:\dir\" ends at the quote.
     escapes = suffix not in (".ps1", ".psm1", ".bat", ".cmd")
-    spans, quote, opened, i = [], "", 0, 0
+    # A block comment opened and, if it is, closed on this line.
+    block = (("<#", "#>") if suffix in (".ps1", ".psm1")
+             else ("/*", "*/") if suffix in _SLASH_COMMENTS else None)
+    spans, quote, opened, i, ansi = [], "", 0, 0, False
     while i < len(line):
         c = line[i]
         if quote:
-            if c == "\\" and quote == '"' and escapes:
+            if c == "\\" and (quote == '"' or ansi) and escapes:
                 i += 1
             elif c == quote:
                 spans.append((opened, i + 1, "string"))
@@ -1602,6 +1665,13 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
             i += 1  # `don\'t` opens no string
         elif c in "'\"":
             quote, opened = c, i
+            ansi = c == "'" and line[i - 1:i] == "$"  # bash's $'it\\'s'
+        elif block and line.startswith(block[0], i):
+            end = line.find(block[1], i + 2)
+            end = len(line) if end < 0 else end + 2
+            spans.append((i, end, "comment"))
+            i = end
+            continue
         elif (i == 0 or line[i - 1].isspace()) and (
                 c == "#" or (line.startswith("//", i) and (suffix in _SLASH_COMMENTS
                                                           or suffix in MARKDOWN_SUFFIXES))):

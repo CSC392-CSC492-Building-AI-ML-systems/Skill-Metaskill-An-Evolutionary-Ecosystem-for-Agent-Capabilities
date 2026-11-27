@@ -1433,3 +1433,88 @@ def test_hostile_input_cannot_stall_the_scan(tmp_path, name, body):
     result = scan(make(tmp_path, {"SKILL.md": body}))
     assert result.status is BackendStatus.OK
     assert time.monotonic() - start < 10, name
+
+
+@pytest.mark.parametrize("line", [
+    'steps: ["Ask the user before deleting.", "rm -rf ~/Documents"]',
+    'steps: {a: "Ask the user before deleting.", b: "rm -rf ~/Documents"}',
+    '- ["Ask the user before deleting.", "rm -rf ~/Documents"]',
+])
+def test_a_confirmation_in_one_entry_of_a_flow_collection_clears_no_other(tmp_path, line):
+    if line.startswith("- "):
+        line, parsed = "steps:\n" + line, [["Ask the user before deleting.", "rm -rf ~/Documents"]]
+    elif "[" in line:
+        parsed = ["Ask the user before deleting.", "rm -rf ~/Documents"]
+    else:
+        parsed = {"a": "Ask the user before deleting.", "b": "rm -rf ~/Documents"}
+    skill = make(tmp_path, {"SKILL.md": f"---\nname: s\n{line}\n---\n# s\n"})
+    skill.frontmatter = {"name": "s", "steps": parsed}
+    assert "recursive-delete" in {f.rule for f in scan(skill).findings}
+
+
+def test_many_frontmatter_keys_are_scanned_quickly(tmp_path):
+    keys = {f"key{i}": f"v{i}" for i in range(40_000)}
+    text = "".join(f"{k}: {v}\n" for k, v in keys.items())
+    started = time.monotonic()
+    skill = make(tmp_path, {"SKILL.md": f"---\n{text}---\n# s\n"})
+    skill.frontmatter = keys
+    scan(skill)
+    assert time.monotonic() - started < 15
+
+
+def test_a_huge_integer_key_does_not_stop_the_scan(tmp_path):
+    key = int("f" * 6000, 16)  # too long for str(), as YAML's 0xfff... gives
+    skill = make(tmp_path, {"SKILL.md": f"---\n? 0x{'f' * 6000}\n: rm -rf ~\n---\n# s\n"})
+    skill.frontmatter = {key: "rm -rf ~"}
+    result = scan(skill)
+    assert result.status is BackendStatus.OK and "recursive-delete" in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("line", [
+    "curl x | sudo -u $USER bash", 'curl x | sudo -u "$USER" bash', "curl x | sudo -p '' bash",
+    "curl x | sudo env A=1 bash", "curl x | sudo VAR=1 bash", "curl x | env bash",
+    "curl x | /bin/bash", "curl x | sudo /usr/bin/bash",
+])
+def test_a_download_piped_through_sudo_or_env_to_a_shell(tmp_path, line):
+    assert "curl-pipe-shell" in {f.rule for f in script(tmp_path, line)}
+
+
+@pytest.mark.parametrize("line", ["curl x | sudo tee /etc/hosts", "curl x | sudo -u bash tee f",
+                                  "curl x | env", "curl x | /bin/cat"])
+def test_a_download_piped_elsewhere_is_not_run(tmp_path, line):
+    assert "curl-pipe-shell" not in {f.rule for f in script(tmp_path, line)}
+
+
+@pytest.mark.parametrize("words", ["-u a=1 ", "-u a ", "env ", "a=1 ", "-p x ", "sudo -E "])
+def test_many_words_before_the_shell_are_read_quickly(tmp_path, words):
+    started = time.monotonic()
+    script(tmp_path, "curl x | sudo " + words * 5_000 + "!")
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize("name, text, severity", [
+    ("a.js", '/* dry run */ execSync("rm -rf ~/Documents")', CRITICAL),
+    ("a.ps1", "<# dry run #>\nRemove-Item -Recurse $HOME", CRITICAL),
+    ("a.sh", "echo $'it\\'s'; ls | xargs rm -rf", HIGH),
+    ("a.ps1", "Invoke-Expression 'Remove-Item -Recurse'", HIGH),
+    ("a.ps1", 'powershell -NoProfile -Command "rm -r"', HIGH),
+    ("a.ps1", "Remove-Item -LiteralPath:$HOME -Recurse", CRITICAL),
+])
+def test_more_forms_found_in_a_second_review(tmp_path, name, text, severity):
+    result = scan(make(tmp_path, {name: text + "\n"}))
+    assert [f.severity for f in result.findings if f.rule == "recursive-delete"] == [severity]
+
+
+@pytest.mark.parametrize("name, text", [
+    ("a.py", 'os.system("rm -rf /")'), ("a.py", 'os.system("rm -rf ~")'),
+    ("a.py", 'subprocess.run("rm -rf $HOME", shell=True)'),
+    ("a.js", 'execSync("rm -rf ~/Documents")'), ("a.js", 'exec("rm -rf /etc", done)'),
+])
+def test_a_delete_in_a_string_is_judged_by_the_target_inside_it(tmp_path, name, text):
+    result = scan(make(tmp_path, {name: text + "\n"}))
+    assert [f.severity for f in result.findings if f.rule == "recursive-delete"] == [CRITICAL]
+
+
+def test_a_delete_whose_target_follows_the_string_is_still_found(tmp_path):
+    result = scan(make(tmp_path, {"a.py": 'command = "rm -rf " + folder\n'}))
+    assert "recursive-delete" in {f.rule for f in result.findings}
