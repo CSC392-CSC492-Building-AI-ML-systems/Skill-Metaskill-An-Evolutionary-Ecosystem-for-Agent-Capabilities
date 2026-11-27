@@ -16,18 +16,20 @@ print(table(ranking))                            # the terminal table
 
 | Function | Description |
 |---|---|
-| `make_scores(dimension_scores, config)` | `Scores` from `{Dimension: DimensionScore}`, weighted with `config.weights`. A dimension missing from the mapping counts as `None` |
+| `make_scores(dimension_scores, config, tests=())` | `Scores` from `{Dimension: DimensionScore}`, weighted with `config.weights`. A dimension missing from the mapping counts as `None`. `tests` are the skill's task runs (`SkillResult.tests`), for Robustness's credit |
 | `rank(results, config)` | `Ranking` of the given `SkillResult`s, weighted with `config.weights` (2) |
 | `table(ranking)` | The Markdown table of evaluate.md section 2, then the notes and the recommendation (5) |
 | `markdown(meta, ranking)` | The contents of `ranked-evaluation.md` (5), including each skill's task section |
-| `overall(values, weights)` | Weighted mean of the six dimensions; `None` if any dimension has no value, whatever its weight |
+| `overall(values, weights, pass_rate=None)` | Weighted mean of the six dimensions, with Robustness counted as `robustness_credit`; `None` if any dimension has no value, whatever its weight |
+| `with_skill_pass_rate(tests)` | Share of with-skill runs that passed; `None` when there are none |
+| `robustness_credit(robustness, pass_rate)` | What Robustness adds to `overall`: its score times the with-skill pass rate, or the score as it is when the pass rate is `None` (evaluate.md 5.1, MET-60) |
 | `values(scores)` | The six dimension values of a `Scores`, keyed by `Dimension` |
 
 `make_scores` and `rank` both take the `EvaluationConfig`, so the `overall` stored in the report and the order in the ranking always come from the same weights. Both check the weights again (`models.check_weights`), since a config's `weights` can be replaced after it was made. The defaults, `models.DEFAULT_WEIGHTS`, are safety 4, quality 3, robustness 3, clarity 2, efficiency 2, configuration cleanliness 1 (evaluate.md 5.1). They are relative: the mean divides by their sum. `overall` is the low-level piece: it takes the weights directly and expects them checked.
 
 ## 2. Ranking
 
-`rank` recomputes `overall` from the dimension scores, rather than reading `Scores.overall`.
+`rank` recomputes `overall` from the dimension scores and the result's `tests` (for the pass rate), rather than reading `Scores.overall`.
 
 1. Skills whose `overall` is a number are ranked, ordered by `overall`, then `lift`, then safety, quality, robustness, clarity, efficiency and configuration cleanliness (`TIE_BREAK`). Skills equal on all of these share a rank, and the next place is skipped (`1, 1, 3`). They are listed by name, which only keeps the output stable and says nothing about them. Scores are compared rounded to 9 decimal places, so floating-point noise does not decide a place. The name is compared as text, since a YAML `name` can be a number. **[OPEN]** Whether ties should be judged more coarsely ([evaluate.md](../evaluate.md), open question 2).
 2. Skills with a dimension that scored `None` follow, with `rank` and `overall` `None`. They are ordered by name, since their scores do not compare with each other. Their remaining dimensions are not averaged into a replacement score (evaluate.md 2.1).
@@ -62,6 +64,7 @@ Per skill:
 - **Not ranked.** Which dimensions are missing, with their status and detail when the result has them (`clarity (skipped: no API key)`). Dimensions with the same status and detail are named together (`quality, clarity (skipped: not built yet)`). When no skill is ranked and every one is missing the same, one `Ranking.notes` entry says so instead (`No skill is ranked: no score for ...`).
 - **Partial safety.** The safety status is `partial` (e.g. a `deep` scan that fell back to `static`, or a scanner that is not installed) while another skill in the ranking has `ok`. Only then is its safety score not comparable with the others. The skill is still ranked.
 - **CRITICAL safety findings.** How many, and where. The skill stays in the ranking (evaluate.md 5.2).
+- **Reduced Robustness credit.** A ranked skill whose with-skill pass rate is below 1 and whose Robustness is above 0: `Robustness 0.90 counts toward overall as 0.60, scaled by its with-skill pass rate (0.67)`, so the table's Robustness and `overall` can be read together.
 
 For the ranking as a whole (`Ranking.notes`): when every skill with a safety score is `partial`, one note says so, rather than a flag on each skill, since their scores still compare with each other.
 
@@ -108,4 +111,4 @@ Skill names come from the skill's own frontmatter, finding locations from its fi
 
 ## 7. Testing
 
-[`tests/test_task_report.py`](../../tests/test_task_report.py) covers the task section: no section without tasks, the rows and their means, the `vs baseline` label (including rates over different run counts), a `?` for tool calls nobody measured, the failure list and its cap, the note for runs not made and the log folder, and that a task id, a reason or a name with Markdown, a `|` or a line break cannot inject anything or break the table. [`tests/test_rank.py`](../../tests/test_rank.py) builds `SkillResult`s directly. It covers the default weights and their order of priority, the weighted mean, weight validation (also after the config was made), ordering and every tie-break, shared ranks, that the order does not depend on input order, unranked skills, their notes and that their scores are not averaged, no winner when every skill is incomplete, partial safety flagged only when statuses differ, CRITICAL findings, the lift warning, the recommendation and the table, and names and notes that try to add rows, send escape codes or inject Markdown links, images or HTML.
+[`tests/test_task_report.py`](../../tests/test_task_report.py) covers the task section: no section without tasks, the rows and their means, the `vs baseline` label (including rates over different run counts), a `?` for tool calls nobody measured, the failure list and its cap, the note for runs not made and the log folder, and that a task id, a reason or a name with Markdown, a `|` or a line break cannot inject anything or break the table. [`tests/test_rank.py`](../../tests/test_rank.py) builds `SkillResult`s directly. It covers the default weights and their order of priority, the weighted mean, Robustness scaled by the with-skill pass rate (a skill that fails every run the same way does not outrank one that mostly works, MET-60), and that `make_scores` and `rank` agree on it, weight validation (also after the config was made), ordering and every tie-break, shared ranks, that the order does not depend on input order, unranked skills, their notes and that their scores are not averaged, no winner when every skill is incomplete, partial safety flagged only when statuses differ, CRITICAL findings, the lift warning, the recommendation and the table, and names and notes that try to add rows, send escape codes or inject Markdown links, images or HTML.
