@@ -47,7 +47,7 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not 
 
 `/metaskill skills` shows the folder relative paths start from, which is your session's, and lists the skills under it and the installed ones; `/metaskill skills <text>` narrows the list. A name that is not found gets suggestions. Hermes does not autocomplete a plugin command's arguments, so this listing stands in for that.
 
-The command runs these itself and prints the result when it finishes. Anything else after `/metaskill` goes to the agent, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply.
+The command runs these itself and prints the result when it finishes. A single word that is no operation gets the usage, or, if it is a plan, the command that runs it. Anything longer goes to the agent, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply.
 
 ```yaml
 plugins:

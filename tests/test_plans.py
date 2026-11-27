@@ -358,6 +358,32 @@ def test_configure_approve_and_rank(command, skills, root, tmp_path):
     assert f"- Plan: {plan_id}" in report_file.with_suffix(".md").read_text()
 
 
+@pytest.mark.parametrize("skill_list, operation", [
+    ("skills/adder, skills/summer", "rank"), ("skills/adder", "evaluate")])
+def test_a_plan_without_an_operation_says_which_to_type(command, skills, skill_list,
+                                                      operation):
+    command(f"configure {skill_list} --name my-sums")
+    out = command("my-sums")
+    assert "not approved" in out and "/metaskill approve my-sums" in out
+    command("approve my-sums")
+    for typed in ("my-sums", "MY-SUMS", '"my-sums"'):
+        assert command(typed) == (f"my-sums is a plan. Run it with: /metaskill {operation} "
+                                  "my-sums")
+
+
+def test_a_plan_id_without_an_operation_is_answered_too(command, skills, root):
+    command("configure skills/adder")
+    [plan_id] = saved(root)
+    assert f"/metaskill approve {plan_id}" in command(plan_id)
+    assert "there is no plan plan-000000" in command("plan-000000")
+
+
+@pytest.mark.parametrize("word", ["plan", "myplan", "help", "skills/adder", "a,b"])
+def test_an_unknown_single_word_gets_the_usage(command, skills, word):
+    out = command(word)  # the fixture fails the test if it is sent to the agent
+    assert out.startswith(f"metaskill: unknown command {word}\n") and "usage:" in out
+
+
 @pytest.mark.parametrize("options", [
     '--name sums --note "Check the -- blank cells, please"',
     '--note Check the blank cells --name sums',

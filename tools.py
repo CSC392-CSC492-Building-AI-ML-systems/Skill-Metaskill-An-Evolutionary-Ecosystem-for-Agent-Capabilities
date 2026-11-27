@@ -561,14 +561,33 @@ def _summary(result, paths=()):
     return "\n".join(lines)
 
 
+def _one_word(word, where):
+    """What to say to a single word that is no operation: for a plan, how to use it, else
+    the usage. The agent cannot run a plan and would only ask what the word means."""
+    plans = _plans_module()
+    try:
+        plan_id = plans.resolve(word.strip("\"'"))
+        if plan_id is not None:
+            plan = plans.load(plan_id)
+            if plan.status != plans.APPROVED:
+                return (f"{_called(plan)} is a plan that is not approved yet. Check its files "
+                        f"in {plan.folder}, then run: /metaskill approve {_called(plan)}")
+            operation = "rank" if len(plan.data["skills"]) > 1 else "evaluate"
+            return f"{_called(plan)} is a plan. Run it with: /metaskill {operation} {_called(plan)}"
+    except plans.PlanError as e:
+        return f"metaskill: {e}"
+    return f"metaskill: unknown command {word}\n{USAGE}\n{where}"
+
+
 def make_command_handler(ctx):
     """Build the /metaskill handler.
 
     An operation runs here and prints its result, or says how to name the skill.
-    `skills` lists the skills it can find. Anything else goes to the agent as a user
-    message. Hermes only allows that for a plugin with allow_gateway_injection, and a
-    classic CLI session does not show the agent's reply. Every path returns text: Hermes
-    prints nothing for a handler that returns None.
+    `skills` lists the skills it can find. Any other single word is answered here.
+    Anything else goes to the agent as a user message. Hermes only allows that for a
+    plugin with allow_gateway_injection, and a classic CLI session does not show the
+    agent's reply. Every path returns text: Hermes prints nothing for a handler that
+    returns None.
     """
 
     def handle_command(raw_args):
@@ -642,6 +661,8 @@ def make_command_handler(ctx):
                 result = run(operation, target, config_path=config_path, ctx=ctx,
                              tasks_path=tasks_path)
                 return _summary(result, paths)
+            if len(request.split()) == 1:
+                return _one_word(request, where)
             if not ctx.inject_message(f"Use the metaskill tool to: {request}"):
                 return ("metaskill: could not send the request to the agent. Set "
                         "plugins.entries.metaskill.allow_gateway_injection: true in "

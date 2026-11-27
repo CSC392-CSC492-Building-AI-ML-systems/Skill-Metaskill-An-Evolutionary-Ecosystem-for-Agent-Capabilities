@@ -20,6 +20,9 @@ name is one word of up to 40 letters, digits, `-` and `_`, does not start with `
 unique among plans, in any case. If a name is also a skill's, `rank` and `evaluate` run nothing
 and say how to give either one. The ID always works, and reports record the ID.
 
+A plan given without an operation (`/metaskill demo`) runs nothing: the reply says which command
+to type. It is not sent to the agent, which cannot run a plan.
+
 ## 1. What a plan holds
 
 `metaskill/plans/<id>/` under the Hermes home of the profile, so outside every skill:
