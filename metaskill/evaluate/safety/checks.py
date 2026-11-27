@@ -1668,7 +1668,7 @@ _BEFORE_JS_PATTERN = re.compile(
     r"(?:\A|[(,=:\[!&|?{};*%<>~^]|(?<!\+)\+|(?<!-)-|\b(?:return|typeof|case))\s*\Z")
 # What can follow a pattern: its flags, then an operator or the end. After a `)` it also
 # has to be used at once, as in `if (x) /'/.test(s)`, or it is a division.
-_AFTER_JS_PATTERN = re.compile(r"[dgimsuvy]{0,8}\s*(?:[.,;:)\]}?|&=!]|\Z)")
+_AFTER_JS_PATTERN = re.compile(r"[dgimsuvy]{0,8}\s*(?:[.,;:)\]}?|&=!+\-*%<>^]|\Z)")
 _USED_JS_PATTERN = re.compile(r"[dgimsuvy]{0,8}\.(?:test|exec)\b")
 # Languages in which a backslash escapes inside single quotes too, which a shell's do not.
 _SINGLE_QUOTE_ESCAPES = _SLASH_COMMENTS | {".py"}
