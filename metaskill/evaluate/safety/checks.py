@@ -630,7 +630,7 @@ def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], 
         rel = Path(rel)
         name, path = rel.as_posix(), Path(skill.path) / rel
         if (rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES
-                and not _has_shebang(path)):
+                and not _has_shebang(skill.path, path)):
             continue
         try:
             if through_link(skill.path, path):
@@ -654,11 +654,11 @@ def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], 
     return files, unchecked
 
 
-def _has_shebang(path: Path) -> bool:
+def _has_shebang(root: Path, path: Path) -> bool:
     """Whether a file with another suffix, or none, is a script all the same: it starts
     with `#!`, so it can be run by its name. Links are not read."""
     try:
-        if path.is_symlink() or not path.is_file():
+        if through_link(root, path) or not path.is_file():
             return False
         with path.open("rb") as stream:
             return stream.read(2) == b"#!"

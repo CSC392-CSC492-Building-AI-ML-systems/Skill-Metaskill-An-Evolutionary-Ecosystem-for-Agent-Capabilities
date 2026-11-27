@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import time
 
 import pytest
 
@@ -163,3 +164,33 @@ def test_a_link_target_with_a_drive_or_colon_is_refused(tmp_path, kind, target):
 @pytest.mark.parametrize("target", ["file", "sub/file"])
 def test_a_link_that_goes_down_is_kept(tmp_path, target):
     assert _keep(link_member(target), str(tmp_path)) is not None
+
+
+# --- Listing a skill's files -----------------------------------------------------------------
+
+
+def test_the_files_under_a_junction_are_not_the_skills(pretend_junction):
+    (pretend_junction / "scripts").mkdir()
+    (pretend_junction / "scripts" / "run.sh").write_text("echo\n", encoding="utf-8")
+    (pretend_junction / ".hidden").write_text("x", encoding="utf-8")
+    (pretend_junction / "node_modules").mkdir()
+    (pretend_junction / "node_modules" / "a.js").write_text("x", encoding="utf-8")
+    files = Skill.load(pretend_junction).files
+    assert [f.as_posix() for f in files] == ["scripts/run.sh"]
+
+
+@windows_only
+def test_junctions_back_into_a_skill_do_not_stall_loading_it(tmp_path):
+    skill = make_skill(tmp_path)
+    made = [skill / "a", skill / "b"]  # two make the walk branch at every level
+    for link in made:
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(skill)], check=True,
+                       capture_output=True)
+    try:
+        start = time.monotonic()
+        assert Skill.load(skill).files == []
+        assert [f.rule for f in ChecksBackend().scan(Skill.load(skill), SafetyTier.STATIC).findings] == []
+        assert time.monotonic() - start < 10
+    finally:
+        for link in made:
+            os.rmdir(link)
