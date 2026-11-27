@@ -952,8 +952,7 @@ _PRINT = re.compile(
     r"(?<![\w.])(?:print|console\.(?:log|error|info|warn|debug)|logger\.\w+|logging\.\w+|puts)\s*\(")
 _ENV_NAMES = re.compile(
     r"""(?:environ(?:\.get)?\s*[\[(]\s*|getenv\s*\(\s*)['"]([A-Za-z_]\w*)['"]|process\.env\.([A-Za-z_]\w*)""")
-# A backtick string is a template literal; what it puts in ${...} is read by _BRACES.
-_STRING = re.compile(r"""(['"`])(?:\\.|(?!\1).)*\1""")
+_STRING = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1""")
 _ENV_DUMP_LINE = re.compile(r"^\s*(?:\$\s+)?(?:sudo\s+)?(?:env|printenv)\s*(?:$|[|;&>#])")
 _ENV_DUMP_CODE = re.compile(
     r"print\(\s*(?:dict\(\s*)?os\.environ\s*\)?\s*\)|console\.log\(\s*process\.env\s*\)"
@@ -974,10 +973,76 @@ _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 _EVERYDAY_NAMES = {"key", "pass"}
 
 
-def _is_secret_variable(name: str) -> bool:
-    """is_secret_name for a name among a print call's arguments (not an environment
-    variable's)."""
-    return name not in _EVERYDAY_NAMES and is_secret_name(name)
+def _is_secret_variable(m: re.Match[str]) -> bool:
+    """is_secret_name for a name found among a print call's arguments (not an environment
+    variable's). An everyday name counts when it is an attribute: `config.key`."""
+    name = m.group(0)
+    if name in _EVERYDAY_NAMES and m.string[max(0, m.start() - 1):m.start()] != ".":
+        return False
+    return is_secret_name(name)
+
+
+# What _blank_templates looks at.
+_TEMPLATE_MARKS = re.compile(r"""\$\{|[`'"{}\\]""")
+
+
+def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
+    """text with the words of its template literals (backtick strings) turned into spaces,
+    so only what their ${...} compute is read, and where the literals are. A literal that
+    does not close on the line is left as it is. One pass, so it stays linear (MET-42)."""
+    spans: list[tuple[int, int]] = []
+    blank: list[tuple[int, int]] = []
+    # One entry per open literal, [start, start of its current words, words so far], and
+    # per open ${...}, [None, depth of braces inside it].
+    stack: list[list] = []
+    unmatched: set[str] = set()  # quotes with no partner further on
+    end, skip = len(text), 0
+    # Only these characters matter, so the rest is skipped at the regex engine's speed.
+    for mark in _TEMPLATE_MARKS.finditer(text):
+        i, c = mark.start(), mark.group(0)
+        if i < skip:  # escaped, or inside a quoted string
+            continue
+        top = stack[-1] if stack else None
+        if top is not None and top[0] is not None:  # inside a literal's words
+            if c == "\\":
+                skip = i + 2
+            elif c == "${":
+                top[2].append((top[1], i))
+                stack.append([None, 0])
+            elif c == "`":
+                blank += [*top[2], (top[1], i + 1)]
+                spans.append((top[0], i + 1))
+                stack.pop()
+        elif c == "\\":
+            skip = i + 2  # `\\`` opens no literal
+        elif c == "`":
+            stack.append([i, i, []])
+        elif c in ("'", '"') and c not in unmatched:
+            quoted = _STRING.match(text, i)
+            if quoted:
+                skip = quoted.end()
+            else:
+                unmatched.add(c)
+        elif top is not None and c in ("{", "${"):
+            top[1] += 1
+        elif top is not None and c == "}":
+            if top[1]:
+                top[1] -= 1
+            else:
+                stack.pop()
+                stack[-1][1] = i + 1  # the literal's words go on
+    # One left open counts as running to the end: a call inside it is read on its own.
+    spans += [(entry[0], end) for entry in stack if entry[0] is not None]
+    outermost: list[tuple[int, int]] = []  # a nested literal is inside one already listed
+    for start, stop in sorted(spans):
+        if not outermost or start >= outermost[-1][1]:
+            outermost.append((start, stop))
+    if not blank:
+        return text, outermost
+    chars = list(text)
+    for start, stop in blank:
+        chars[start:stop] = " " * (stop - start)
+    return "".join(chars), outermost
 
 
 def _names_secret(args: str) -> bool:
@@ -985,11 +1050,10 @@ def _names_secret(args: str) -> bool:
     inside {...}, or a name outside string literals."""
     if any(is_secret_name(a or b) for a, b in _ENV_NAMES.findall(args)):
         return True
-    names = []
-    for inner in _BRACES.findall(args):
-        names += _IDENTIFIER.findall(inner)
-    names += _IDENTIFIER.findall(_STRING.sub(" ", args))
-    return any(_is_secret_variable(n) for n in names)
+    code = _blank_templates(args)[0]
+    return any(_is_secret_variable(n)
+               for part in [*_BRACES.findall(code), _STRING.sub(" ", code)]
+               for n in _IDENTIFIER.finditer(part))
 
 
 class _SecretView:
@@ -1008,19 +1072,23 @@ class _SecretView:
 
     def __init__(self, text: str, start: int):
         secret_at = [-1]
-        strings = [(m.start(), m.end()) for m in _STRING.finditer(text, start)]
         envs = list(_ENV_NAMES.finditer(text, start))
+        blanked, literals = _blank_templates(text[start:])
+        text = text[:start] + blanked  # the same length, so positions do not move
+        strings = [(m.start(), m.end()) for m in _STRING.finditer(text, start)]
         braces = list(_BRACES.finditer(text, start))
         self.spans = [strings, [(m.start(), m.end()) for m in envs],
-                      [(m.start(), m.end()) for m in braces]]
+                      [(m.start(), m.end()) for m in braces],
+                      [(s + start, e + start) for s, e in literals]]
         secret_at += [m.start() for m in envs if is_secret_name(m.group(1) or m.group(2))]
         secret_at += [m.start() for m in braces
-                      if any(_is_secret_variable(n) for n in _IDENTIFIER.findall(m.group(1)))]
+                      if any(_is_secret_variable(n)
+                             for n in _IDENTIFIER.finditer(m.group(1)))]
         # Names outside string literals, as _STRING.sub(" ", ...) leaves them.
         at = start
         for s, e in strings + [(len(text), len(text))]:
             secret_at += [n.start() for n in _IDENTIFIER.finditer(text, at, s)
-                          if _is_secret_variable(n.group(0))]
+                          if _is_secret_variable(n)]
             at = e
         self.last_secret = max(secret_at)
         self.starts = [[s for s, _ in spans] for spans in self.spans]

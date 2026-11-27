@@ -349,6 +349,11 @@ def test_secret_names(name, secret):
     ("run.py", 'print(f"{config[\'password\']}")', "print-secret"),
     ("run.py", 'print(f"{cfg.get(\'api_key\')}")', "print-secret"),
     ("run.py", 'print(DB_PASS)', "print-secret"),
+    ("run.js", 'console.log(`${format(apiKey, {pad: 1})}`);', "print-secret"),
+    ("run.js", 'console.log(`${ok ? `${apiKey}` : ""}`);', "print-secret"),
+    ("run.js", 'console.log(config.key);', "print-secret"),
+    ("run.js", 'console.log(`key: ${settings.pass}`);', "print-secret"),
+    ("run.py", 'print(self.key)', "print-secret"),
     ("run.py", 'print(token)', "print-secret"),
     ("run.sh", "echo $PASS", "echo-secret"),
     ("run.sh", "echo $KEY", "echo-secret"),
@@ -945,10 +950,22 @@ def test_a_minified_script_with_many_print_calls_is_not_limited(tmp_path):
     assert {f.rule for f in result.findings} == {"print-secret"}
 
 
+@pytest.mark.parametrize("line", [
+    "`" + "print(" * 20_000,  # every call inside one literal, so each is read on its own
+    "console.log(" + "`${" * 20_000,
+    "console.log(" + "`'" * 40_000,
+])
+def test_template_literals_cannot_stall_the_scan(tmp_path, line):
+    skill = make(tmp_path, {"app.js": line + "\n"})
+    start = time.monotonic()
+    scan(skill)
+    assert time.monotonic() - start < 20
+
+
 def test_print_calls_read_once_per_line_match_reading_each_call():
     pieces = ["print(", "console.log(", " ", "'", '"', "\\", "{", "}", "API_KEY", "name",
               'os.environ["TOKEN"]', "getenv('PASSWORD')", "process.env.SECRET", ",", ")", "f'",
-              "`", "${", "token_idx", "key", "pass", "per_token"]
+              "`", "${", "token_idx", "key", "pass", "per_token", ".", "{pad}"]
     rng = random.Random(3)
     for _ in range(20000):
         line = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 12)))
