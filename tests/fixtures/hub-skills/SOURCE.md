@@ -19,7 +19,7 @@
 | `anthropics/pdf` | Python scripts that work on documents |
 | `anthropics/skill-creator` | Many Python scripts and HTML, over several folders |
 | `anthropics/web-artifacts-builder` | Shell scripts and a bundled `.tar.gz` |
-| `anthropics/webapp-testing` | Python helpers and examples that start servers |
+| `anthropics/webapp-testing` | A Python helper that starts servers, and browser examples |
 | `openai/gh-fix-ci` | A script that calls the GitHub CLI, with `agents/` YAML and images |
 | `openai/jupyter-notebook` | Notebook (`.ipynb`) templates |
 | `openai/notion-meeting-intelligence` | MIT licence; JSON evaluations and many references |

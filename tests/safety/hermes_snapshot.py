@@ -26,7 +26,8 @@ def results(skills: ModuleType = hermes_skills) -> dict[str, list[list[str]]]:
         result = ChecksBackend().scan(hermes_skills.load(path), SafetyTier.STATIC)
         if result.status != "ok":
             raise RuntimeError(f"{path}: {result.status}: {result.detail}")
-        out[skills.skill_id(path)] = sorted([f.rule, str(f.severity), f.location] for f in result.findings)
+        out[skills.skill_id(path)] = sorted([f.rule, str(f.severity), f.location]
+                                            for f in result.findings)
     return out
 
 

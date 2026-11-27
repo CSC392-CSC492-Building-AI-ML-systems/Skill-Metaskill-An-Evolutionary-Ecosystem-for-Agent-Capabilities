@@ -18,17 +18,27 @@ def test_every_source_and_its_licence_is_present():
     sources = [i.split("/")[0] for i in ids]
     assert {s: sources.count(s) for s in sources} == {
         "anthropics": 6, "huggingface": 4, "openai": 7}
-    # openai keeps a licence in each skill; the others also have one for the source.
+    # anthropics and openai give each skill its licence; huggingface has one for all.
     for path in hub_skills.skill_dirs():
-        source = hub_skills.ROOT / hub_skills.skill_id(path).split("/")[0]
-        assert any(path.glob("LICENSE*")) or (source / "LICENSE").is_file(), path
+        source = hub_skills.skill_id(path).split("/")[0]
+        licence = (hub_skills.ROOT / source / "LICENSE" if source == "huggingface"
+                   else path / "LICENSE.txt")
+        assert licence.is_file(), path
+
+
+def test_source_md_names_every_skill():
+    text = (hub_skills.ROOT / "SOURCE.md").read_text(encoding="utf-8")
+    for path in hub_skills.skill_dirs():
+        assert f"| `{hub_skills.skill_id(path)}` |" in text, path
 
 
 @pytest.mark.parametrize("path", hub_skills.skill_dirs(), ids=hub_skills.skill_id)
 def test_each_skill_loads_with_all_its_files(path):
     skill = load(path)
     assert skill.body.startswith("---")
-    assert all((path / f).is_file() for f in skill.files)
+    # Nothing is hidden from the tests by the loader: it lists every file but SKILL.md.
+    assert len(skill.files) == sum(f.is_file() and "__pycache__" not in f.parts
+                                   for f in path.rglob("*")) - 1
 
 
 @pytest.fixture(scope="module")
