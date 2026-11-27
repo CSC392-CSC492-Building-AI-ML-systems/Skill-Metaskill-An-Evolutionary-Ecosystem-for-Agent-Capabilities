@@ -257,11 +257,12 @@ class _BadFixture(Exception):
 
 def _fixture(root: Path, fixture: Path) -> Path:
     root = root.resolve()
+    shown = fixture.as_posix()  # as task files write it, on Windows too
     resolved = (root / fixture).resolve()
     if not resolved.is_relative_to(root) or resolved == root:
-        raise _BadFixture(f"fixture {fixture} is outside the task file's folder")
+        raise _BadFixture(f"fixture {shown} is outside the task file's folder")
     if not resolved.exists():
-        raise _BadFixture(f"fixture {fixture} does not exist: paths start at the "
+        raise _BadFixture(f"fixture {shown} does not exist: paths start at the "
                           "task file's folder")
     # A link in a fixture folder is copied as a link (sandbox._archive), so it must not
     # lead out of the folder, and must still work in the container, where only the
@@ -269,16 +270,16 @@ def _fixture(root: Path, fixture: Path) -> Path:
     for path in [resolved, *(resolved.rglob("*") if resolved.is_dir() else [])]:
         target = path.resolve()
         if not target.is_relative_to(root):
-            raise _BadFixture(f"fixture {fixture} links to a file outside the task "
+            raise _BadFixture(f"fixture {shown} links to a file outside the task "
                               "file's folder")
         if path.is_symlink():
             written = os.readlink(path)
             if (not target.is_relative_to(resolved) or not target.exists()
                     or os.path.isabs(written) or "\\" in written):
-                raise _BadFixture(f"{path.name} in fixture {fixture} would be a broken "
+                raise _BadFixture(f"{path.name} in fixture {shown} would be a broken "
                                   "link in the sandbox: it must be relative, with `/`, "
                                   "and lead to a file in the same fixture")
         if path.is_file() and path.stat().st_nlink > 1:
-            raise _BadFixture(f"fixture {fixture} has a hard link, so it may be a file "
+            raise _BadFixture(f"fixture {shown} has a hard link, so it may be a file "
                               "outside the task file's folder")
     return resolved
