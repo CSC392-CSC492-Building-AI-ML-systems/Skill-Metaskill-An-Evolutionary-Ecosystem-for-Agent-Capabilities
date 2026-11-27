@@ -983,27 +983,29 @@ def _is_secret_variable(m: re.Match[str]) -> bool:
 
 
 # What _blank_templates looks at.
-_TEMPLATE_MARKS = re.compile(r"""\$\{|[`'"{}\\]""")
+_TEMPLATE_MARKS = re.compile(r"""\$\{|[`'"{}\\/]""")
+_QUOTES = re.compile(r"""['"`]""")
+# A JavaScript pattern, /.../, and what a `/` must follow to open one rather than divide.
+_PATTERN = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\[])+/")
+_BEFORE_PATTERN = re.compile(r"(?:\A|[(,=:\[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case))\s*\Z")
 
 
-def _in_regex(text: str, i: int) -> bool:
-    """Whether the backtick at i is a character of a JavaScript pattern such as /`/g or
-    /["'`]/, so it opens no template literal. Read as one, it would take the code after it
-    for the literal's words."""
-    before = text[max(0, i - 2):i]
-    return before.endswith(("/", "'", '"')) or before == "/["
+def _quotes_in(text: str, start: int, stop: int) -> list[int]:
+    return [m.start() for m in _QUOTES.finditer(text, start, stop)]
 
 
 def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
     """text with the words of its template literals (backtick strings) turned into spaces,
-    so only what their ${...} compute is read, and where the literals are. A literal that
-    does not close on the line is left as it is. One pass, so it stays linear (MET-42)."""
+    so only what their ${...} compute is read, and the quotes of comments and patterns
+    too; also where the literals, comments and patterns are. A literal that does not close
+    on the line is left as it is. One pass, so it stays linear (MET-42)."""
     spans: list[tuple[int, int]] = []
     blank: list[tuple[int, int]] = []
     # One entry per open literal, [start, start of its current words, words so far], and
     # per open ${...}, [None, depth of braces inside it].
     stack: list[list] = []
-    unmatched: set[str] = set()  # quotes with no partner further on
+    unmatched: set[str] = set()  # quotes, comments and patterns with no end further on
+    idle: list[int] = []  # quotes in comments and patterns, which open no string either
     end, skip = len(text), 0
     # Only these characters matter, so the rest is skipped at the regex engine's speed.
     for mark in _TEMPLATE_MARKS.finditer(text):
@@ -1024,8 +1026,30 @@ def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
         elif c == "\\":
             skip = i + 2  # `\\`` opens no literal
         elif c == "`":
-            if not _in_regex(text, i):
-                stack.append([i, i, []])
+            stack.append([i, i, []])
+        # A backtick in a comment or a pattern opens no literal. Read as one, it would
+        # take the code after it for the literal's words.
+        elif c == "/":
+            if text.startswith("//", i):
+                spans.append((i, end))
+                break  # the rest is read as it stands
+            if text.startswith("/*", i):
+                if "/*" not in unmatched:
+                    close = text.find("*/", i + 2)
+                    if close < 0:
+                        unmatched.add("/*")
+                    else:
+                        skip = close + 2
+                        spans.append((i, skip))
+                        idle += _quotes_in(text, i, skip)
+            elif "/" not in unmatched and _BEFORE_PATTERN.search(text, max(0, i - 20), i):
+                pattern = _PATTERN.match(text, i)
+                if pattern:
+                    skip = pattern.end()
+                    spans.append((i, skip))
+                    idle += _quotes_in(text, i, skip)
+                else:
+                    unmatched.add("/")
         elif c in ("'", '"') and c not in unmatched:
             quoted = _STRING.match(text, i)
             if quoted:
@@ -1046,9 +1070,11 @@ def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
     for start, stop in sorted(spans):
         if not outermost or start >= outermost[-1][1]:
             outermost.append((start, stop))
-    if not blank:
+    if not blank and not idle:
         return text, outermost
     chars = list(text)
+    for i in idle:
+        chars[i] = " "
     for start, stop in blank:
         chars[start:stop] = " " * (stop - start)
     return "".join(chars), outermost

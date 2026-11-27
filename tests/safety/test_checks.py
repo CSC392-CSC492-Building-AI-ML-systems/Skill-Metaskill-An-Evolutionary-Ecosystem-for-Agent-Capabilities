@@ -1049,6 +1049,13 @@ def test_hostile_input_cannot_stall_the_scan(tmp_path, name, body):
     "console.log(s.replace(/`/g, ''), password, `x`)",
     "console.log(s.split(/[`]/), password, `x`)",
     "console.log(s.split(/[\"'`]/), password, `x`)",
+    "console.log(s.split(/(`)/), password, `x`)",
+    "console.log(s.match(/^\\s*`+/), password, `x`)",
+    "console.log(s.match(/a`b/), password, `x`)",
+    "console.log(/* ` */ s, password, `x`)",
+    "console.log(ok ? /`/ : s, password, `x`)",
+    "console.log(/'/g, `'`, password, '.')",
+    "console.log(`'` + /* ' */ s + password + '.')",
 ])
 def test_a_backtick_in_a_pattern_opens_no_template_literal(tmp_path, line):
     result = scan(make(tmp_path, {"a.js": line + "\n"}))
@@ -1058,3 +1065,10 @@ def test_a_backtick_in_a_pattern_opens_no_template_literal(tmp_path, line):
 def test_a_secret_named_per_something_is_still_a_secret():
     assert is_secret_name("api_key_per_user") and is_secret_name("PASSWORD_PER_HOST")
     assert not is_secret_name("chars_per_token") and not is_secret_name("cost_per_token")
+
+
+@pytest.mark.parametrize("piece", ["(/[", "/* ", "(/`", "(/", " / ", "/*/"])
+def test_many_slashes_are_read_quickly(tmp_path, piece):
+    started = time.monotonic()
+    scan(make(tmp_path, {"a.js": "console.log(" + piece * 40_000 + ")\n"}))
+    assert time.monotonic() - started < 10
