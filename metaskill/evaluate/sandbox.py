@@ -34,7 +34,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import IO, Protocol
 
 from .judge import JudgeError
@@ -500,8 +500,13 @@ def _keep(member: tarfile.TarInfo, dest: str) -> tarfile.TarInfo | None:
     can be led out of dest by a chain of those on older Pythons (CVE-2025-4517), which
     DockerSandbox.check refuses; this holds whatever the filter's next such bug is, since
     the run writes the links and links that only go down cannot leave dest.
+
+    So is a link target with a `:`: on Windows `C:` or `C:x` is relative to a folder of
+    that drive on this machine, outside dest, with no `..` to show it.
     """
-    if (member.issym() or member.islnk()) and ".." in re.split(r"[/\\]", member.linkname):
+    if (member.issym() or member.islnk()) and (
+            ".." in re.split(r"[/\\]", member.linkname) or ":" in member.linkname
+            or PureWindowsPath(member.linkname).drive):
         return None
     try:
         return tarfile.data_filter(member, dest)

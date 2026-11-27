@@ -20,6 +20,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
+from ...links import is_link
 from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .checks import MAX_FRONTMATTER_VALUES, frontmatter_too_large
 from .findings import BackendResult, BackendStatus
@@ -237,8 +238,8 @@ def convert(scan: dict[str, Any], tier: SafetyTier) -> BackendResult:
 
 def _without_links(source: Path, dest: Path) -> tuple[Path, list[str]]:
     """Copy the skill at source to dest without links: every regular file and folder,
-    hidden ones too (the scanner looks at those), but no symlink and no hard link, either
-    of which could be a file outside the skill. Returns dest and the paths left out,
+    hidden ones too (the scanner looks at those), but no symlink, Windows junction or hard
+    link, any of which could be a file outside the skill. Returns dest and the paths left out,
     relative to source with `/`, sorted."""
     left_out: list[str] = []
     dest.mkdir(parents=True)
@@ -246,7 +247,7 @@ def _without_links(source: Path, dest: Path) -> tuple[Path, list[str]]:
         here = Path(folder)
         rel = here.relative_to(source)
         for name in list(dirs):
-            if (here / name).is_symlink():
+            if is_link(here / name):  # os.walk would walk into a Windows junction
                 dirs.remove(name)  # not descended into
                 left_out.append((rel / name).as_posix())
             else:

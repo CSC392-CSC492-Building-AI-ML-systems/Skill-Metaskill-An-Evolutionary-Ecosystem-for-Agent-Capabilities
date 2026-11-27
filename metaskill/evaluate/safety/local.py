@@ -15,6 +15,7 @@ import re
 import time
 from pathlib import Path
 
+from ...links import is_link
 from ..models import LocalWarning, Skill
 from .checks import DeleteTarget, is_system_path, link_text
 
@@ -126,7 +127,7 @@ def _env_value(env: dict[str, str], name: str) -> str:
 
 
 def _reasons(path: Path, follows_links: bool, home: Path, deadline: float) -> list[str]:
-    if path.is_symlink():
+    if is_link(path):
         if not follows_links:
             return []  # the delete removes only the link
         real = os.path.realpath(path)
@@ -164,7 +165,7 @@ def _contents(folder: Path, total_deadline: float) -> list[str]:
                 if entry.name == ".git":  # a folder, or a file in worktrees and submodules
                     repo = True
                     continue
-                if entry.is_symlink():
+                if is_link(entry.path):
                     continue  # deleting the folder removes the link, not what it points to
                 if entry.is_dir(follow_symlinks=False):
                     stack.append(Path(entry.path))
