@@ -696,7 +696,9 @@ def test_another_file_without_a_shebang_is_not_read(tmp_path):
 
 
 def test_cutting_a_large_file_inside_a_character_is_not_called_bad_utf8(tmp_path):
-    result = scan(make(tmp_path, {"SKILL.md": "# S\n", "a.sh": "x" + "\u00e9" * 600_000}))
+    (tmp_path / "a.sh").write_bytes(b"x" + "\u00e9".encode() * 600_000)
+    (tmp_path / "SKILL.md").write_text("# S\n")
+    result = scan(load(tmp_path))
     assert "only the first" in result.detail and "not valid UTF-8" not in result.detail
 
 
