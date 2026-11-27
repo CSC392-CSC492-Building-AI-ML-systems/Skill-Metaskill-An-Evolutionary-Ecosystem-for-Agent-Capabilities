@@ -88,26 +88,28 @@ PROVIDER_FAILED = "failed: the judge model's provider did not answer"
 def evaluate_skill(skill_path: str | Path, *, config_path: str | Path | None = None,
                    output_path: str | Path | None = None, tasks_path: str | Path | None = None,
                    ctx: Any = None, agent: Any = None, sandbox: Any = None,
-                   judges: Any = None) -> dict[str, Any]:
+                   judges: Any = None, plan_id: str = "") -> dict[str, Any]:
     """Score one skill, a folder or its SKILL.md, and write its report. With tasks_path,
-    its tasks run first (real model calls)."""
-    return _evaluate([skill_path], config_path, output_path, tasks_path, ctx, agent, sandbox, judges)
+    its tasks run first (real model calls). plan_id is recorded in the report (plans.py)."""
+    return _evaluate([skill_path], config_path, output_path, tasks_path, ctx, agent, sandbox,
+                     judges, plan_id)
 
 
 def rank_skills(skill_paths: list[str | Path], *, config_path: str | Path | None = None,
                 output_path: str | Path | None = None, tasks_path: str | Path | None = None,
                 ctx: Any = None, agent: Any = None, sandbox: Any = None,
-                judges: Any = None) -> dict[str, Any]:
+                judges: Any = None, plan_id: str = "") -> dict[str, Any]:
     """Score skills in one run, rank them and write their report. With tasks_path, every
     skill runs the same tasks. A skill that cannot be loaded is listed in `warnings`; the
     others go on."""
-    return _evaluate(skill_paths, config_path, output_path, tasks_path, ctx, agent, sandbox, judges)
+    return _evaluate(skill_paths, config_path, output_path, tasks_path, ctx, agent, sandbox,
+                     judges, plan_id)
 
 
 def _evaluate(paths: list[str | Path], config_path: str | Path | None,
               output_path: str | Path | None, tasks_path: str | Path | None,
               ctx: Any, agent: Any = None, sandbox: Any = None,
-              judges: Any = None) -> dict[str, Any]:
+              judges: Any = None, plan_id: str = "") -> dict[str, Any]:
     from . import safety
 
     try:
@@ -214,6 +216,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     versions = safety.versions()
     versions["clarity_rubric_version"] = _clarity_rubric_version()
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
+    meta.plan_id = plan_id
     # to_meta gives the model asked for; this field says which models actually judged
     # (models.md): the judge of the task runs' LLM checks, of any dimension that built its
     # own judge (the deep safety tier, through DimensionScore.judge_*), and the run's shared

@@ -26,7 +26,9 @@ SKILL_HELP = (
 USAGE = (
     "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
     "generalize <skill> | "
-    f"personalize <skill> --config <file> | skills [text] | quality-pilot\n{SKILL_HELP}"
+    f"personalize <skill> --config <file> | skills [text] | quality-pilot\n"
+    "Plans: configure <skill>, <skill> [--name <label>] | approve <plan> | plans | "
+    f"evaluate <plan> | rank <plan>\n{SKILL_HELP}"
 )
 
 # operation -> (module, entry point)
@@ -215,7 +217,8 @@ def _list_skills(text, cwd):
     return "\n".join(lines)
 
 
-def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tasks_path=None):
+def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tasks_path=None,
+        plan_id=None):
     """Validate arguments, route to the pipeline, and return a response dict."""
     if operation not in _ENTRY_POINTS:
         return _error(operation, f"unknown operation; expected one of {', '.join(_ENTRY_POINTS)}")
@@ -258,6 +261,8 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tas
         # output_path stays None by default: the config says where reports go.
         kwargs = {"config_path": config_path, "output_path": output_path,
                   "tasks_path": tasks_path, "ctx": ctx}
+        if plan_id:
+            kwargs["plan_id"] = plan_id
     else:
         # From the resolved path: skill_path can be a list, which has no name to take.
         default = os.path.join(cwd, default_output_path(operation, target))
@@ -352,6 +357,86 @@ def _parse_evaluate_command(request):
          args.tasks.strip("\"'") if args.tasks else None),
         args.quality_pilot,
     )
+
+# A plan ID as a command's first argument (metaskill/evaluate/plans.py PLAN_ID).
+_PLAN = re.compile(r"(plan-[0-9a-f]{6})(?:\s+(.*))?", re.DOTALL)
+_LABEL = re.compile(r"\s+--name\s+(\"[^\"]*\"|'[^']*'|[^\"'].*?)\s*$")
+
+
+def _plans_module():
+    module = "metaskill.evaluate.plans"
+    if __package__:
+        module = f"{__package__}.{module}"
+    return importlib.import_module(module)
+
+
+def _configure(request, ctx, cwd, where):
+    """`/metaskill configure <skills> [--name <label>]`: draft a plan and show it."""
+    label = _LABEL.search(request)
+    if label:
+        request = request[:label.start()]
+    skills = request.strip().strip("\"'")
+    if not skills or "--" in skills:
+        return f"Usage: /metaskill configure <skill>, <skill> [--name <label>]\n{where}"
+    paths, problems = _find_skills("rank", skills, cwd)
+    if problems or not paths:
+        return "\n".join([*problems, SKILL_HELP, where])
+    plans = _plans_module()
+    try:
+        plan = plans.configure(paths, ctx=ctx,
+                               label=label[1].strip("\"'") if label else "")
+        shown = plans.summary(plan)
+    except plans.PlanError as e:
+        return f"metaskill configure failed: {e}"
+    return (f"{_scanned(paths)}\nDrafted by a model and not approved yet: check every task and "
+            f"command.\n\n{shown}\nThen: /metaskill approve {plan.id}")
+
+
+def _approve(request):
+    plans = _plans_module()
+    try:
+        plan = plans.approve(request.strip())
+    except plans.PlanError as e:
+        return f"metaskill approve failed: {e}"
+    operation = "rank" if len(plan.data["skills"]) > 1 else "evaluate"
+    return f"Approved {plan.id}. Run it with: /metaskill {operation} {plan.id}"
+
+
+def _list_plans():
+    plans = _plans_module()
+    found = plans.all_plans()
+    if not found:
+        return ("No evaluation plans. Make one with: /metaskill configure <skill>, <skill>\n"
+                f"Folder: {plans.plans_root()}")
+    lines = [f"Evaluation plans in {plans.plans_root()}:"]
+    for plan in found:
+        label = f" \"{plan.data['label']}\"" if plan.data.get("label") else ""
+        lines.append(f"  {plan.id}{label}  {plan.status}  {plan.data.get('created', '')}  "
+                     f"{', '.join(s['name'] for s in plan.data['skills'])}")
+    return "\n".join(lines)
+
+
+def _run_plan(operation, plan_id, extra, ctx, cwd):
+    """`/metaskill evaluate|rank <plan>`: run an approved plan."""
+    if os.path.exists(os.path.join(cwd, plan_id)) or any(
+            plan_id in names for _, _, names in _installed_skills()):
+        return (f"{plan_id} is both a skill and the form of a plan ID, so nothing was run. "
+                "Give the skill by a path such as ./" + plan_id + ", with --tasks.")
+    if extra:
+        return (f"A plan brings its own tasks and settings: /metaskill {operation} {plan_id} "
+                "takes nothing else.")
+    plans = _plans_module()
+    try:
+        plan, warnings = plans.ready(plan_id, operation)
+    except plans.PlanError as e:
+        return f"metaskill {operation} failed: {e}"
+    paths = plan.skill_paths
+    result = run(operation, paths if operation == "rank" else paths[0],
+                 config_path=str(plan.folder / "config.json"), ctx=ctx,
+                 tasks_path=str(plan.folder / "tasks.json"), plan_id=plan.id)
+    result["warnings"] = [*warnings, *result.get("warnings", [])]
+    return f"Plan {plan.id}\n{_summary(result, paths)}"
+
 
 _CELL = re.compile(r"(?<!\\)\|")  # a column border, not an escaped | in a name
 _ESCAPED = re.compile(r"\\([\\`\[\]<>|])")  # what rank.py escapes for Markdown
@@ -477,6 +562,19 @@ def make_command_handler(ctx):
                 result = {"status": "ok", **pilot.run_quality_pilot(ctx),
                           "operation": "quality-pilot"}
                 return "Text-only Quality pilot (no agent tools).\n" + _summary(result)
+            if command == "configure":
+                return _configure(f" {rest}", ctx, cwd, where)
+            if command == "approve":
+                if not rest.strip():
+                    return "Usage: /metaskill approve <plan> (/metaskill plans lists them)"
+                return _approve(rest)
+            if command == "plans":
+                if rest.strip():
+                    return "Usage: /metaskill plans"
+                return _list_plans()
+            planned = _PLAN.fullmatch(rest.strip()) if command in EVALUATION else None
+            if planned:
+                return _run_plan(command, planned[1], planned[2], ctx, cwd)
             if request in _ENTRY_POINTS:
                 return f"metaskill {request}: which skill?\n{SKILL_HELP}\n{where}"
             quality_pilot = False

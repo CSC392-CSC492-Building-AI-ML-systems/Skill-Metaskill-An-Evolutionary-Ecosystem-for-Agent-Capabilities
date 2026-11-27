@@ -35,7 +35,13 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not 
 /metaskill evaluate <skill>
 /metaskill rank <skill>, <skill>
 /metaskill skills [text]
+/metaskill configure <skill>, <skill>
+/metaskill approve <plan>
+/metaskill plans
+/metaskill rank <plan>
 ```
+
+**Evaluation plans** save writing a task file by hand. `configure` has a model draft tasks for the skills, checks them in the sandbox and shows every check command; after you review the files, `approve` them, then `rank <plan>` (or `evaluate <plan>` for one skill) runs the same tasks every time ([docs/evaluate/plans.md](docs/evaluate/plans.md)).
 
 `<skill>` is an installed skill's name (`claude-code`), its category and name (`autonomous-ai-agents/claude-code`), or a path to the skill's folder, relative to your session's folder or absolute. A path that exists wins over a name. If a name matches several skills, the command lists them and runs nothing, so you can give the one you mean. `hermes skills list` shows what is installed.
 
