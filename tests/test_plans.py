@@ -183,6 +183,12 @@ def test_the_drafter_is_told_the_limits(root, skills):
     assert "1 to 4 checks" in sent and "2000 characters" in sent and "4000 characters" in sent
 
 
+def test_the_drafter_is_told_when_skills_are_comparable(root, skills):
+    _, llm = configure(skills)
+    sent = llm.calls[0]["instructions"]
+    assert "only when the skills do clearly unrelated jobs" in sent
+
+
 def test_the_second_draft_is_told_why_the_first_failed(root, skills):
     plan, llm = configure(skills, draft(task(checks=["python3 -c 'pass'"])), draft(task()))
     assert plan.status == "draft"

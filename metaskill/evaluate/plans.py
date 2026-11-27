@@ -54,8 +54,12 @@ in the material on the same work. Each task is run by an agent in an empty Linux
 holds only the task's input files, with python3 and sh and no network.
 
 Rules:
-- Base the tasks on what the skills are all for. Every task must be fair to every skill. If
-  the skills have no common purpose, set `comparable` to false and give no tasks.
+- Base the tasks on the job the skills share. Every task must be fair to every skill.
+- Set `comparable` to false, with no tasks, only when the skills do clearly unrelated jobs, such
+  as writing sales reports and deploying servers. Skills for the same job are comparable even
+  if their descriptions differ in detail, name different inputs or settings, or one is vague:
+  comparing better and worse skills is the point. Judge a vague skill by its name and what it
+  does say. Then test only what the shared job needs, not a detail only one skill mentions.
 - `prompt` says what to do and names the file to write. It must not contain the answer.
 - `files` are the input files, small and made up. No real personal data.
 - Each check is one shell command that exits 0 only if the work is right, e.g.
