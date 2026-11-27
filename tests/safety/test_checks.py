@@ -1538,6 +1538,7 @@ def test_a_string_that_is_only_part_of_a_command_is_not_judged_alone(tmp_path, n
     's.replace(/`/g, ""); execSync("ls | xargs rm -rf")',
     's.match(/a`b/); execSync(`ls | xargs rm -rf`)',
     's.split(/(`)/); execSync(`ls | xargs rm -rf`)',
+    'x = /\'/g + 1; execSync("ls | xargs rm -rf")',
 ])
 def test_a_slash_star_in_a_template_literal_opens_no_comment(tmp_path, line):
     result = scan(make(tmp_path, {"a.js": line + "\n"}))
