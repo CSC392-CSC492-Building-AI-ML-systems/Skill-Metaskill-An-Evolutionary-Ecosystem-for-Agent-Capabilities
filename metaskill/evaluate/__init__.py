@@ -181,7 +181,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
             result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                            agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
                                            log_folder=log_folder)
-            if tasks is not None:  # without task runs there are no logs to point to
+            if runs and runs.tests:  # only a run that was made left a log to point to
                 result.log_folder = log_folder
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",

@@ -333,8 +333,10 @@ def test_a_skill_whose_logs_cannot_be_written_keeps_its_row(tmp_path, harness, m
     result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
                          config_path=harness.config, output_path=tmp_path / "out",
                          tasks_path=harness.tasks)
-    first, second = sorted(report(result).skills, key=lambda s: s.log_folder)
+    first, second = sorted(report(result).skills, key=lambda s: len(s.tests))
     assert first.tests == [] and second.tests
+    # No folder is named for runs that were never made.
+    assert (first.log_folder, second.log_folder) == (None, "skill-02")
     assert first.dimensions[Dimension.EFFICIENCY].status is Status.ERROR
     assert first.dimensions[Dimension.SAFETY].status is not Status.SKIPPED
     assert result["task_runs"]["errors"] == 1
