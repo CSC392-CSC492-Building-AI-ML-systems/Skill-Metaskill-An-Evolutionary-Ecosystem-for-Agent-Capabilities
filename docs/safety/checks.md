@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "5"
+CHECKS_VERSION = "6"
 
 class ChecksBackend:
     name = "own-checks"
@@ -37,9 +37,19 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 | Fenced code blocks in `SKILL.md` and other `.md` files | Yes | No |
 | Script files (`.sh`, `.bash`, `.zsh`, `.py`, `.js`, `.ts`, `.ps1`, `.psm1`, `.bat`, `.cmd`) | Yes, every line | No |
 | Prose in markdown, including inline code (`` `rm -rf` ``) | Yes | Yes |
-| Binary or very large files | No | — |
+| `SKILL.md` frontmatter | Yes, every line, and each text value as parsed | Yes |
+| Other file types, such as binaries | No | — |
 
 **Prose** is the ordinary sentences of a markdown file: explanations, warnings, steps written in words. Skills often warn about dangerous commands there, as in "never run `rm -rf` on the project root". Flagging those would make careful skills, which warn about risks, score lower than careless ones that do not. So matches in prose go through a warning check first.
+
+### Nothing the agent sees is skipped
+
+Added in `CHECKS_VERSION` 6. Each of these once left a command unscanned, with Safety 1.0:
+
+- **Bytes that are not UTF-8** are replaced and the file is scanned (a shell runs such a script), with a note in `detail`. NUL bytes are dropped: bash ignores them, and in UTF-16 text they separate the letters of every command.
+- **Frontmatter** is only `SKILL.md`'s, matched as `Skill.load` matches it. In any other file `---` is a horizontal rule and what follows is ordinary text. `SKILL.md`'s frontmatter is scanned as prose, one key or list item at a time, so a warning in one value cannot clear a command in another. A text value that reads differently once parsed (YAML escapes, folded lines) is scanned as parsed too, at its key's line.
+- **A file over `MAX_FILE_BYTES`** (1,000,000 bytes) is scanned up to that size and gets a CRITICAL `scan-limit` finding, as the rest is unknown ([Scan limits](#scan-limits)).
+- **A file that cannot be read** gets the same finding. One that is listed but no longer there is only noted.
 
 ### Warning check
 

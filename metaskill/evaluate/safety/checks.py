@@ -23,10 +23,11 @@ from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "5"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
+CHECKS_VERSION = "6"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
                       # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
                       # and bounded clearing, so a hostile skill cannot stall the scan
-                      # (MET-42)
+                      # (MET-42). 6: nothing the agent sees is skipped: undecodable bytes,
+                      # SKILL.md's frontmatter, `---` blocks and oversized files
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -87,6 +88,8 @@ MESSAGES = {
                            "aliases. That stalls scanners, so Cisco's scanner was not run on it",
     "scan-limit": "Too many commands packed together to check in reasonable time, so part of "
                   "the skill was not checked; it is treated as the worst case",
+    "scan-limit-file": "A file is too large or could not be read, so part of the skill was not "
+                       "checked; it is treated as the worst case",
 }
 
 # How many values the frontmatter may hold once its YAML aliases are expanded. Real skills
@@ -394,9 +397,9 @@ def _limit_lines(files: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], l
     return out, findings
 
 
-def _scan_limit(path: str, lineno: int, quote: str) -> Finding:
+def _scan_limit(path: str, lineno: int, quote: str, message: str = "scan-limit") -> Finding:
     return Finding(Dimension.SAFETY, EXCESS_SCOPE, Severity.CRITICAL, ChecksBackend.name,
-                   "scan-limit", quote, f"{path}:{lineno}", MESSAGES["scan-limit"])
+                   "scan-limit", quote, f"{path}:{lineno}", MESSAGES[message])
 
 
 def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
@@ -413,9 +416,10 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
 
 def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
     notes: list[str] = []
-    raw_files = _read_files(skill, notes)
+    raw_files, unchecked = _read_files(skill, notes)
     files, limited = _limit_lines(raw_files)
     units = [u for path, text in files for u in _units(path, text)]
+    units += _frontmatter_value_units(skill, files)
 
     ctx = _Context()
     for path, text in files:
@@ -492,7 +496,7 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
         for f in _hidden_characters(path, text):
             found.setdefault((path, int(f.location.rsplit(":", 1)[1]), f.rule), f)
 
-    for f in limited:
+    for f in [*limited, *unchecked]:
         found[(f.location.rsplit(":", 1)[0], int(f.location.rsplit(":", 1)[1]), f.rule)] = f
     if budget.ran_out_at is not None:
         path, lineno = budget.ran_out_at
@@ -562,25 +566,102 @@ def _hidden_characters(path: str, text: str) -> list[Finding]:
     return findings
 
 
-def _read_files(skill: Skill, notes: list[str]) -> list[tuple[str, str]]:
-    """(relative path, text) for SKILL.md and every markdown or script file.
+def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], list[Finding]]:
+    """(relative path, text) for SKILL.md and every markdown or script file, and a CRITICAL
+    scan-limit finding for each one that could only be checked in part, or not at all.
 
     Files that are symlinks are not read, so a link cannot make the check read
     something outside the skill.
     """
-    files = [("SKILL.md", skill.body)]
+    files, unchecked = [("SKILL.md", skill.body)], []
     for rel in skill.files:
         rel = Path(rel)
         if rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES:
             continue
-        path = Path(skill.path) / rel
+        name, path = rel.as_posix(), Path(skill.path) / rel
         try:
-            if path.is_symlink() or path.stat().st_size > MAX_FILE_BYTES:
+            if path.is_symlink():
                 continue
-            files.append((rel.as_posix(), path.read_text(encoding="utf-8")))
-        except (OSError, UnicodeDecodeError) as e:
-            notes.append(f"could not read {rel.as_posix()}: {type(e).__name__}")
-    return files
+            with path.open("rb") as stream:
+                raw = stream.read(MAX_FILE_BYTES + 1)
+        except FileNotFoundError:  # nothing there for the agent to read either
+            notes.append(f"could not read {name}: FileNotFoundError")
+            continue
+        except OSError as e:
+            notes.append(f"could not read {name}: {type(e).__name__}")
+            unchecked.append(_scan_limit(name, 1, "the file could not be read",
+                                         "scan-limit-file"))
+            continue
+        if len(raw) > MAX_FILE_BYTES:
+            raw = raw[:MAX_FILE_BYTES]
+            notes.append(f"{name}: only the first {MAX_FILE_BYTES} bytes were checked")
+            unchecked.append(_scan_limit(name, 1, f"more than {MAX_FILE_BYTES} bytes",
+                                         "scan-limit-file"))
+        files.append((name, _decode(name, raw, notes)))
+    return files, unchecked
+
+
+def _decode(name: str, raw: bytes, notes: list[str]) -> str:
+    """The file's text, whatever its bytes. A shell or an interpreter runs a script with a
+    byte that is not UTF-8, so such bytes are replaced and the rest is scanned. NUL bytes
+    are dropped: bash ignores them, and in UTF-16 text they sit between the letters of
+    every command. Line endings are read as Path.read_text reads them."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+        notes.append(f"{name}: not valid UTF-8; scanned with the bad bytes replaced")
+    return text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+# The frontmatter as Skill.load reads it (models.py): only SKILL.md has one.
+_FRONTMATTER = re.compile(r"---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", re.DOTALL)
+_YAML_KEY = re.compile(r"^(?:[^\s#][^:]*:(?:\s|$)|\s*-\s)")
+
+
+def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
+    """The frontmatter as prose, one unit for each key or list item with the lines that
+    continue it, so that a warning in one value cannot clear a command in another."""
+    units: list[_Unit] = []
+    block: list[tuple[int, str]] = []
+    for lineno, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if block and (not stripped or stripped == "---" or _YAML_KEY.match(line)):
+            units.append(_Unit(path, "prose", block))
+            block = []
+        if stripped and stripped != "---":
+            block.append((lineno, line))
+    if block:
+        units.append(_Unit(path, "prose", block))
+    return units
+
+
+def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]) -> list[_Unit]:
+    """Frontmatter text values that read differently once parsed (escapes, folded lines),
+    which the agent is shown parsed: each is prose, reported at its key's line."""
+    text = dict(files).get("SKILL.md", "")
+    match = _FRONTMATTER.match(text.removeprefix("\ufeff"))
+    if match is None or frontmatter_too_large(skill.frontmatter):
+        return []  # too large has a finding of its own, and is not walked
+    block = text[:match.end()]
+    units: list[_Unit] = []
+    seen: set[int] = set()
+
+    def walk(value: Any, lineno: int) -> None:
+        if isinstance(value, str):
+            if value.strip() and value.strip() not in block:
+                units.append(_Unit("SKILL.md", "prose",
+                                   [(lineno, line) for line in value.splitlines()
+                                    if line.strip()]))
+        elif isinstance(value, (dict, list, tuple)) and id(value) not in seen:
+            seen.add(id(value))
+            for child in (value.values() if isinstance(value, dict) else value):
+                walk(child, lineno)
+
+    for key, value in skill.frontmatter.items():
+        at = re.search(rf"(?m)^{re.escape(str(key)[:200])}[ \t]*:", block)
+        walk(value, block.count("\n", 0, at.start()) + 1 if at else 1)
+    return units
 
 
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
@@ -597,8 +678,11 @@ def _units(path: str, text: str) -> list[_Unit]:
     units: list[_Unit] = []
     lines = text.splitlines()
     start = 0
-    if lines and lines[0].strip() == "---":  # skip YAML frontmatter
-        start = next((i + 1 for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
+    # Only SKILL.md has frontmatter. In any other file `---` is a horizontal rule, and
+    # what follows it is ordinary text.
+    if path == "SKILL.md" and (match := _FRONTMATTER.match(text.removeprefix("\ufeff"))):
+        start = len(match.group(0).splitlines())
+        units += _frontmatter_units(path, lines[:start])
 
     prose: list[tuple[int, str]] = []
     code: list[tuple[int, str]] = []
