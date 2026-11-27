@@ -210,7 +210,7 @@ Confirmation means an actual step, not just the word. Any of:
 - Asking: "ask the user **before/to confirm/for confirmation**" (asking about the action, not "ask the user for their favourite colour"), "confirm with the user", "get the user's approval", "wait for permission", "are you sure".
 - A dry run: "dry run", `--dry-run`, `-WhatIf`, `-n` on `git clean`.
 - A backup: "make a backup", "back up first", "back up your files", "back everything up" — "back up" needs an object, so "go back up one level" does not count.
-- Flags and code: `-i` or `--interactive` on `rm`, `read -p`, `confirm(`, `Read-Host`, `-Confirm`, `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
+- Flags and code: `-i` or `--interactive` on `rm`, `read -p`, `confirm(`, `Read-Host`, `-Confirm` and `-WhatIf` (not with `:$false`), `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
 
 At the `deep` tier, a delete or other destructive command cleared by one of these phrases is re-checked ([review.md](review.md)), in code and scripts as well as in prose; one cleared by a flag on the command itself (`rm -i`) is not. At most `MAX_CLEARED_PER_UNIT` matches in a code block or script are cleared this way; later ones are reported.
 

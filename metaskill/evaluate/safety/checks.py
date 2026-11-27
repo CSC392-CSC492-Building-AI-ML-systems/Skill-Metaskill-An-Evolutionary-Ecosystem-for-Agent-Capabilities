@@ -1557,13 +1557,15 @@ _CONFIRM = re.compile(
     r"|\b(?:confirm|check)\s+with\s+(?:the\s+)?(?:user|human)\b"
     r"|\b(?:get|obtain|request|wait\s+for)\s+(?:the\s+user['’]s\s+|explicit\s+|their\s+)?"
     r"(?:confirmation|approval|permission)\b"
-    r"|\bare\s+you\s+sure\b|\bdry[- ]?run\b|--dry-run\b|-WhatIf\b"
+    r"|\bare\s+you\s+sure\b|\bdry[- ]?run\b|--dry-run\b"
+    r"|-WhatIf\b(?!:\$?(?:false|0)\b)"  # -WhatIf:$false and -Confirm:$false switch it off
     r"|\b(?:make|take|create|keep)\s+(?:a\s+)?back[\s-]?up\b"
     r"|\bback\s+(?:it|them|everything)\s+up\b"
     r"|\bback\s+up\s+(?:your|the|all|everything|it|them|files|data|my|our|first|before)\b"
     r"|\bread\s+-[a-zA-Z]*p\b"
     r"|\binput\s*\([^)]*(?:y/n|\byes\b|\bsure\b|\bconfirm\b|\bproceed\b|\bcontinue\b|\[y)"
-    r"|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b|\bset\s+/p\b|\bchoice\s+/[a-z]",
+    r"|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b(?!:\$?(?:false|0)\b)|\bset\s+/p\b"
+    r"|\bchoice\s+/[a-z]",
     re.I)
 # A confirmation phrase is ignored when the words just before it negate it.
 _NEGATION_REACH = 64  # > longest negation word (8) + the 30 characters after it
