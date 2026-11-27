@@ -313,6 +313,14 @@ def test_other_destructive_rules(tmp_path, line, rule):
     ("API_KEY", True), ("apiKey", True), ("GITHUB_TOKEN", True), ("DB_PASSWORD", True),
     ("AUTHOR", False), ("KEYWORDS", False), ("keys", False), ("PWD", False),
     ("TOKEN_PATH", False), ("CLIENT_SECRET_PATH", False), ("auth_url", False), ("GH_AUTH_METHOD", False),
+    # Everyday names that hold no secret (MET-69).
+    ("pass_rate", False), ("passRate", False), ("token_idx", False), ("tokenIndex", False),
+    ("token_start", False), ("token_end", False), ("token_endpoint", False), ("token_ep", False),
+    ("auth_enabled", False), ("key_averages", False), ("avg_chars_per_token", False),
+    ("active_per_token", False),
+    # Close to them, and still secrets.
+    ("key", True), ("pass", True), ("KEY", True), ("PASS", True), ("DB_PASS", True), ("db_pass", True), ("api_key", True),
+    ("token", True), ("Key", True), ("password", True), ("per_user_token", True),
 ])
 def test_secret_names(name, secret):
     assert is_secret_name(name) is secret
@@ -325,6 +333,28 @@ def test_secret_names(name, secret):
     ("run.sh", "echo $AUTHOR", None),
     ("run.py", 'print(f"key={api_key}")', "print-secret"),
     ("run.py", 'print("Enter your API key")', None),
+    ("run.py", 'print(f"Delta: {delta.get(\'pass_rate\', \'-\')}")', None),
+    ("run.py", 'print(f"{pass_rate:.1f}% passed")', None),
+    ("run.py", 'print(f"Character {char_pos} is in token {token_idx}")', None),
+    ("run.py", 'print(prof.key_averages().table())', None),
+    ("run.py", 'print(f"{row.get(\'key\')}")', None),
+    ("run.py", 'print(f"{key}: {value}")', None),
+    ("run.js", 'console.log(`${pass} passed, ${fail} failed`);', None),
+    ("run.js", 'console.error(`unknown gallery "${gallery}". Pass URLs instead`);', None),
+    ("run.js", 'console.log(`Enter your API token`);', None),
+    # A secret from a template literal, an f-string or a dictionary key is still found.
+    ("run.js", 'console.log(`key: ${apiKey}`);', "print-secret"),
+    ("run.js", 'console.log(`${process.env.API_KEY}`);', "print-secret"),
+    ("run.js", 'console.log(`using`, GITHUB_TOKEN);', "print-secret"),
+    ("run.py", 'print(f"{config[\'password\']}")', "print-secret"),
+    ("run.py", 'print(f"{cfg.get(\'api_key\')}")', "print-secret"),
+    ("run.py", 'print(DB_PASS)', "print-secret"),
+    ("run.py", 'print(token)', "print-secret"),
+    ("run.sh", "echo $PASS", "echo-secret"),
+    ("run.sh", "echo $KEY", "echo-secret"),
+    ("run.sh", "echo $pass >> login.log", "echo-secret"),
+    ("run.sh", "echo $key", "echo-secret"),
+    ("run.js", "console.log(process.env.key)", "print-secret"),
     ("run.js", "console.log(process.env.GITHUB_TOKEN)", "print-secret"),
     ("run.sh", "cat .env.example", None),
     ("run.sh", "cat ~/.ssh/id_rsa.pub", None),
@@ -697,7 +727,7 @@ def test_real_confirmation_steps_still_count(tmp_path, body):
 
 
 def test_checks_version_was_bumped():
-    assert checks.CHECKS_VERSION == "5"
+    assert checks.CHECKS_VERSION == "9"
 
 
 
@@ -917,7 +947,8 @@ def test_a_minified_script_with_many_print_calls_is_not_limited(tmp_path):
 
 def test_print_calls_read_once_per_line_match_reading_each_call():
     pieces = ["print(", "console.log(", " ", "'", '"', "\\", "{", "}", "API_KEY", "name",
-              'os.environ["TOKEN"]', "getenv('PASSWORD')", "process.env.SECRET", ",", ")", "f'"]
+              'os.environ["TOKEN"]', "getenv('PASSWORD')", "process.env.SECRET", ",", ")", "f'",
+              "`", "${", "token_idx", "key", "pass", "per_token"]
     rng = random.Random(3)
     for _ in range(20000):
         line = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 12)))

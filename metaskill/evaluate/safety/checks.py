@@ -23,10 +23,11 @@ from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "5"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
+CHECKS_VERSION = "9"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
                       # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
                       # and bounded clearing, so a hostile skill cannot stall the scan
-                      # (MET-42)
+                      # (MET-42). 9: fewer print-secret and echo-secret false positives
+                      # (MET-69); 6 to 8 are other changes in review
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -928,7 +929,10 @@ _SECRET_PARTS = {"KEY", "APIKEY", "TOKEN", "SECRET", "SECRETS", "PASSWORD", "PAS
 # A name ending in one of these is about a secret, not the secret: TOKEN_PATH, auth_url.
 _NOT_SECRET_ENDINGS = {"PATH", "FILE", "FILENAME", "DIR", "URL", "URI", "NAME", "METHOD", "TYPE",
                        "ENV", "VAR", "HEADER", "FIELD", "PREFIX", "LENGTH", "LEN", "COUNT", "ID",
-                       "EXPIRY", "EXPIRES", "SCOPE", "SCOPES", "STATUS"}
+                       "EXPIRY", "EXPIRES", "SCOPE", "SCOPES", "STATUS",
+                       # pass_rate, token_idx, token_start, token_endpoint, key_averages
+                       "RATE", "IDX", "INDEX", "POS", "START", "END", "ENDPOINT", "EP",
+                       "ENABLED", "AVERAGES"}
 
 
 def is_secret_name(name: str) -> bool:
@@ -936,6 +940,8 @@ def is_secret_name(name: str) -> bool:
     words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).upper()
     parts = [p for p in re.split(r"[^A-Z0-9]+", words) if p]
     if not parts or parts[-1] in _NOT_SECRET_ENDINGS:
+        return False
+    if parts[-2:-1] == ["PER"]:  # a rate, e.g. chars_per_token
         return False
     return any(part in _SECRET_PARTS for part in parts)
 
@@ -946,7 +952,8 @@ _PRINT = re.compile(
     r"(?<![\w.])(?:print|console\.(?:log|error|info|warn|debug)|logger\.\w+|logging\.\w+|puts)\s*\(")
 _ENV_NAMES = re.compile(
     r"""(?:environ(?:\.get)?\s*[\[(]\s*|getenv\s*\(\s*)['"]([A-Za-z_]\w*)['"]|process\.env\.([A-Za-z_]\w*)""")
-_STRING = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1""")
+# A backtick string is a template literal; what it puts in ${...} is read by _BRACES.
+_STRING = re.compile(r"""(['"`])(?:\\.|(?!\1).)*\1""")
 _ENV_DUMP_LINE = re.compile(r"^\s*(?:\$\s+)?(?:sudo\s+)?(?:env|printenv)\s*(?:$|[|;&>#])")
 _ENV_DUMP_CODE = re.compile(
     r"print\(\s*(?:dict\(\s*)?os\.environ\s*\)?\s*\)|console\.log\(\s*process\.env\s*\)"
@@ -961,14 +968,28 @@ _BRACES = re.compile(r"\{([^{}]*)\}")  # f-strings and template literals
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 
 
+# In a print call, these written alone are everyday variables: `for key, value in ...`, a
+# count of passed tests. KEY, PASS, DB_PASS and api_key are still secret names, as is
+# `$pass` in a shell script, where it is likely a password.
+_EVERYDAY_NAMES = {"key", "pass"}
+
+
+def _is_secret_variable(name: str) -> bool:
+    """is_secret_name for a name among a print call's arguments (not an environment
+    variable's)."""
+    return name not in _EVERYDAY_NAMES and is_secret_name(name)
+
+
 def _names_secret(args: str) -> bool:
     """Whether the arguments of a print call name a secret: an environment read, a name
     inside {...}, or a name outside string literals."""
-    names = [a or b for a, b in _ENV_NAMES.findall(args)]
+    if any(is_secret_name(a or b) for a, b in _ENV_NAMES.findall(args)):
+        return True
+    names = []
     for inner in _BRACES.findall(args):
         names += _IDENTIFIER.findall(inner)
     names += _IDENTIFIER.findall(_STRING.sub(" ", args))
-    return any(is_secret_name(n) for n in names)
+    return any(_is_secret_variable(n) for n in names)
 
 
 class _SecretView:
@@ -994,12 +1015,12 @@ class _SecretView:
                       [(m.start(), m.end()) for m in braces]]
         secret_at += [m.start() for m in envs if is_secret_name(m.group(1) or m.group(2))]
         secret_at += [m.start() for m in braces
-                      if any(is_secret_name(n) for n in _IDENTIFIER.findall(m.group(1)))]
+                      if any(_is_secret_variable(n) for n in _IDENTIFIER.findall(m.group(1)))]
         # Names outside string literals, as _STRING.sub(" ", ...) leaves them.
         at = start
         for s, e in strings + [(len(text), len(text))]:
             secret_at += [n.start() for n in _IDENTIFIER.finditer(text, at, s)
-                          if is_secret_name(n.group(0))]
+                          if _is_secret_variable(n.group(0))]
             at = e
         self.last_secret = max(secret_at)
         self.starts = [[s for s, _ in spans] for spans in self.spans]
