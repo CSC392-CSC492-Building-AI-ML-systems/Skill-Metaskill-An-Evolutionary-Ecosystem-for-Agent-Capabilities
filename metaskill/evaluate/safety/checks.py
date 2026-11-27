@@ -919,8 +919,13 @@ _RM = re.compile(r"(?<![\w.-])rm\s+")
 # name the file imports it as. Another object's rmtree (sftp.rmtree) is not this one.
 _RMTREE = re.compile(r"(?<![\w.])(?<!def )(?:(?P<module>[A-Za-z_]\w*)\s*\.\s*)?(?P<name>[A-Za-z_]\w*)\s*\(")
 _RMTREE_QUICK = re.compile(r"\brmtree\b")
-_SHUTIL_ALIAS = re.compile(r"\bimport\s+(?:[\w.]+\s*,\s*)*shutil\s+as\s+([A-Za-z_]\w*)")
-_RMTREE_ALIAS = re.compile(r"\bfrom\s+shutil\s+import\s+[^\n#]*?\brmtree\s+as\s+([A-Za-z_]\w*)")
+_SHUTIL_RMTREE = re.compile(r"shutil\s*\.\s*rmtree\s*\(")  # also self.shutil.rmtree
+# Bounded, so many imports on one long line stay linear (MET-42).
+_SHUTIL_ALIAS = re.compile(
+    r"\bimport\s+(?:[\w.]+\s*,\s*){0,50}shutil\s+as\s+([A-Za-z_]\w*)")
+_RMTREE_ALIAS = re.compile(  # on one line, or in the parentheses of one import
+    r"\bfrom\s+shutil\s+import\s+(?:\([^)#]{0,500}?|[^\n#(]{0,500}?)"
+    r"\brmtree\s+as\s+([A-Za-z_]\w*)")
 _PY_STR = r"""(?:[rRbBuU]?(?P<q>['"])(?P<s>[^'"]*)(?P=q))"""
 # Python expressions for the home folder: os.environ["HOME"], os.getenv("HOME"),
 # os.path.expanduser("~"), Path.home() and pathlib.Path.home().
@@ -1013,11 +1018,33 @@ def _follows(target: str) -> bool:
     return target.endswith("/") or bool(re.search(r"/[^/]*[*?\[]", target))
 
 
+# Just before a quote: what runs the string that follows, as a command.
+_RUNS_STRING = re.compile(
+    r"(?:\b(?:ba|z|da|k)?sh[\"']?[\s,]+(?:[\"']?-[A-Za-z]+[\"']?[\s,]+){0,5}[\"']?-[A-Za-z]*c[\"']?[\s,]+"
+    r"|\beval\s+|\bssh\s+[^;&|]{0,80}\s"
+    r"|\b(?:os\.system|os\.popen|subprocess\.\w+|execSync|exec|system|popen)\s*\(\s*)"
+    r"[rRbBfF]{0,2}\Z")
+_RUNS_STRING_REACH = 120  # characters before the quote the pattern is searched in
+
+
 def _no_target(text: str, start: int, prose: bool, path: str) -> bool:
     """Whether a recursive delete with nothing written to delete still counts: in code it
-    does, as it deletes what is piped to it, unless it only stands in a comment or a string
-    (a pattern such as `grep 'rm -rf|...'` names the command without running it)."""
-    return not prose and not _inside(path, text, start)
+    does, as it deletes what is piped to it, unless it only stands in a comment, or in a
+    string nothing runs (a pattern such as `grep 'rm -rf|...'` names the command without
+    running it)."""
+    if prose:
+        return False
+    span = _span_at(path, text, start)
+    if span is None:
+        return True
+    opened, _, kind = span
+    if kind == "comment":
+        return False
+    if _RUNS_STRING.search(text, max(0, opened - _RUNS_STRING_REACH), opened):
+        return True
+    # "$(...)" and "`...`" run inside a double-quoted shell string.
+    return text[opened] == '"' and (text.find("$(", opened, start) >= 0
+                                    or text.find("`", opened, start) >= 0)
 
 
 def _deletes(text: str, prose: bool, path: str = "",
@@ -1049,17 +1076,24 @@ def _deletes(text: str, prose: bool, path: str = "",
                          f"rm {' '.join(flags)} {targets[0]}", interactive,
                          [(t, _follows(t)) for t in targets]))
 
-    if _RMTREE_QUICK.search(text) or any(a.partition(":")[2] in text for a in aliases):
+    # A file's aliases are looked up per call, not searched for one by one in every line.
+    if _RMTREE_QUICK.search(text) or aliases and "(" in text:
+        calls = {m.end(): m.start() for m in _SHUTIL_RMTREE.finditer(text)}
         for m in _RMTREE.finditer(text):
             module, name = m.group("module"), m.group("name")
             if not (name == "rmtree" and (module is None or module == "shutil"
                                           or f"module:{module}" in aliases)
                     or module is None and f"function:{name}" in aliases):
                 continue
-            argument = _first_argument(text, m.end())
+            if (prose and module is None and text[m.end("name"):m.end() - 1]
+                    and not _in_inline_code(text, m.start())):
+                continue  # "use rmtree (see the docs)" is a sentence, not a call
+            calls.setdefault(m.end(), m.start())
+        for end, start in sorted(calls.items()):
+            argument = _first_argument(text, end)
             path_ = _python_path(argument)
             is_name = path_ is None and re.fullmatch(r"[A-Za-z_]\w*", argument) is not None
-            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
+            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, start,
                              f"shutil.rmtree({argument})",
                              targets=[(path_ if path_ is not None else argument
                                        or "(unspecified)", False)],
@@ -1070,7 +1104,11 @@ def _deletes(text: str, prose: bool, path: str = "",
         args = _args(text, m.end())
         if not any(_PS_RECURSE.fullmatch(a) for a in args):
             continue
-        targets = [a for a in args if not a.startswith("-") and not _CMD_SWITCHES.fullmatch(a)]
+        # rd, del and the rest are cmd.exe's too, whose switches are not targets. To
+        # Remove-Item and ri, `/a/b` is a path.
+        cmd_too = m.group(0).lower() not in ("remove-item", "ri")
+        targets = [a for a in args if not a.startswith("-")
+                   and not (cmd_too and _CMD_SWITCHES.fullmatch(a))]
         if not targets:
             if not _no_target(text, m.start(), prose, path):
                 continue
@@ -1291,7 +1329,10 @@ def _shell_trace(unit: _Unit) -> list[Finding]:
 # An interpreter runs what it is piped only when given no script of its own:
 # "| bash" runs the download, "| python3 -c '...'" only parses it as data.
 _CURL_PIPE = re.compile(
-    r"(?<![\w-])(?:curl|wget)\b[^\n|]*\|\s*(?:sudo(?:\s+(?:-[ug]\s+[\w-]+|-[\w=-]+))*\s+)?"
+    # sudo's flags, some with a separate argument. That argument cannot start with "-", so
+    # a run of flags is read one way only, not in exponentially many.
+    r"(?<![\w-])(?:curl|wget)\b[^\n|]*\|\s*"
+    r"(?:sudo(?:\s+(?:(?:-[ug]|--user|--group)\s+(?!-)[\w.-]+|-[\w=.-]+))*\s+)?"
     r"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
     r"(?!\s+(?:-[a-zA-Z]*c\b|-m\b|[^\s-]))"
     r"|(?<![\w-])(?:sh|bash|zsh)\b[^\n]*<\(\s*(?:curl|wget)\b"
@@ -1542,15 +1583,19 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
     suffix = Path(path).suffix.lower()
     if suffix in (".bat", ".cmd") and _BATCH_COMMENT.match(line):
         return ((0, len(line), "comment"),)
+    # PowerShell and cmd.exe do not escape with a backslash: "C:\dir\" ends at the quote.
+    escapes = suffix not in (".ps1", ".psm1", ".bat", ".cmd")
     spans, quote, opened, i = [], "", 0, 0
     while i < len(line):
         c = line[i]
         if quote:
-            if c == "\\" and quote == '"':
+            if c == "\\" and quote == '"' and escapes:
                 i += 1
             elif c == quote:
                 spans.append((opened, i + 1, "string"))
                 quote = ""
+        elif c == "\\" and escapes:
+            i += 1  # `don\'t` opens no string
         elif c in "'\"":
             quote, opened = c, i
         elif (i == 0 or line[i - 1].isspace()) and (
@@ -1564,11 +1609,18 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
     return tuple(spans)
 
 
-def _inside(path: str, line: str, col: int) -> str:
-    """"string" or "comment" if column col of a line of code is in one, else ""."""
+def _span_at(path: str, line: str, col: int) -> tuple[int, int, str] | None:
+    """The string or comment column col of a line of code is in, if one."""
+    spans = _quoted_spans(path, line)
+    # Spans do not overlap and are in order: bisect, as a line can hold thousands.
+    i = bisect_right(spans, col, key=lambda span: span[0]) - 1
+    if i < 0:
+        return None
+    start, end, kind = spans[i]
     # Strictly inside: a match that begins at a quote or a # is the command itself.
-    return next((kind for start, end, kind in _quoted_spans(path, line) if start < col < end
-                 or (kind == "comment" and col == start)), "")
+    if start < col < end or (kind == "comment" and col == start):
+        return spans[i]
+    return None
 
 
 def _confirmations(unit: _Unit, line_index: int) -> int | None:
@@ -1724,6 +1776,16 @@ def link_text(path: Path | str) -> str:
     return without_extended_prefix(target) if os.name == "nt" else target
 
 
+def _climbs_out(relative: str) -> bool:
+    """Whether the `..` in a relative path lead above where it starts."""
+    depth = 0
+    for part in relative.split("/"):
+        depth += -1 if part == ".." else part not in ("", ".")
+        if depth < 0:
+            return True
+    return False
+
+
 def _normalize(target: str) -> str:
     t = target.strip().strip("'\"").replace("\\", "/")
     # `~/./Documents` and `~//Documents` name the same folder as `~/Documents`.
@@ -1732,9 +1794,12 @@ def _normalize(target: str) -> str:
     # judged as written, CRITICAL), and so is any path whose start is not known.
     if t.startswith(("/", "~/", "$HOME/", "${HOME}/")) and "/../" in t and not t.endswith("/.."):
         head, rest = (t.split("/", 1) if not t.startswith("/") else ("", t[1:]))
-        resolved = posixpath.normpath("/" + rest)
         if "$" not in rest:
-            t = head + resolved if head else resolved
+            if head and _climbs_out(rest):
+                t = head + "/.."  # above the home folder: no safer than naming its parent
+            else:
+                resolved = posixpath.normpath("/" + rest)
+                t = head + resolved if head else resolved
     while t.endswith(("/*", "/.")) and len(t) > 2:
         t = t[:-2]
     while t.endswith("/") and len(t) > 1:
