@@ -577,6 +577,19 @@ def test_a_delete_only_named_in_a_string_is_not_a_finding(tmp_path, line):
     assert scan(make(tmp_path, {"a.sh": line + "\n"})).findings == []
 
 
+@pytest.mark.parametrize("switched_off", ["-Confirm:$false", "-WhatIf:$false", "-confirm:0"])
+def test_a_switched_off_confirmation_is_not_one(tmp_path, switched_off):
+    script = f"Stop-Service x {switched_off}\nRemove-Item -Recurse $HOME\n"
+    result = scan(make(tmp_path, {"a.ps1": script}))
+    assert [f.rule for f in result.findings] == ["recursive-delete"]
+
+
+@pytest.mark.parametrize("switched_on", ["-Confirm", "-Confirm:$true", "-WhatIf"])
+def test_a_confirmation_that_is_on_still_counts(tmp_path, switched_on):
+    script = f"Stop-Service x {switched_on}\nRemove-Item -Recurse $HOME\n"
+    assert scan(make(tmp_path, {"a.ps1": script})).findings == []
+
+
 def test_a_sentence_naming_rmtree_is_not_a_call(tmp_path):
     skill = make(tmp_path, {"SKILL.md": "Python has rmtree (see the docs) for this.\n"})
     assert scan(skill).findings == []
