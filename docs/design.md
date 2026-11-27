@@ -94,10 +94,11 @@ Ignore version-control internals, caches, generated output, and binary files by 
 Environment-variable names and references, such as `os.getenv("OPENAI_API_KEY")`, are treated as existing configuration interfaces and are not replaced. The detector targets hard-coded values assigned to environment variables, such as `OPENAI_API_KEY="sk-..."`. Existing Hermes `required_environment_variables` and `metadata.hermes.config` declarations are preserved and reused where possible.
 3. **Contextual classification:** Optionally use an LLM to classify ambiguous candidates that cannot be reliably determined through deterministic rules, such as distinguishing example values from real user-specific values or identifying organization-specific project names and settings. This layer is secondary to deterministic detection and is never required for generalization.
 
-   - **Interface:** `classify.py` defines a `Classifier` protocol that takes a list of candidates and returns a label per candidate (`user_specific`, `example`, or `uncertain`). No provider is bundled in v1; a provider adapter implements the protocol.
-   - **Off by default:** enabled only by an explicit opt-in flag, and the result reports that it was used.
-   - **Privacy controls:** the classifier receives only a bounded context window around each candidate with the candidate value masked, never whole files, and never values the deterministic layer already classified as credentials.
-   - **Untrusted data:** classifier responses are validated against the allowed labels; anything else is treated as `uncertain`.
+   - **Interface:** `classify.py` defines a `Classifier` protocol that takes a list of candidates and returns a label per candidate (`personal`, `organization`, `example`, `reusable`, or `uncertain`), with an optional suggestion to replace it. No provider is bundled in v1; `LlmClassifier` adapts Hermes' plugin LLM access (`ctx.llm`), so it runs on the user's own provider.
+   - **Off by default:** it runs only when a classifier is passed to `generalize_skill`, and the result always reports whether it was used and how many candidates it was sent.
+   - **Privacy controls:** only findings left for review are sent, never credentials or values already decided. Each request carries the candidate value, its name, category and kind of file, and a few clipped lines around it, at most 200 candidates per run. In those lines the candidate and every other detected value are masked, and the file path is never sent. The value itself is sent, since telling an example from a real value depends on it.
+   - **Untrusted data:** skill text is sent as data, never as instructions. Classifier responses are validated against the allowed labels; anything else, including a candidate answered twice, is treated as `uncertain`. Labels are suggestions shown with findings left for review; they never change a finding's action, so a classifier fooled by a prompt injection cannot change what generalization does.
+   - Full behaviour: [generalize/classify.md](generalize/classify.md).
 4. **Review:** Non-interactive in v1. High-confidence findings are replaced automatically. Ambiguous findings are left unchanged and listed in `findings.json` with a stable finding ID, grouped by category and confidence. A user can re-run with an optional decisions file (finding ID to `approve` or `skip`) to resolve them; an interactive prompt is out of scope for v1.
 5. **Placeholder assignment:** Replace approved user-specific values with standardized, reusable configuration parameters. Repeated occurrences of the same value should share a placeholder when they serve the same purpose.
 6. **Configuration generation:** Create a field for each placeholder with a name, type, required flag, description, and validation constraints where known.
@@ -205,13 +206,13 @@ Use deterministic fixtures for skills with no sensitive values, known credential
 - Round-trip generalize/personalize/re-generalize produces a compatible template.
 - Real-skill runs record whether the expected categories were detected, whether structure and formatting were preserved, and whether the generalized skills remain usable, along with any false positives, false negatives, and behavior changes.
 
-Automated tests use a fake classifier. Real LLM calls are marked separately and excluded from normal CI to avoid cost and nondeterministic results. Transformation tests never run arbitrary skill code. Detection accuracy is reported only when findings are compared against a reviewed ground-truth set; without one, observed misses and false positives are listed and no rate is claimed.
+Automated tests use a fake classifier (`tests/fake_classifier.py`). Real LLM calls are marked `llm` and skipped unless `METASKILL_RUN_LLM=1` is set, so normal runs and CI avoid their cost and nondeterministic results. Transformation tests never run arbitrary skill code. Detection accuracy is reported only when findings are compared against a reviewed ground-truth set; without one, observed misses and false positives are listed and no rate is claimed.
 
 ## 9. Limitations and security considerations
 
 - Detection can miss novel, encoded, split, or semantically represented secrets and information in unsupported or binary files.
 - False positives can include public examples, sample domains, common paths, and benign identifiers.
-- LLM classification may send source excerpts to a provider. It is optional and off by default, its use is reported in the result, and only masked context windows are sent. Deterministic scanning works without it.
+- LLM classification may send source excerpts to a provider. It is optional and off by default, its use is reported in the result, and only findings left for review are sent, each with a short context window in which other detected values are masked. Deterministic scanning works without it.
 - Skill files are untrusted input and may contain prompt injection. Treat their contents and classifier responses as data, never as instructions to the tool.
 - Static checks do not determine all runtime behavior and do not certify skill safety.
 - Logs and reports must not expose detected credentials or personalized secret values.

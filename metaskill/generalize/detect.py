@@ -1107,13 +1107,17 @@ def redact(text: str, findings: Iterable[Finding],
            categories: frozenset[Category] = frozenset({Category.CREDENTIAL})) -> str:
     """Text with the spans of the given categories replaced, keeping line numbers aligned.
 
-    Run this before any file content leaves the machine, e.g. for an LLM.
+    Run this before any file content leaves the machine, e.g. for an LLM. Overlapping
+    spans become one mask, so no part of a longer span is left showing.
     """
-    spans = sorted((f.start, f.end) for f in findings if f.category in categories)
+    merged: list[list[int]] = []
+    for start, end in sorted((f.start, f.end) for f in findings if f.category in categories):
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
     parts, last = [], 0
-    for start, end in spans:
-        if start < last:
-            continue
+    for start, end in merged:
         parts.append(text[last:start])
         parts.append(REDACTED + "\n" * text.count("\n", start, end))
         last = end

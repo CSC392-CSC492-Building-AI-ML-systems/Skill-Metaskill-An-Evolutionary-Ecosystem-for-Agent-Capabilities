@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from fake_classifier import FakeClassifier
 
 import tools
 from metaskill.generalize import extras, pipeline
@@ -201,3 +202,59 @@ def test_tool_routes_generalize_to_the_pipeline(skill, clean_registry):
     assert result["operation"] == "generalize"
     assert result["detectors"] == ["regex"]
     assert result["counts"]["findings"] == 1
+
+
+# --- optional classifier (classify.py) ------------------------------------------
+
+HOST_SKILL = "# Ops\n\nCheck https://grafana.corp/d/x and ask priya.nair@acme-corp.com.\n"
+
+
+@pytest.fixture
+def host_skill(tmp_path):
+    root = tmp_path / "ops"
+    root.mkdir()
+    (root / "SKILL.md").write_text(HOST_SKILL, encoding="utf-8")
+    return root
+
+
+def test_without_a_classifier_nothing_is_sent_and_the_result_says_so(host_skill):
+    result = pipeline.generalize_skill(str(host_skill), "out")
+    assert result["classification"] == {"used": False}
+
+
+def test_a_classifier_is_reported_with_counts_only(host_skill):
+    fake = FakeClassifier()
+    result = pipeline.generalize_skill(str(host_skill), "out", classifier=fake)
+    assert [r.value for r in fake.received] == ["grafana.corp"]  # the email was decided
+    assert result["classification"] == {
+        "used": True, "classifier": "fake", "candidates_sent": 1, "candidates_not_sent": 0,
+        "models": [], "by_label": {"organization": 1}, "replace_suggested": 1,
+    }
+    # A suggestion never changes what generalization does with the finding.
+    assert result["counts"]["by_action"] == {"replace": 1, "review": 1}
+    assert "grafana.corp" not in json.dumps(result) and EMAIL not in json.dumps(result)
+    assert result["status"] == "partial" and result["detectors"] == ["regex"]
+
+
+def test_a_failing_classifier_keeps_the_regex_results(host_skill):
+    without = pipeline.generalize_skill(str(host_skill), "out")
+    result = pipeline.generalize_skill(
+        str(host_skill), "out", classifier=FakeClassifier(error=ConnectionError("grafana.corp")))
+    assert result["counts"] == without["counts"]
+    assert without["counts"]["by_action"] == {"replace": 1, "review": 1}
+    assert result["classification"]["candidates_sent"] == 1
+    assert result["classification"]["by_label"] == {"uncertain": 1}
+    assert any("ConnectionError" in w for w in result["warnings"])
+    assert "grafana.corp" not in json.dumps(result)
+
+
+def test_the_classifier_sees_extra_detector_findings_masked(host_skill, clean_registry):
+    def detect(text, skip, deadline):
+        start = text.find("Ops")
+        return [{"start": start, "end": start + 3, "label": "given name", "score": 0.9}]
+
+    clean_registry["fake"] = {"api": extras.API, "name": "fake", "detect": detect}
+    fake = FakeClassifier()
+    pipeline.generalize_skill(str(host_skill), "out", classifier=fake)
+    [request] = fake.received
+    assert "[REDACTED:personal_data]" in request.context and "Ops" not in request.context
