@@ -320,6 +320,23 @@ def test_unknown_and_broken_plans(root):
     assert plans.all_plans() == []
 
 
+def test_a_plans_folder_that_cannot_be_made_is_explained(root, skills):
+    root.parent.mkdir(parents=True, exist_ok=True)
+    root.write_text("a file where the folder should be")
+    with pytest.raises(plans.PlanError, match="could not be written"):
+        configure(skills)
+
+
+def test_an_approval_that_cannot_be_saved_is_explained(root, skills, monkeypatch):
+    plan, _ = configure(skills)
+
+    def refuse(path, data):
+        raise PermissionError("no")
+    monkeypatch.setattr(plans, "_write_json", refuse)
+    with pytest.raises(plans.PlanError, match="could not be written"):
+        plans.approve(plan.id, sandbox=LocalSandbox())
+
+
 # --- The /metaskill commands ---------------------------------------------------------
 
 

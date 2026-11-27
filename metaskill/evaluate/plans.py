@@ -182,8 +182,11 @@ def configure(skill_paths: list[str | Path], *, ctx: Any = None, sandbox: Any = 
                             "compare them fairly: "
                             + clean(reply.get("reason", ""), MAX_REASON_CHARS))
         root = root or plans_root()
-        root.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=".draft-", dir=root))
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix=".draft-", dir=root))
+        except OSError as e:
+            raise _unwritable(root, e) from e
         try:
             _write_draft(staging, reply)
             problems = validate(staging, sandbox)
@@ -206,8 +209,7 @@ def configure(skill_paths: list[str | Path], *, ctx: Any = None, sandbox: Any = 
         except PlanError as e:
             problems = [str(e)]
         except OSError as e:
-            raise PlanError(f"the plan could not be written in {root}: "
-                            f"{type(e).__name__}") from e
+            raise _unwritable(root, e) from e
         finally:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
@@ -228,7 +230,10 @@ def approve(plan_id: str, *, sandbox: Any = None, root: Path | None = None) -> P
     plan.data["status"] = APPROVED
     plan.data["approved"] = _now()
     plan.data["approved_files"] = files_fingerprint(plan.folder)
-    _write_json(plan.folder / "plan.json", plan.data)
+    try:
+        _write_json(plan.folder / "plan.json", plan.data)
+    except OSError as e:
+        raise _unwritable(plan.folder, e) from e
     return plan
 
 
@@ -261,6 +266,10 @@ def _require_skill(plan: Plan, skill: dict[str, Any]) -> None:
     path = Path(skill["path"])
     if not (path.is_dir() or path.is_file()):
         raise PlanError(f"{plan.id}: the skill {_name(skill['name'])} is no longer at {path}")
+
+
+def _unwritable(folder: Path, error: OSError) -> PlanError:
+    return PlanError(f"the plan could not be written in {folder}: {type(error).__name__}")
 
 
 def _name(name: object) -> str:
