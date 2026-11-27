@@ -240,6 +240,9 @@ class _Unit:
     kind: str  # "code", "prose" or "script"
     lines: list[tuple[int, str]]
     warning_block: bool = False
+    # From SKILL.md's frontmatter: a confirmation or warning there is its own key's, and
+    # the paragraph before does not reach into or out of it.
+    frontmatter: bool = False
     # Computed once per unit and reused for every match in it (MET-42): see _text.
     cache: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -446,7 +449,9 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
     raw_files, unchecked = _read_files(skill, notes)
     files, limited = _limit_lines(raw_files)
     units = [u for path, text in files for u in _units(path, text)]
-    units += _frontmatter_value_units(skill, files)
+    value_units, value_limited = _frontmatter_value_units(skill, files)
+    units += value_units
+    limited += value_limited
     aliases = {
         path: frozenset([*(f"module:{n}" for n in _SHUTIL_ALIAS.findall(text)),
                          *(f"function:{n}" for n in _RMTREE_ALIAS.findall(text))])
@@ -477,7 +482,10 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
             found[key] = finding
 
     for u_index, unit in enumerate(units):
-        previous = units[u_index - 1] if u_index and units[u_index - 1].path == unit.path else None
+        previous = units[u_index - 1] if u_index else None
+        if previous is not None and (previous.path != unit.path or unit.frontmatter
+                                     or previous.frontmatter):
+            previous = None
         considered = 0  # prose matches in this unit weighed for clearing (MET-42)
         unbounded = False
         considered_code = 0  # code matches cleared by a phrase, bounded as prose ones are
@@ -608,18 +616,20 @@ def _hidden_characters(path: str, text: str) -> list[Finding]:
 
 
 def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], list[Finding]]:
-    """(relative path, text) for SKILL.md and every markdown or script file, and a CRITICAL
-    scan-limit finding for each one that could only be checked in part, or not at all.
+    """(relative path, text) for SKILL.md, every markdown or script file and every other
+    file that starts with `#!`, and a CRITICAL scan-limit finding for each one that could
+    only be checked in part, or not at all.
 
     Files that are symlinks are not read, so a link cannot make the check read
     something outside the skill.
     """
-    files, unchecked = [("SKILL.md", skill.body)], []
+    files, unchecked = [("SKILL.md", skill.body.replace("\x00", ""))], []
     for rel in skill.files:
         rel = Path(rel)
-        if rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES:
-            continue
         name, path = rel.as_posix(), Path(skill.path) / rel
+        if (rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES
+                and not _has_shebang(path)):
+            continue
         try:
             if path.is_symlink():
                 continue
@@ -634,12 +644,35 @@ def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], 
                                          "scan-limit-file"))
             continue
         if len(raw) > MAX_FILE_BYTES:
-            raw = raw[:MAX_FILE_BYTES]
+            raw = _whole_characters(raw[:MAX_FILE_BYTES])
             notes.append(f"{name}: only the first {MAX_FILE_BYTES} bytes were checked")
             unchecked.append(_scan_limit(name, 1, f"more than {MAX_FILE_BYTES} bytes",
                                          "scan-limit-file"))
         files.append((name, _decode(name, raw, notes)))
     return files, unchecked
+
+
+def _has_shebang(path: Path) -> bool:
+    """Whether a file with another suffix, or none, is a script all the same: it starts
+    with `#!`, so it can be run by its name. Links are not read."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        with path.open("rb") as stream:
+            return stream.read(2) == b"#!"
+    except OSError:
+        return False
+
+
+def _whole_characters(raw: bytes) -> bytes:
+    """raw without a UTF-8 character that was cut off at its end, so that cutting a file
+    to size does not make it look like it is not UTF-8."""
+    for back in range(1, min(4, len(raw)) + 1):
+        byte = raw[-back]
+        if byte & 0xC0 != 0x80:  # the first byte of the last character
+            length = 1 if byte < 0xC0 else 2 if byte < 0xE0 else 3 if byte < 0xF0 else 4
+            return raw[:-back] if length > back else raw
+    return raw
 
 
 def _decode(name: str, raw: bytes, notes: list[str]) -> str:
@@ -668,41 +701,69 @@ def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
     for lineno, line in enumerate(lines, 1):
         stripped = line.strip()
         if block and (not stripped or stripped == "---" or _YAML_KEY.match(line)):
-            units.append(_Unit(path, "prose", block))
+            units.append(_Unit(path, "prose", block, frontmatter=True))
             block = []
         if stripped and stripped != "---":
             block.append((lineno, line))
     if block:
-        units.append(_Unit(path, "prose", block))
+        units.append(_Unit(path, "prose", block, frontmatter=True))
     return units
 
 
-def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]) -> list[_Unit]:
-    """Frontmatter text values that read differently once parsed (escapes, folded lines),
-    which the agent is shown parsed: each is prose, reported at its key's line."""
+def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
+                             ) -> tuple[list[_Unit], list[Finding]]:
+    """Every text in the parsed frontmatter, keys included, as prose reported at its
+    top-level key's line: the agent is shown it parsed, so escapes and folded lines are
+    undone. Each text is held to the same limit on commands per line as a file; the
+    findings for the lines over it come with the units."""
     text = dict(files).get("SKILL.md", "")
     match = _FRONTMATTER.match(text.removeprefix("\ufeff"))
     if match is None or frontmatter_too_large(skill.frontmatter):
-        return []  # too large has a finding of its own, and is not walked
+        return [], []  # too large has a finding of its own, and is not walked
     block = text[:match.end()]
+    # The one-line `key: value` units, by line: such a value is already scanned as it is.
+    one_line = {unit.lines[0][0]: unit.lines[0][1]
+                for unit in _frontmatter_units("SKILL.md", block.splitlines())
+                if len(unit.lines) == 1}
     units: list[_Unit] = []
-    seen: set[int] = set()
+    limited: list[Finding] = []
+    containers: set[int] = set()
+    done: set[str] = set()  # aliases repeat a string; scan it once
+
+    def scan(value: str, lineno: int) -> None:
+        if not value.strip() or value in done:
+            return
+        written = one_line.get(lineno, "")
+        # Not with a comment or an escape: then the line says more, or something else.
+        if "#" not in written and "\\" not in written and value.strip() in written:
+            return
+        done.add(value)
+        lines = [line for line in value.replace("\x00", "").splitlines() if line.strip()]
+        [(_, kept)], over = _limit_lines([("SKILL.md", "\n".join(lines))])
+        limited.extend(_scan_limit("SKILL.md", lineno, f.quote) for f in over[:1])
+        kept_lines = [line for line in kept.splitlines() if line.strip()]
+        if kept_lines:
+            units.append(_Unit("SKILL.md", "prose", [(lineno, line) for line in kept_lines],
+                               frontmatter=True))
 
     def walk(value: Any, lineno: int) -> None:
+        if isinstance(value, bytes):  # !!binary
+            value = value.decode("utf-8", errors="replace")
         if isinstance(value, str):
-            if value.strip() and value.strip() not in block:
-                units.append(_Unit("SKILL.md", "prose",
-                                   [(lineno, line) for line in value.splitlines()
-                                    if line.strip()]))
-        elif isinstance(value, (dict, list, tuple)) and id(value) not in seen:
-            seen.add(id(value))
-            for child in (value.values() if isinstance(value, dict) else value):
+            scan(value, lineno)
+        elif isinstance(value, (dict, list, tuple, set)) and id(value) not in containers:
+            containers.add(id(value))
+            children = ([*value.keys(), *value.values()] if isinstance(value, dict)
+                        else list(value))
+            for child in children:
                 walk(child, lineno)
 
     for key, value in skill.frontmatter.items():
         at = re.search(rf"(?m)^{re.escape(str(key)[:200])}[ \t]*:", block)
-        walk(value, block.count("\n", 0, at.start()) + 1 if at else 1)
-    return units
+        lineno = block.count("\n", 0, at.start()) + 1 if at else 1
+        walk(key, lineno)
+        walk(value, lineno)
+    return units, limited
 
 
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
@@ -713,7 +774,8 @@ _WARNING_BLOCK = re.compile(
 
 
 def _units(path: str, text: str) -> list[_Unit]:
-    if Path(path).suffix.lower() in SCRIPT_SUFFIXES:
+    suffix = Path(path).suffix.lower()
+    if suffix in SCRIPT_SUFFIXES or (suffix not in MARKDOWN_SUFFIXES and text.startswith("#!")):
         return [_Unit(path, "script", list(enumerate(text.splitlines(), 1)))]
 
     units: list[_Unit] = []
