@@ -160,16 +160,15 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     workspace each run happens in, and runs its `exit_code` commands; None means a
     `DockerSandbox` whose run folders are `config.sandbox_disk` in size. `judges`
     replaces the judges built from these, for tests. Logs go to
-    `run_dir/[log_folder]/logs/`; `log_folder` defaults to the skill's name, and a caller
-    running two skills of the same name into one run_dir gives each its own.
+    `run_dir/[log_folder]/logs/`; `log_folder` defaults to `skill-01`, and a caller
+    running more than one skill into a run_dir gives each its own. The skill's name is
+    never used as a folder: it comes from the skill's own frontmatter.
 
-    Raises ValueError if the skill's name or log_folder cannot be a folder name: the name
-    comes from the skill's own frontmatter, so `../x` or an absolute path would put the
-    logs elsewhere.
+    Raises ValueError if log_folder is not a plain folder name.
     """
-    folder = skill.name if log_folder is None else log_folder
+    folder = "skill-01" if log_folder is None else log_folder
     if not isinstance(folder, str) or not SAFE_NAME.fullmatch(folder):
-        raise ValueError(f"skill name {folder!r} may only contain letters, digits, "
+        raise ValueError(f"log folder {folder!r} may only contain letters, digits, "
                          "'_', '.' and '-'")
     pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
     result = RunnerResult(tests=[], task_ids=[task.task_id for task in tasks])

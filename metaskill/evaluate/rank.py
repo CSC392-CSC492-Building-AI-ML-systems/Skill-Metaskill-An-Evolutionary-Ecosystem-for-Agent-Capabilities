@@ -423,9 +423,9 @@ def _task_results(result: SkillResult, runs_per_task: int) -> list[str]:
     if short:
         lines += ["", f"{short} run(s) could not be made and are not counted above; the "
                   "dimension notes say why."]
-    # The folder the runs wrote to: not the name when two skills share one (same, same-2).
-    folder = result.log_folder or result.name
-    lines += ["", f"Logs: {_md(folder)}/logs/ in this report's folder, one file per run."]
+    if result.log_folder:  # skill-01, ...: which folder is this skill's
+        lines += ["", f"Logs: {_md(result.log_folder)}/logs/ in this report's folder, one file "
+                  "per run."]
     return lines
 
 

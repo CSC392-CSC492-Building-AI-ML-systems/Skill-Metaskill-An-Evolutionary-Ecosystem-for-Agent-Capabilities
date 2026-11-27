@@ -164,18 +164,19 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     sessions = run_errors = 0
     judge_models: set[str] = set()
     judge_usage = TokenUsage()
-    folders: set[str] = set()  # log folders taken in this call
-    named: set[str] = set()  # names already warned about
-    for path in paths:
+    names: set[str] = set()  # names of the skills so far
+    shared: set[str] = set()  # names already warned about
+    for number, path in enumerate(paths, 1):
         try:
             skill = Skill.load(_folder(path))
-            log_folder = _log_folder(skill.name, folders)
-            if log_folder != skill.name and skill.name not in named:
-                named.add(skill.name)
+            log_folder = _log_folder(number)
+            if skill.name in names and skill.name not in shared:
+                shared.add(skill.name)
                 warnings.append(clean(
                     f"more than one skill is named {skill.name}: the report has a row for "
-                    f"each, and each has its own run log folder ({skill.name}, "
-                    f"{log_folder}, ...)", MAX_REASON_CHARS))
+                    "each, and each one's Logs line says which folder holds its runs",
+                    MAX_REASON_CHARS))
+            names.add(skill.name)
             result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                            agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
                                            log_folder=log_folder)
@@ -242,19 +243,13 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     return response
 
 
-def _log_folder(name: str, taken: set[str]) -> str:
-    """A run log folder for a skill named `name` that no other skill of this call has, and
-    mark it taken. Two skills can share a name (a skill and its generalized copy); the
-    second gets `name-2`, or the next free number if a skill is really named that. A name
-    that is not text is returned as it is: the runner refuses it (a ValueError)."""
-    if not isinstance(name, str):
-        return name
-    folder, n = name, 1
-    while folder.casefold() in taken:  # casefold: one folder on Windows and macOS
-        n += 1
-        folder = f"{name}-{n}"
-    taken.add(folder.casefold())
-    return folder
+def _log_folder(number: int) -> str:
+    """The run log folder of the `number`th skill of a call, counted from 1: `skill-01`.
+
+    Never the skill's name, which comes from the skill's own frontmatter and could be a
+    report file (`ranked-evaluation.json`), a Windows device (`NUL`), a path (`../x`) or
+    the same folder as another skill's (`foo` and `foo.` on Windows)."""
+    return f"skill-{number:02d}"
 
 
 def _config(config_path: str | Path | None, output_path: str | Path | None,
@@ -381,9 +376,12 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
         try:
             runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
                              sandbox=sandbox, log_folder=log_folder, judges=judges)
-        except ValueError as e:  # a skill name that cannot be a log folder: no run made
+        except (ValueError, OSError) as e:
+            # The log folder could not be made (a full disk, a permission): no run, but the
+            # skill keeps its row and every dimension that needs no run.
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
-                                errors=[clean(str(e), MAX_REASON_CHARS)])
+                                errors=[clean(f"task runs: {type(e).__name__}: {e}",
+                                              MAX_REASON_CHARS)])
     task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
     found = {d: _score(d, skill, config, llm, runs, judge, task) for d in Dimension}
     return SkillResult(
