@@ -422,6 +422,16 @@ def test_an_aliased_text_is_scanned_once(tmp_path):
     assert len([f for f in result.findings if f.rule == "recursive-delete"]) == 1
 
 
+@pytest.mark.parametrize("skill_md, line", [
+    ("---\nname: s\na: Ask the user before deleting.\nd: Run rm -rf ~/Documents now\n---\n# S\n", 4),
+    ("---\nname: s\na: Ask the user before deleting.\n---\nRun rm -rf ~/Documents now\n", 5),
+])
+def test_a_confirmation_in_frontmatter_does_not_reach_another_value_or_the_body(
+        tmp_path, skill_md, line):
+    skill = make(tmp_path, {"SKILL.md": skill_md})
+    assert ("recursive-delete", f"SKILL.md:{line}", CRITICAL) in found(scan(skill))
+
+
 def test_nul_bytes_in_skill_md_do_not_hide_a_command(tmp_path):
     skill = make(tmp_path, {"SKILL.md": "```bash\nr\x00m -rf ~/Documents\n```\n"})
     assert ("recursive-delete", "SKILL.md:2", CRITICAL) in found(scan(skill))

@@ -237,6 +237,9 @@ class _Unit:
     kind: str  # "code", "prose" or "script"
     lines: list[tuple[int, str]]
     warning_block: bool = False
+    # From SKILL.md's frontmatter: a confirmation or warning there is its own key's, and
+    # the paragraph before does not reach into or out of it.
+    frontmatter: bool = False
     # Computed once per unit and reused for every match in it (MET-42): see _text.
     cache: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -448,7 +451,10 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
             found[key] = finding
 
     for u_index, unit in enumerate(units):
-        previous = units[u_index - 1] if u_index and units[u_index - 1].path == unit.path else None
+        previous = units[u_index - 1] if u_index else None
+        if previous is not None and (previous.path != unit.path or unit.frontmatter
+                                     or previous.frontmatter):
+            previous = None
         considered = 0  # prose matches in this unit weighed for clearing (MET-42)
         unbounded = False
         for l_index, (lineno, text) in enumerate(unit.lines):
@@ -654,12 +660,12 @@ def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
     for lineno, line in enumerate(lines, 1):
         stripped = line.strip()
         if block and (not stripped or stripped == "---" or _YAML_KEY.match(line)):
-            units.append(_Unit(path, "prose", block))
+            units.append(_Unit(path, "prose", block, frontmatter=True))
             block = []
         if stripped and stripped != "---":
             block.append((lineno, line))
     if block:
-        units.append(_Unit(path, "prose", block))
+        units.append(_Unit(path, "prose", block, frontmatter=True))
     return units
 
 
@@ -696,7 +702,8 @@ def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
         limited.extend(_scan_limit("SKILL.md", lineno, f.quote) for f in over[:1])
         kept_lines = [line for line in kept.splitlines() if line.strip()]
         if kept_lines:
-            units.append(_Unit("SKILL.md", "prose", [(lineno, line) for line in kept_lines]))
+            units.append(_Unit("SKILL.md", "prose", [(lineno, line) for line in kept_lines],
+                               frontmatter=True))
 
     def walk(value: Any, lineno: int) -> None:
         if isinstance(value, bytes):  # !!binary
