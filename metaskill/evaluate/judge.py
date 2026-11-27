@@ -99,16 +99,20 @@ _CONTENT_FILTER = re.compile(r"content[ _-]?(filter|policy|management)", re.IGNO
 
 
 def _refused(error: BaseException | None) -> bool:
-    """Whether a failed call is the provider rejecting the request. Judged by the HTTP
-    status where the error or its cause has one, else by content filter wording."""
-    while error is not None:
-        status = getattr(error, "status_code", None)
-        if isinstance(status, int):
-            return status in REFUSAL_STATUSES
-        if _CONTENT_FILTER.search(str(error)):
-            return True
+    """Whether a failed call is the provider rejecting the request. The HTTP status of
+    the error or of anything that caused it decides; only without one, content filter
+    wording does."""
+    chain: list[BaseException] = []
+    while error is not None and error not in chain and len(chain) < 20:
+        chain.append(error)
         error = error.__cause__
-    return False
+    for e in chain:
+        # openai and anthropic put it on the error, httpx and requests on its response.
+        for holder in (e, getattr(e, "response", None)):
+            status = getattr(holder, "status_code", None)
+            if isinstance(status, int):
+                return status in REFUSAL_STATUSES
+    return any(_CONTENT_FILTER.search(str(e)) for e in chain)
 
 
 class PluginLlm(Protocol):

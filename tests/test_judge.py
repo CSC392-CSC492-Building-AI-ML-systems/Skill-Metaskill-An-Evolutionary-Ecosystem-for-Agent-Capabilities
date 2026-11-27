@@ -565,10 +565,25 @@ class ApiError(Exception):
         self.status_code = status_code
 
 
-def wrapped(cause):
+def responded(status):
+    """An error as httpx raises it: the status is on its response."""
     error = RuntimeError("request failed")
+    error.response = SimpleNamespace(status_code=status)
+    return error
+
+
+def wrapped(cause, message="request failed"):
+    error = RuntimeError(message)
     error.__cause__ = cause
     return error
+
+
+def test_an_error_that_is_its_own_cause_is_judged_once():
+    error = RuntimeError("HTTP 500")
+    error.__cause__ = error
+    with pytest.raises(JudgeCallFailed) as raised:
+        judge(error).ask("i", "m", {}, "rate")
+    assert not isinstance(raised.value, JudgeRefused)
 
 
 @pytest.mark.parametrize("error, refused", [
@@ -583,6 +598,9 @@ def wrapped(cause):
     (ApiError("no such model", 404), False),
     (ApiError("overloaded", 529), False),
     (TimeoutError("timed out"), False),
+    (responded(400), True),
+    (responded(500), False),
+    (wrapped(ApiError("overloaded", 503), "blocked by content filter policy"), False),
 ])
 def test_ask_tells_a_refused_request_from_a_failed_call(error, refused):
     with pytest.raises(JudgeCallFailed) as raised:
