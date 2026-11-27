@@ -1518,3 +1518,39 @@ def test_a_delete_in_a_string_is_judged_by_the_target_inside_it(tmp_path, name, 
 def test_a_delete_whose_target_follows_the_string_is_still_found(tmp_path):
     result = scan(make(tmp_path, {"a.py": 'command = "rm -rf " + folder\n'}))
     assert "recursive-delete" in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("name, text, severity", [
+    ("a.py", 'os.system("rm -rf /tmp/%s" % name)', HIGH),
+    ("a.js", 'execSync("rm -rf /tmp/x " + extra)', HIGH),
+    ("a.sh", 'sh -c "rm -rf build/"*', HIGH),
+    ("a.sh", 'sh -c "rm -rf /"$folder', HIGH),
+])
+def test_a_string_that_is_only_part_of_a_command_is_not_judged_alone(tmp_path, name, text,
+                                                                     severity):
+    result = scan(make(tmp_path, {name: text + "\n"}))
+    assert [f.severity for f in result.findings if f.rule == "recursive-delete"] == [severity]
+
+
+@pytest.mark.parametrize("line", [
+    'x(`ls /*`); execSync("ls | xargs rm -rf")',
+    'const g = `${folder}/*`; execSync(`ls | xargs rm -rf`)',
+    's.replace(/`/g, ""); execSync("ls | xargs rm -rf")',
+    's.match(/a`b/); execSync(`ls | xargs rm -rf`)',
+    's.split(/(`)/); execSync(`ls | xargs rm -rf`)',
+])
+def test_a_slash_star_in_a_template_literal_opens_no_comment(tmp_path, line):
+    result = scan(make(tmp_path, {"a.js": line + "\n"}))
+    assert "recursive-delete" in {f.rule for f in result.findings}
+
+
+def test_a_delete_only_printed_in_a_template_literal_is_not_run(tmp_path):
+    result = scan(make(tmp_path, {"a.js": "console.log(`blocked: rm -rf`)\n"}))
+    assert "recursive-delete" not in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("piece", ["(/[", "(/`", "(/", " / ", "/* "])
+def test_many_slashes_in_a_script_are_read_quickly(tmp_path, piece):
+    started = time.monotonic()
+    scan(make(tmp_path, {"a.js": "x(" + piece * 40_000 + ")\nrm -rf\n"}))
+    assert time.monotonic() - started < 10

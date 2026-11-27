@@ -1089,13 +1089,20 @@ def _no_target(text: str, start: int, prose: bool, path: str) -> bool:
                                     or text.find("`", opened, start) >= 0)
 
 
+# After a string's closing quote: text that goes on with the command, so that the string is
+# only part of it: `"rm -rf " + x`, `"rm -rf /tmp/%s" % x`, `"...".format(x)`, `"build/"*`.
+_GOES_ON = re.compile(r"\s*(?:\+|%|\.\s*(?:format|concat|join)\b)|[^\s),;\]}|&#<>]")
+
+
 def _delete_args(text: str, start: int, end: int, prose: bool, path: str,
                  cmd: bool = False) -> list[str]:
     """The arguments of a delete command found at start. One written inside a string ends
     where the string does, so that in `os.system("rm -rf /")` the target is `/`. Not when
-    that leaves no target, as in `"rm -rf " + folder`: what follows may name it."""
+    something is joined to the string, as in `"rm -rf /tmp/" + folder`, or when that
+    leaves no target: what follows is then part of the command."""
     span = None if prose else _span_at(path, text, start)
-    if span and span[2] == "string" and span[0] < start and text[span[1] - 1] == text[span[0]]:
+    if (span and span[2] == "string" and span[0] < start and text[span[1] - 1] == text[span[0]]
+            and not _GOES_ON.match(text, span[1])):
         inside = _args(text, end, span[1] - 1)
         if any(not a.startswith("-") and not (cmd and _CMD_SWITCHES.fullmatch(a))
                for a in inside):
@@ -1639,6 +1646,9 @@ _BACKUP = re.compile(r"(?:make|take|create|keep|back)\b", re.I)
 _DESCRIBED_BEFORE = re.compile(r"\b(?:we|they|i)\s+(?:\w+ly\s+)?$", re.I)
 _BATCH_COMMENT = re.compile(r"\s*(?:rem\b|::)", re.I)
 _SLASH_COMMENTS = {".js", ".mjs", ".cjs", ".ts"}
+# A JavaScript pattern, /.../, and what a `/` must follow to open one rather than divide.
+_JS_PATTERN = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\[])+/")
+_BEFORE_JS_PATTERN = re.compile(r"(?:\A|[(,=:\[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case))\s*\Z")
 
 
 @lru_cache(maxsize=4)
@@ -1653,20 +1663,22 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
     block = (("<#", "#>") if suffix in (".ps1", ".psm1")
              else ("/*", "*/") if suffix in _SLASH_COMMENTS else None)
     spans, quote, opened, i, ansi = [], "", 0, 0, False
+    patterns = suffix in _SLASH_COMMENTS
     while i < len(line):
         c = line[i]
         if quote:
-            if c == "\\" and (quote == '"' or ansi) and escapes:
+            if c == "\\" and (quote in '"`' or ansi) and escapes:
                 i += 1
             elif c == quote:
                 spans.append((opened, i + 1, "string"))
                 quote = ""
         elif c == "\\" and escapes:
             i += 1  # `don\'t` opens no string
-        elif c in "'\"":
+        elif c in "'\"" or (c == "`" and suffix in _SLASH_COMMENTS):
             quote, opened = c, i
             ansi = c == "'" and line[i - 1:i] == "$"  # bash's $'it\\'s'
-        elif block and line.startswith(block[0], i):
+        elif (block and line.startswith(block[0], i)
+                and (i == 0 or line[i - 1] in " \t;,(){}=")):  # not the one in `~/*`
             end = line.find(block[1], i + 2)
             end = len(line) if end < 0 else end + 2
             spans.append((i, end, "comment"))
@@ -1677,6 +1689,13 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
                                                           or suffix in MARKDOWN_SUFFIXES))):
             spans.append((i, len(line), "comment"))
             break
+        elif (c == "/" and patterns and not line.startswith(("//", "/*"), i)
+                and _BEFORE_JS_PATTERN.search(line, max(0, i - 20), i)):
+            # A quote in a pattern such as /`/g or /["']/ opens no string.
+            if found := _JS_PATTERN.match(line, i):
+                i = found.end()
+                continue
+            patterns = False  # none closes further on: do not look again (MET-42)
         i += 1
     if quote:
         spans.append((opened, len(line), "string"))
