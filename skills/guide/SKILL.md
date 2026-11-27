@@ -45,6 +45,9 @@ Check that the directory or file is there before calling the tool. If the tool r
   skill, so it makes **many real model calls**: say so and get the user's OK before
   passing it. Use a task file only the user gave or named; never write one yourself.
   Without `tasks_path`, no task runs and those dimensions are skipped.
+  If the user asks how to write one, point them to `docs/writing-tasks.md` in the plugin's
+  folder. `/metaskill tasks check <file>`, which they type, lists a file's problems and
+  planned sessions without running anything.
 
 If the request is unclear, ask the user which one they want.
 

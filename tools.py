@@ -26,8 +26,10 @@ SKILL_HELP = (
 USAGE = (
     "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
     "generalize <skill> | "
-    f"personalize <skill> --config <file> | skills [text] | quality-pilot\n{SKILL_HELP}"
+    "personalize <skill> --config <file> | tasks check <file> [--config <file>] | "
+    f"skills [text] | quality-pilot\n{SKILL_HELP}"
 )
+TASKS_USAGE = "Usage: /metaskill tasks check <task file> [--config <file>]"
 
 # operation -> (module, entry point)
 _ENTRY_POINTS = {
@@ -442,6 +444,45 @@ def _summary(result, paths=()):
     return "\n".join(lines)
 
 
+def _check_tasks(rest, cwd):
+    """`/metaskill tasks check <file> [--config FILE]`: whether the task file can be used,
+    and the sessions it plans. Nothing is run."""
+    action, _, request = rest.strip().partition(" ")
+    options = {}
+    while (option := _OPTION.search(request)) is not None:
+        if option[1] != "config" or options:
+            return TASKS_USAGE
+        options[option[1]] = option[2].strip("\"'")
+        request = request[:option.start()]
+    name = request.strip().strip("\"'")
+    if action != "check" or not name:
+        return TASKS_USAGE
+    path = os.path.join(cwd, name)
+    config_path = options.get("config") and os.path.join(cwd, options["config"])
+    for label, file in (("task file", path), ("config file", config_path)):
+        if file and not os.path.isfile(file):
+            return f"metaskill tasks check: the {label} does not exist: {file}\n{_where(cwd or os.getcwd())}"
+    module = "metaskill.evaluate"
+    if __package__:
+        module = f"{__package__}.{module}"
+    result = importlib.import_module(module).check_task_file(path, config_path)
+    if result["status"] == "error":
+        problems = result.get("problems", [])
+        count = f" ({len(problems)} problem(s))" if problems else ""
+        return "\n".join([f"{name}: {result['error']}{count}",
+                          *(f"- {problem}" for problem in problems)])
+    ids, runs = result["task_ids"], result["runs_per_task"]
+    return "\n".join([
+        f"{name}: OK, {len(ids)} task(s): {', '.join(ids)}",
+        f"Agent sessions per skill: {result['sessions_per_skill']} "
+        f"({len(ids)} task(s) x {runs} run(s) x with and without the skill)",
+        f"Judge calls for llm checks, per skill: up to {result['llm_judge_calls_per_skill']}, "
+        "plus any retries",
+        *(f"Warning: {warning}" for warning in result["warnings"]),
+        "Nothing was run.",
+    ])
+
+
 def make_command_handler(ctx):
     """Build the /metaskill handler.
 
@@ -467,6 +508,8 @@ def make_command_handler(ctx):
             command, _, rest = request.partition(" ")
             if command == "skills":
                 return _list_skills(rest, cwd or os.getcwd())
+            if command == "tasks":
+                return _check_tasks(rest, cwd)
             if command == "quality-pilot":
                 if rest.strip():
                     return "Usage: /metaskill quality-pilot (bundled synthetic task only)"

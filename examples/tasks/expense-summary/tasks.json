@@ -1,0 +1,53 @@
+{
+  "tasks": [
+    {
+      "task_id": "march",
+      "description": "A month with several categories and two refunded rows",
+      "prompt": "expenses.csv in this folder lists expenses. Rows whose status is \"refunded\" do not count. Write summary.json in this folder with exactly these keys:\n- \"total\": the sum of the amounts that count, as a number\n- \"by_category\": an object giving each category that has a counted amount its sum\n- \"largest\": the category with the highest sum, or null if nothing counts\n\nThen tell me which category cost the most, and how much.",
+      "fixtures": [
+        "fixtures/march/expenses.csv"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "file_exists",
+          "target": "summary.json"
+        },
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "target": "python3 -I -c 'import json; d = json.load(open(\"summary.json\")); assert set(d) == {\"total\", \"by_category\", \"largest\"}, sorted(d); assert abs(d[\"total\"] - 571.80) < 0.005, d[\"total\"]; got = {k: round(v, 2) for k, v in d[\"by_category\"].items()}; assert got == {\"meals\": 60.85, \"office\": 33.2, \"software\": 169.0, \"travel\": 308.75}, got; assert d[\"largest\"] == \"travel\", d[\"largest\"]'",
+          "expected": "0"
+        },
+        {
+          "judge": "llm",
+          "checklist": [
+            "Says that travel is the category that cost the most",
+            "Gives 308.75 as the amount for that category"
+          ]
+        }
+      ]
+    },
+    {
+      "task_id": "all-refunded",
+      "description": "Every row is refunded, so nothing counts",
+      "prompt": "expenses.csv in this folder lists expenses. Rows whose status is \"refunded\" do not count. Write summary.json in this folder with exactly these keys:\n- \"total\": the sum of the amounts that count, as a number\n- \"by_category\": an object giving each category that has a counted amount its sum\n- \"largest\": the category with the highest sum, or null if nothing counts\n\nThen reply with the single line TOTAL=<total> using two decimal places.",
+      "fixtures": [
+        "fixtures/all-refunded/expenses.csv"
+      ],
+      "checks": [
+        {
+          "judge": "deterministic",
+          "kind": "exit_code",
+          "target": "python3 -I -c 'import json; d = json.load(open(\"summary.json\")); assert set(d) == {\"total\", \"by_category\", \"largest\"}, sorted(d); assert abs(d[\"total\"] - 0) < 0.005, d[\"total\"]; got = {k: round(v, 2) for k, v in d[\"by_category\"].items()}; assert got == {}, got; assert d[\"largest\"] == None, d[\"largest\"]'",
+          "expected": "0"
+        },
+        {
+          "judge": "deterministic",
+          "kind": "output_matches",
+          "expected": "^TOTAL=0\\.00\\s*$"
+        }
+      ]
+    }
+  ]
+}

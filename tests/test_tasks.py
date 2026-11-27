@@ -5,7 +5,7 @@ import types
 import pytest
 
 from metaskill.evaluate.models import CheckKind, JudgeType
-from metaskill.evaluate.tasks import TaskError, load_tasks
+from metaskill.evaluate.tasks import TaskError, load_tasks, read_tasks
 
 TASK = {
     "task_id": "upload-single-file",
@@ -63,7 +63,7 @@ def test_yaml_outside_hermes_says_to_use_json(folder, monkeypatch):
     ("{not json", "not valid json"),
     (["text"], "is not an object"),
     ([{**TASK, "checks": []}], "has no checks"),
-    ([{"task_id": "x"}], "KeyError"),
+    ([{"task_id": "x"}], "missing field `description`"),
     ([TASK, TASK], "duplicate task_id"),
     ([{**TASK, "task_id": "../escape"}], "may only contain"),
     ([{**TASK, "fixtures": ["missing.txt"]}], "does not exist"),
@@ -136,3 +136,99 @@ def test_hard_linked_fixture_is_refused(folder):
 def test_missing_file(tmp_path):
     with pytest.raises(TaskError, match="cannot read"):
         load_tasks(tmp_path / "missing.json")
+
+
+def check(**fields):
+    return [{**TASK, "checks": [fields]}]
+
+
+def deterministic(kind, **fields):
+    return check(judge="deterministic", kind=kind, **fields)
+
+
+@pytest.mark.parametrize("data, message", [
+    # Used to crash, rather than say what is wrong.
+    ([{**TASK, "checks": "file_exists"}], "`checks` must be a non-empty list"),
+    ([{**TASK, "checks": ["file_exists"]}], "check 1 is not an object"),
+    ([{**TASK, "task_id": 7}], "`task_id` must be text"),
+    ([{**TASK, "prompt": 5}], "`prompt` must be text"),
+    ([{**TASK, "prompt": "  "}], "`prompt` is empty"),
+    ([{**TASK, "description": None}], "`description` must be text"),
+    ([{**TASK, "fixtures": "files/a.txt"}], "`fixtures` must be a list"),
+    ([{**TASK, "fixtures": [3]}], "`fixtures` must be a list"),
+    ([{**TASK, "fixtures": ["a" * 300]}], "cannot be read|does not exist"),
+    (check(kind="file_exists", target="a"), "missing field `judge`"),
+    (check(judge="lm"), "`judge` must be one of deterministic, llm"),
+    (check(judge="deterministic"), "needs `kind`: one of file_exists, exit_code"),
+    (deterministic("file_exist", target="a"), "unknown kind 'file_exist': use one of"),
+    (deterministic("file_exists"), "needs `target`: a file path"),
+    (deterministic("file_exists", target="/etc/passwd"), "outside the run folder"),
+    (deterministic("file_exists", target="a/../../b"), "outside the run folder"),
+    (deterministic("exit_code", target=" "), "needs `target`: a command"),
+    (deterministic("exit_code", target="true", expected="zero"), "must be a whole number"),
+    (deterministic("exit_code", target="true", expected=1.5), "must be a whole number"),
+    (deterministic("exit_code", target="true", expected=True), "must be a whole number"),
+    (deterministic("output_matches"), "needs `expected`"),
+    (deterministic("output_matches", expected="("), "not a valid regular expression"),
+    (deterministic("output_matches", expected=3), "needs `expected`"),
+    (check(judge="llm"), "needs `checklist`"),
+    (check(judge="llm", checklist="says hello"), "needs `checklist`"),
+    (check(judge="llm", checklist=["ok", ""]), "needs `checklist`"),
+])
+def test_rejects_checks_that_could_only_fail_once_an_agent_had_run(folder, data, message):
+    with pytest.raises(TaskError, match=message):
+        load_tasks(write(folder, data))
+
+
+def test_a_file_that_is_not_utf8_is_refused(folder):
+    path = folder / "tasks.json"
+    path.write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(TaskError, match="cannot read"):
+        load_tasks(path)
+
+
+def test_every_problem_is_listed_by_task(folder):
+    data = [{**TASK, "fixtures": ["missing.txt", "../outside.txt"], "prompt": 1},
+            "text",
+            {**TASK, "checks": [{"judge": "llm"}, {"judge": "deterministic"}]}]
+    with pytest.raises(TaskError) as caught:
+        load_tasks(write(folder, data))
+    problems = caught.value.problems
+    assert [p.split(":")[0] for p in problems] == [
+        "task 1 (upload-single-file)", "task 1 (upload-single-file)",
+        "task 1 (upload-single-file)", "task 2 is not an object",
+        "task 3 (upload-single-file)", "task 3 (upload-single-file)",
+        "task 3 (upload-single-file)"]
+    assert any("duplicate task_id" in p for p in problems)
+    assert all(p in str(caught.value) for p in problems)
+
+
+@pytest.mark.parametrize("fields, expected", [
+    ({"kind": "exit_code", "target": "false", "expected": 1}, "1"),  # YAML gives numbers
+    ({"kind": "exit_code", "target": "true", "expected": None}, ""),
+    ({"kind": "file_exists", "target": "a.txt", "expected": None, "checklist": None}, ""),
+])
+def test_accepts_a_number_or_nothing_where_text_goes(folder, fields, expected):
+    [task] = load_tasks(write(folder, check(judge="deterministic", **fields)))
+    assert task.checks[0].expected == expected and task.checks[0].checklist == []
+
+
+def test_a_check_written_back_by_to_dict_loads_without_warnings(folder):
+    llm = {"judge": "llm", "checklist": ["says hello"]}
+    [task] = load_tasks(write(folder, [{**TASK, "checks": [TASK["checks"][0], llm]}]))
+    found = read_tasks(write(folder, [{**task.to_dict(), "fixtures": ["files/a.txt"]}]))
+    assert found.warnings == []
+
+
+def test_warns_about_what_is_ignored(folder):
+    data = {"notes": "x", "tasks": [
+        {**{k: v for k, v in TASK.items() if k != "fixtures"}, "fixture": ["files/a.txt"],
+         "checks": [{"judge": "llm", "checklist": ["x"], "target": "a.txt", "wieght": 2}]}]}
+    warnings = read_tasks(write(folder, data)).warnings
+    assert warnings == [
+        "the file: unknown field 'notes' is ignored",
+        "task 1 (upload-single-file): unknown field 'fixture' is ignored; did you mean "
+        "`fixtures`?",
+        "task 1 (upload-single-file), check 1: unknown field 'wieght' is ignored",
+        "task 1 (upload-single-file), check 1: `target` is ignored by this check",
+    ]

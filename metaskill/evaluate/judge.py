@@ -823,6 +823,14 @@ def _check_schema(value: Any, schema: dict[str, Any], path: str,
             _check_schema(item, schema["items"], f"{path}/{i}" if path else str(i), problems)
 
 
+def outside_run_folder(target: str) -> bool:
+    """Whether a file_exists target, as written, points outside the run folder. A leading
+    slash counts on Windows too, where such a path has no drive and is not "absolute"."""
+    path = Path(os.path.normpath(target))
+    return (target.startswith(("/", "\\")) or path.is_absolute() or bool(path.drive)
+            or path.parts[:1] == ("..",))
+
+
 class DeterministicJudge:
     """Judges a run with a machine-checkable condition (evaluate.md 4.2). No model call.
 
@@ -862,9 +870,9 @@ class DeterministicJudge:
             raise JudgeError("a file_exists check needs a target path")
         # The target as written must stay in the run folder, or the task is broken. This
         # is checked on the text, not on disk, where the run may have planted links.
-        target = Path(os.path.normpath(check.target))
-        if target.is_absolute() or target.drive or target.parts[:1] == ("..",):
+        if outside_run_folder(check.target):
             raise JudgeError(f"file_exists target {check.target} is outside the run folder")
+        target = Path(os.path.normpath(check.target))
         # A link the run made that leads out of the folder does not count as the file.
         root = run.workdir.resolve()
         try:

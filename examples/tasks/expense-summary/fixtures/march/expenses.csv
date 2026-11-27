@@ -1,0 +1,10 @@
+date,category,amount,status
+2026-03-02,software,49.00,paid
+2026-03-03,travel,212.40,paid
+2026-03-05,meals,18.75,paid
+2026-03-09,travel,180.00,refunded
+2026-03-11,software,120.00,paid
+2026-03-14,meals,42.10,paid
+2026-03-19,travel,96.35,paid
+2026-03-23,office,33.20,paid
+2026-03-27,software,60.00,refunded

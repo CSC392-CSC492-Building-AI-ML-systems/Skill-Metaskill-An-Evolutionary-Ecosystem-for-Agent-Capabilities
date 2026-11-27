@@ -45,16 +45,18 @@ from .models import (
     Dimension,
     DimensionScore,
     EvaluationConfig,
+    JudgeType,
     Report,
     Skill,
     SkillResult,
     Status,
+    Variant,
 )
 # Under another name: `rank` here would hide the rank module.
 from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
 from .runner import RunnerResult, report_dir, run_tasks, timestamp
-from .tasks import TaskError, load_tasks
+from .tasks import TaskError, read_tasks
 
 _log = logging.getLogger(__name__)
 
@@ -104,6 +106,30 @@ def rank_skills(skill_paths: list[str | Path], *, config_path: str | Path | None
     return _evaluate(skill_paths, config_path, output_path, tasks_path, ctx, agent, sandbox, judges)
 
 
+def check_task_file(tasks_path: str | Path,
+                    config_path: str | Path | None = None) -> dict[str, Any]:
+    """What `/metaskill tasks check` reports: whether evaluate can use the task file, and
+    what running it would take for each skill. Only reads the two files: no sandbox, no
+    agent and no model."""
+    try:
+        config = _config(config_path, None)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"status": "error", "error": "config_path is not a valid evaluation config"}
+    try:
+        found = read_tasks(tasks_path)
+    except TaskError as e:
+        return {"status": "error", "error": "the task file cannot be used",
+                "problems": [clean(p, MAX_REASON_CHARS) for p in e.problems]}
+    runs = config.runs_per_task * len(Variant)
+    llm_checks = sum(c.judge is JudgeType.LLM for t in found.tasks for c in t.checks)
+    return {"status": "ok",
+            "task_ids": [t.task_id for t in found.tasks],
+            "runs_per_task": config.runs_per_task,
+            "sessions_per_skill": len(found.tasks) * runs,
+            "llm_judge_calls_per_skill": llm_checks * runs,
+            "warnings": [clean(w, MAX_REASON_CHARS) for w in found.warnings]}
+
+
 def _evaluate(paths: list[str | Path], config_path: str | Path | None,
               output_path: str | Path | None, tasks_path: str | Path | None,
               ctx: Any, agent: Any = None, sandbox: Any = None,
@@ -123,15 +149,20 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
             config.tasks_path = Path(session_cwd()) / config.tasks_path
 
     tasks = None
+    task_warnings: list[str] = []
     if config.tasks_path is None:
         # Nothing runs, so only what safety needs; Docker is not asked for.
         missing = safety.missing_dependencies()
     else:
         try:
-            tasks = load_tasks(config.tasks_path)
+            task_file = read_tasks(config.tasks_path)
         except TaskError as e:  # names the file and the task: the user's own, not a skill's
+            # The advice comes first: a long list of problems is cut at the end.
             return {"status": "error",
-                    "error": clean(f"tasks_path is not a usable task file: {e}", MAX_REASON_CHARS)}
+                    "error": clean("tasks_path is not a usable task file (`/metaskill tasks "
+                                   f"check <file>` lists every problem): {e}", MAX_REASON_CHARS)}
+        tasks = task_file.tasks
+        task_warnings = [clean(f"task file: {w}", MAX_REASON_CHARS) for w in task_file.warnings]
         inside = _task_files_in_skills(config.tasks_path, tasks, paths)
         if inside:  # the with-skill agent would read the checks and expected answers
             return {"status": "error",
@@ -160,7 +191,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     llm = getattr(ctx, "llm", None)
     judge = _judge(ctx, config)
     results: list[SkillResult] = []
-    warnings: list[str] = []
+    warnings: list[str] = list(task_warnings)
     sessions = run_errors = 0
     judge_models: set[str] = set()
     judge_usage = TokenUsage()
