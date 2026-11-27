@@ -59,6 +59,7 @@ MAX_COMMANDS_PER_LINE = 200
 # Characters the Python-level parsers (shell arguments, call arguments, print arguments)
 # may read per skill. Real skills read a few hundred; past this, the rest is not parsed
 # and the skill gets a CRITICAL scan-limit finding.
+MAX_KEY_CHARS = 200  # how far into a frontmatter line its key's colon is looked for
 MAX_PARSED_CHARS = 1_000_000
 
 DESTRUCTIVE = "destructive-unconfirmed"
@@ -691,6 +692,9 @@ def _decode(name: str, raw: bytes, notes: list[str]) -> str:
 # The frontmatter as Skill.load reads it (models.py): only SKILL.md has one.
 _FRONTMATTER = re.compile(r"---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", re.DOTALL)
 _YAML_KEY = re.compile(r"^(?:[^\s#][^:]*:(?:\s|$)|\s*-\s)")
+# A line that holds one `key: value` pair or one list item, and what it holds.
+_PAIR = re.compile(r"(?:-[ \t]+)?([^\s:#\[{\-][^:]*):[ \t]+(.*)")
+_ITEM = re.compile(r"\s*-[ \t]+(.*)")
 
 
 def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
@@ -708,6 +712,34 @@ def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
     if block:
         units.append(_Unit(path, "prose", block, frontmatter=True))
     return units
+
+
+def _is_all_of(line: str, value: str) -> bool:
+    """Whether a frontmatter line already reads as value does: value is its key, its whole
+    value or its whole list item, perhaps quoted. Not one entry of a [...] or {...} on the
+    line, where another entry's warning or confirmation would apply to it; and not with a
+    comment or an escape, as the line then says more, or something else."""
+    if "#" in line or "\\" in line:
+        return False
+    line = line.rstrip()
+    held: list[str] = []
+    if pair := _PAIR.match(line):
+        held += pair.groups()
+    if item := _ITEM.match(line):
+        held.append(item[1])
+    return any(h in (value, f'"{value}"', f"'{value}'") for h in held)
+
+
+def _key_lines(block: str) -> dict[str, int]:
+    """{what stands before a colon at the start of a line: the first such line}, read once,
+    so that finding each key's line does not take a search of the block per key."""
+    found: dict[str, int] = {}
+    for lineno, line in enumerate(block.split("\n"), 1):
+        at = line.find(":", 0, MAX_KEY_CHARS)
+        while at != -1:
+            found.setdefault(line[:at].rstrip(" \t"), lineno)
+            at = line.find(":", at + 1, MAX_KEY_CHARS)
+    return found
 
 
 def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
@@ -733,9 +765,7 @@ def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
     def scan(value: str, lineno: int) -> None:
         if not value.strip() or value in done:
             return
-        written = one_line.get(lineno, "")
-        # Not with a comment or an escape: then the line says more, or something else.
-        if "#" not in written and "\\" not in written and value.strip() in written:
+        if _is_all_of(one_line.get(lineno, ""), value.strip()):
             return
         done.add(value)
         lines = [line for line in value.replace("\x00", "").splitlines() if line.strip()]
@@ -758,9 +788,12 @@ def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
             for child in children:
                 walk(child, lineno)
 
+    key_lines = _key_lines(block)
     for key, value in skill.frontmatter.items():
-        at = re.search(rf"(?m)^{re.escape(str(key)[:200])}[ \t]*:", block)
-        lineno = block.count("\n", 0, at.start()) + 1 if at else 1
+        try:
+            lineno = key_lines.get(str(key), 1)
+        except ValueError:  # an integer too long for Python to write out, from 0x...
+            lineno = 1
         walk(key, lineno)
         walk(value, lineno)
     return units, limited

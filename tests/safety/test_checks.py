@@ -1433,3 +1433,38 @@ def test_hostile_input_cannot_stall_the_scan(tmp_path, name, body):
     result = scan(make(tmp_path, {"SKILL.md": body}))
     assert result.status is BackendStatus.OK
     assert time.monotonic() - start < 10, name
+
+
+@pytest.mark.parametrize("line", [
+    'steps: ["Ask the user before deleting.", "rm -rf ~/Documents"]',
+    'steps: {a: "Ask the user before deleting.", b: "rm -rf ~/Documents"}',
+    '- ["Ask the user before deleting.", "rm -rf ~/Documents"]',
+])
+def test_a_confirmation_in_one_entry_of_a_flow_collection_clears_no_other(tmp_path, line):
+    if line.startswith("- "):
+        line, parsed = "steps:\n" + line, [["Ask the user before deleting.", "rm -rf ~/Documents"]]
+    elif "[" in line:
+        parsed = ["Ask the user before deleting.", "rm -rf ~/Documents"]
+    else:
+        parsed = {"a": "Ask the user before deleting.", "b": "rm -rf ~/Documents"}
+    skill = make(tmp_path, {"SKILL.md": f"---\nname: s\n{line}\n---\n# s\n"})
+    skill.frontmatter = {"name": "s", "steps": parsed}
+    assert "recursive-delete" in {f.rule for f in scan(skill).findings}
+
+
+def test_many_frontmatter_keys_are_scanned_quickly(tmp_path):
+    keys = {f"key{i}": f"v{i}" for i in range(40_000)}
+    text = "".join(f"{k}: {v}\n" for k, v in keys.items())
+    started = time.monotonic()
+    skill = make(tmp_path, {"SKILL.md": f"---\n{text}---\n# s\n"})
+    skill.frontmatter = keys
+    scan(skill)
+    assert time.monotonic() - started < 15
+
+
+def test_a_huge_integer_key_does_not_stop_the_scan(tmp_path):
+    key = int("f" * 6000, 16)  # too long for str(), as YAML's 0xfff... gives
+    skill = make(tmp_path, {"SKILL.md": f"---\n? 0x{'f' * 6000}\n: rm -rf ~\n---\n# s\n"})
+    skill.frontmatter = {key: "rm -rf ~"}
+    result = scan(skill)
+    assert result.status is BackendStatus.OK and "recursive-delete" in {f.rule for f in result.findings}
