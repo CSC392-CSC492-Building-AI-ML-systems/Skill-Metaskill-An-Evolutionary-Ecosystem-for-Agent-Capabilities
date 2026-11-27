@@ -941,8 +941,8 @@ def is_secret_name(name: str) -> bool:
     parts = [p for p in re.split(r"[^A-Z0-9]+", words) if p]
     if not parts or parts[-1] in _NOT_SECRET_ENDINGS:
         return False
-    if parts[-2:-1] == ["PER"]:  # a rate, e.g. chars_per_token
-        return False
+    if parts[-2:-1] == ["PER"] and not _SECRET_PARTS.intersection(parts[:-2]):
+        return False  # a rate, e.g. chars_per_token; not api_key_per_user
     return any(part in _SECRET_PARTS for part in parts)
 
 
@@ -986,6 +986,14 @@ def _is_secret_variable(m: re.Match[str]) -> bool:
 _TEMPLATE_MARKS = re.compile(r"""\$\{|[`'"{}\\]""")
 
 
+def _in_regex(text: str, i: int) -> bool:
+    """Whether the backtick at i is a character of a JavaScript pattern such as /`/g or
+    /["'`]/, so it opens no template literal. Read as one, it would take the code after it
+    for the literal's words."""
+    before = text[max(0, i - 2):i]
+    return before.endswith(("/", "'", '"')) or before == "/["
+
+
 def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
     """text with the words of its template literals (backtick strings) turned into spaces,
     so only what their ${...} compute is read, and where the literals are. A literal that
@@ -1016,7 +1024,8 @@ def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
         elif c == "\\":
             skip = i + 2  # `\\`` opens no literal
         elif c == "`":
-            stack.append([i, i, []])
+            if not _in_regex(text, i):
+                stack.append([i, i, []])
         elif c in ("'", '"') and c not in unmatched:
             quoted = _STRING.match(text, i)
             if quoted:

@@ -1043,3 +1043,18 @@ def test_hostile_input_cannot_stall_the_scan(tmp_path, name, body):
     result = scan(make(tmp_path, {"SKILL.md": body}))
     assert result.status is BackendStatus.OK
     assert time.monotonic() - start < 10, name
+
+
+@pytest.mark.parametrize("line", [
+    "console.log(s.replace(/`/g, ''), password, `x`)",
+    "console.log(s.split(/[`]/), password, `x`)",
+    "console.log(s.split(/[\"'`]/), password, `x`)",
+])
+def test_a_backtick_in_a_pattern_opens_no_template_literal(tmp_path, line):
+    result = scan(make(tmp_path, {"a.js": line + "\n"}))
+    assert "print-secret" in {f.rule for f in result.findings}
+
+
+def test_a_secret_named_per_something_is_still_a_secret():
+    assert is_secret_name("api_key_per_user") and is_secret_name("PASSWORD_PER_HOST")
+    assert not is_secret_name("chars_per_token") and not is_secret_name("cost_per_token")
