@@ -83,6 +83,34 @@ class JudgeCallFailed(JudgeError):
     evaluate says so (judge.md 3)."""
 
 
+class JudgeRefused(JudgeCallFailed):
+    """The provider rejected this request, e.g. a content filter. What was sent may be
+    why, so runner.py can count it against a run (runner.md 2.3)."""
+
+
+class JudgeNoVerdict(JudgeError):
+    """The judge replied, but with no usable JSON object, even after retries."""
+
+
+# HTTP statuses a provider answers with when it will not take what was sent. Others, such
+# as 401, 404, 429 and 5xx, say nothing about the content.
+REFUSAL_STATUSES = {400, 413, 422}
+_CONTENT_FILTER = re.compile(r"content[ _-]?(filter|policy|management)", re.IGNORECASE)
+
+
+def _refused(error: BaseException | None) -> bool:
+    """Whether a failed call is the provider rejecting the request. Judged by the HTTP
+    status where the error or its cause has one, else by content filter wording."""
+    while error is not None:
+        status = getattr(error, "status_code", None)
+        if isinstance(status, int):
+            return status in REFUSAL_STATUSES
+        if _CONTENT_FILTER.search(str(error)):
+            return True
+        error = error.__cause__
+    return False
+
+
 class PluginLlm(Protocol):
     """The part of Hermes' `ctx.llm` the judge uses (agent.plugin_llm.PluginLlm)."""
 
@@ -94,10 +122,12 @@ class PluginLlm(Protocol):
 
 # Text an agent may act on but a human reviewer cannot see: HTML comments, and
 # characters that render as nothing (zero-width, bidi and annotation controls, tag
-# characters).
+# characters). Lone surrogates too: they are no character, and cannot be sent or saved
+# as UTF-8.
 _INVISIBLE = re.compile(
     "[­᠎​-‏‪-‮⁠-⁤⁦-⁩﻿"
-    "؜￹-￻\U000e0000-\U000e007f]")
+    "؜￹-￻\U000e0000-\U000e007f"
+    "\ud800-\udfff]")
 
 
 def strip_hidden(text: str) -> str:
@@ -534,8 +564,8 @@ class Judge:
             self.usage[purpose] = self.usage.get(purpose, TokenUsage()) + usage
 
         if not isinstance(parsed, dict):
-            raise JudgeError(f"judge reply is not a JSON object after {usage.calls} "
-                             f"attempt(s): {problems[0]}")
+            raise JudgeNoVerdict(f"judge reply is not a JSON object after {usage.calls} "
+                                 f"attempt(s): {problems[0]}")
         return parsed, usage
 
     def _complete(self, instructions: str, material: str, system_prompt: str, purpose: str,
@@ -576,7 +606,8 @@ class Judge:
             # by name, since plugins should not import Hermes internals.
             if any(c.__name__ == "AuxiliaryClientUnavailable" for c in type(e).__mro__):
                 raise JudgeUnavailable(str(e)) from e
-            raise JudgeCallFailed(f"judge request failed: {e}") from e
+            failed = JudgeRefused if _refused(e) else JudgeCallFailed
+            raise failed(f"judge request failed: {e}") from e
 
     def rate(self, skill: Skill, criteria: list[Criterion], instructions: str = "",
              **options: Unpack[CallOptions]) -> RateResult:

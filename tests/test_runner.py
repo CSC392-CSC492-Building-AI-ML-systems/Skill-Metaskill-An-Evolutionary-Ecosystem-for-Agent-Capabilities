@@ -21,7 +21,7 @@ from metaskill.evaluate.models import (
     TestResult,
     Variant,
 )
-from metaskill.evaluate import efficiency, robustness
+from metaskill.evaluate import efficiency, quality, robustness
 from sandbox_helpers import FakeSandbox, FakeWorkspace
 from metaskill.evaluate.runner import (
     AgentRun,
@@ -723,6 +723,129 @@ def test_a_skill_too_large_for_the_sandbox_is_a_failed_run(skill, run_dir):
     assert [c.skill for c in agent.calls] == [None]
     assert all(w.closed for w in sandbox.opened)
     assert (run_dir / "cleanup" / "logs" / "write-report-with_skill-r1.txt").is_file()
+
+
+# --- Runs that would leave the skill unscored --------------------------------
+
+
+class ScriptedLlm:
+    """Judges a run by its output: `behaviour(material)` gives a reply, or raises."""
+
+    def __init__(self, behaviour):
+        self.behaviour = behaviour
+        self.materials = []
+
+    def complete_structured(self, **kwargs):
+        material = kwargs["input"][0]["text"]
+        self.materials.append(material)
+        return SimpleNamespace(provider="fake", model="judge-model",
+                               text=self.behaviour(material), parsed=None,
+                               content_type="text",
+                               usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+
+
+class Refusal(Exception):
+    status_code = 400
+
+
+class Outage(Exception):
+    status_code = 503
+
+
+MET = json.dumps({"items": [{"item": 1, "met": True, "reason": "r",
+                             "quote": "wrote the report to report.txt"}]})
+SKILL_OUTPUT = "wrote the report"  # only the with_skill output holds it
+
+
+def on_skill_output(action, otherwise=MET):
+    def behaviour(material):
+        if SKILL_OUTPUT not in material:
+            return otherwise
+        if isinstance(action, Exception):
+            raise action
+        return action
+    return behaviour
+
+
+def judged_runs(skill, run_dir, behaviour, act=writes_report_with_skill, runs=2):
+    return run_tasks(skill, [task(checks=[LLM_CHECK])], FakeAgent(act),
+                     config=config(runs=runs), run_dir=run_dir,
+                     ctx=SimpleNamespace(llm=ScriptedLlm(behaviour)))
+
+
+def quality_of(result, runs=2):
+    return quality.assess_runs(config(runs=runs), result).dimension_score
+
+
+@pytest.mark.parametrize("action, reason", [
+    ("I would rather not answer in JSON.", "not a JSON object"),
+    (Refusal("content_filter"), "refused to judge"),
+])
+def test_output_that_stops_the_judge_fails_the_run_and_quality_is_scored(
+        skill, run_dir, action, reason):
+    result = judged_runs(skill, run_dir, on_skill_output(action))
+    assert result.errors == []
+    with_skill = [t for t in result.tests if t.variant is Variant.WITH_SKILL]
+    assert len(with_skill) == 2
+    assert all(not t.passed and t.score == 0.0 and reason in t.reason for t in with_skill)
+    assert quality_of(result).status is Status.OK and quality_of(result).value is not None
+
+
+def test_an_unusable_reply_fails_a_baseline_run_the_same_way(skill, run_dir):
+    result = judged_runs(skill, run_dir, lambda material: "prose")
+    assert result.errors == []
+    assert [t.passed for t in result.tests] == [False] * 4
+
+
+@pytest.mark.parametrize("behaviour", [
+    # Refused whatever the output, so the check or the provider, not the skill.
+    lambda material: (_ for _ in ()).throw(Refusal("bad request")),
+    # Refused for the baseline only.
+    on_skill_output(MET, otherwise=None),
+])
+def test_a_refusal_the_skill_did_not_cause_is_an_error(skill, run_dir, behaviour):
+    def refuse_baseline(material):
+        reply = behaviour(material)
+        if reply is None:
+            raise Refusal("bad request")
+        return reply
+
+    result = judged_runs(skill, run_dir, refuse_baseline)
+    assert all("JudgeRefused" in e for e in result.errors)
+    assert any("baseline r1" in e for e in result.errors)
+    assert all(t.passed for t in result.tests)
+    assert quality_of(result).value is None
+
+
+def test_a_refusal_with_no_judged_baseline_is_an_error(skill, run_dir):
+    def act(prompt, skill, workdir):
+        if skill is None:
+            raise RuntimeError("no session")  # a failed run, which no judge saw
+        return writes_report_with_skill(prompt, skill, workdir)
+
+    result = judged_runs(skill, run_dir, on_skill_output(Refusal("bad request")), act=act)
+    assert [t.variant for t in result.tests] == [Variant.BASELINE] * 2
+    assert [e.split(":")[0] for e in result.errors] == [
+        "write-report with_skill r1", "write-report with_skill r2"]
+    assert result.transcripts == {}
+
+
+def test_a_provider_outage_is_still_an_error(skill, run_dir):
+    result = judged_runs(skill, run_dir, on_skill_output(Outage("unavailable")))
+    assert [t.variant for t in result.tests] == [Variant.BASELINE] * 2
+    assert all("JudgeCallFailed" in e for e in result.errors) and len(result.errors) == 2
+
+
+def test_a_lone_surrogate_in_the_output_is_not_sent_to_the_judge(skill, run_dir):
+    def act(prompt, skill, workdir):
+        return AgentRun(output="wrote the report \ud800to report.txt")
+
+    llm = ScriptedLlm(lambda material: MET)
+    result = run_tasks(skill, [task(checks=[LLM_CHECK])], FakeAgent(act),
+                       config=config(runs=1), run_dir=run_dir, ctx=SimpleNamespace(llm=llm))
+    assert result.errors == [] and all(t.passed for t in result.tests)
+    for material in llm.materials:
+        material.encode("utf-8")
 
 
 def test_planned_task_ids_include_tasks_whose_runs_all_failed_to_be_made(skill, run_dir):

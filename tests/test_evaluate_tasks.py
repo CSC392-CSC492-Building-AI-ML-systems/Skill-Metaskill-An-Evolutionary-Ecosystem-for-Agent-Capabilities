@@ -274,6 +274,20 @@ def test_an_agent_failing_a_task_is_a_scored_failure_not_an_error(tmp_path, harn
     assert skill.scores.efficiency == 0.0
 
 
+def test_a_lone_surrogate_in_an_agents_output_does_not_stop_the_report(
+        tmp_path, harness, monkeypatch):
+    # The report quotes what a check matched.
+    harness.tasks.write_text(json.dumps({"tasks": [{
+        "task_id": "t", "description": "d", "prompt": "p",
+        "checks": [{"judge": "deterministic", "kind": "output_matches",
+                    "expected": "done .*"}]}]}))
+    use(harness, monkeypatch, FakeAgent(lambda *a: AgentRun(output="done \ud800 end")))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks)
+    assert "done" in readable(result)  # written, not a UnicodeEncodeError
+    assert len(report(result).skills[0].tests) == 2 * RUNS
+
+
 def test_a_skill_name_that_cannot_be_a_log_folder_still_gets_safety(tmp_path, harness, monkeypatch):
     # The name comes from the skill's frontmatter; set a hostile one directly, since
     # frontmatter needs Hermes' YAML loader.

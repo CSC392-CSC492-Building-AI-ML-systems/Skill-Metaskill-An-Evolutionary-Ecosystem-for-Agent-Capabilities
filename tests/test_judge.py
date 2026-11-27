@@ -16,6 +16,8 @@ from metaskill.evaluate.judge import (
     DeterministicJudge,
     Judge,
     JudgeCallFailed,
+    JudgeNoVerdict,
+    JudgeRefused,
     JudgeError,
     JudgeUnavailable,
     RunOutput,
@@ -555,6 +557,37 @@ def test_ask_maps_hermes_errors(error, expected):
         judge(error).ask("i", "m", {}, "rate")
     # Only a provider that did not answer is a JudgeCallFailed; a rejected request is not.
     assert isinstance(raised.value, JudgeCallFailed) == (expected is JudgeCallFailed)
+
+
+class ApiError(Exception):
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def wrapped(cause):
+    error = RuntimeError("request failed")
+    error.__cause__ = cause
+    return error
+
+
+@pytest.mark.parametrize("error, refused", [
+    (ApiError("invalid_request_error", 400), True),
+    (ApiError("request too large", 413), True),
+    (ApiError("unprocessable", 422), True),
+    (wrapped(ApiError("bad request", 400)), True),
+    (RuntimeError("Output blocked by content filtering policy"), True),
+    (RuntimeError("finish_reason=content_filter"), True),
+    (ApiError("content policy", 429), False),  # the status decides
+    (ApiError("unauthorized", 401), False),
+    (ApiError("no such model", 404), False),
+    (ApiError("overloaded", 529), False),
+    (TimeoutError("timed out"), False),
+])
+def test_ask_tells_a_refused_request_from_a_failed_call(error, refused):
+    with pytest.raises(JudgeCallFailed) as raised:
+        judge(error).ask("i", "m", {}, "rate")
+    assert isinstance(raised.value, JudgeRefused) == refused
 
 
 def test_ask_does_not_retry_a_request_hermes_rejected():
