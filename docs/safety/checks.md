@@ -38,6 +38,7 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 | Script files (`.sh`, `.bash`, `.zsh`, `.py`, `.js`, `.ts`, `.ps1`, `.psm1`, `.bat`, `.cmd`) | Yes, every line | No |
 | Prose in markdown, including inline code (`` `rm -rf` ``) | Yes | Yes |
 | `SKILL.md` frontmatter | Yes, every line, and each text value as parsed | Yes |
+| Other files that start with `#!` | Yes, every line | No |
 | Other file types, such as binaries | No | — |
 
 **Prose** is the ordinary sentences of a markdown file: explanations, warnings, steps written in words. Skills often warn about dangerous commands there, as in "never run `rm -rf` on the project root". Flagging those would make careful skills, which warn about risks, score lower than careless ones that do not. So matches in prose go through a warning check first.
@@ -46,8 +47,9 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 
 Added in `CHECKS_VERSION` 6. Each of these once left a command unscanned, with Safety 1.0:
 
-- **Bytes that are not UTF-8** are replaced and the file is scanned (a shell runs such a script), with a note in `detail`. NUL bytes are dropped: bash ignores them, and in UTF-16 text they separate the letters of every command.
-- **Frontmatter** is only `SKILL.md`'s, matched as `Skill.load` matches it. In any other file `---` is a horizontal rule and what follows is ordinary text. `SKILL.md`'s frontmatter is scanned as prose, one key or list item at a time, so a warning in one value cannot clear a command in another. A text value that reads differently once parsed (YAML escapes, folded lines) is scanned as parsed too, at its key's line.
+- **Bytes that are not UTF-8** are replaced and the file is scanned (a shell runs such a script), with a note in `detail`. NUL bytes are dropped, from `SKILL.md` too: bash ignores them, and in UTF-16 text they separate the letters of every command.
+- **Frontmatter** is only `SKILL.md`'s, matched as `Skill.load` matches it. In any other file `---` is a horizontal rule and what follows is ordinary text. `SKILL.md`'s frontmatter is scanned as prose, one key or list item at a time, so a warning or confirmation in one value cannot clear a command in another, or in the text below. Every key and text value is also scanned as parsed, which undoes YAML escapes and folded lines, at its top-level key's line. Only a plain one-line `key: value` is not scanned twice. A parsed text is held to the same limit on commands per line as a file.
+- **A file with another suffix, or none,** that starts with `#!` is scanned as a script.
 - **A file over `MAX_FILE_BYTES`** (1,000,000 bytes) is scanned up to that size and gets a CRITICAL `scan-limit` finding, as the rest is unknown ([Scan limits](#scan-limits)).
 - **A file that cannot be read** gets the same finding. One that is listed but no longer there is only noted.
 
@@ -130,9 +132,9 @@ The numbers come from the CVSS band ceilings, not hand-picked; see [severity-sca
 | cmd.exe | `rmdir`, `rd`, `del`, `erase` with `/s`, also written together (`rd/s/q`, `/S/Q`) |
 | PowerShell | `Remove-Item` and its aliases `ri`, `rd`, `rmdir`, `del`, `erase` with `-Recurse` or any shorter form (`-r`, `-Rec`), also `-Recurse:$true`; not `-Recurse:$false`. (`rm` is read as the shell's) |
 
-**No written target** (version 7). In a code block or a script, a recursive delete with nothing to delete written after it, as in `find ~ | xargs rm -rf` or `Get-ChildItem $HOME | Remove-Item -Recurse`, deletes what is piped to it: it is a finding with an unknown target (HIGH). Not when it only stands in a comment or a string, as in `grep -qE 'rm -rf|...'`.
+**No written target** (version 7). In a code block or a script, a recursive delete with nothing to delete written after it, as in `find ~ | xargs rm -rf` or `Get-ChildItem $HOME | Remove-Item -Recurse`, deletes what is piped to it: it is a finding with an unknown target (HIGH). Not when it only stands in a comment, or in a string that nothing runs, as in `grep -qE 'rm -rf|...'`. A string given to `sh -c`, `eval`, `ssh`, `os.system`, `subprocess` or `exec`, and `$(...)` in a double-quoted string, does count.
 
-**Paths** are compared with `/./` and repeated slashes removed, so `~/./Documents` and `~//Documents` are `~/Documents`. A `..` in the middle of a path that starts at `/` or the home folder is resolved; a trailing `..`, and a path whose parts are not all known, are judged as written.
+**Paths** are compared with `/./` and repeated slashes removed, so `~/./Documents` and `~//Documents` are `~/Documents`. A `..` in the middle of a path that starts at `/` or the home folder is resolved; a trailing `..`, and a path whose parts are not all known, are judged as written. A path that climbs above the home folder (`~/../x`) is judged as the home folder's parent (`~/..`).
 
 #### Delete targets
 

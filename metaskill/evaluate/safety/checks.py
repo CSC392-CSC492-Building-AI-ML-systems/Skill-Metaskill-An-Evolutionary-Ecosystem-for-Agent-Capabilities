@@ -242,6 +242,9 @@ class _Unit:
     kind: str  # "code", "prose" or "script"
     lines: list[tuple[int, str]]
     warning_block: bool = False
+    # From SKILL.md's frontmatter: a confirmation or warning there is its own key's, and
+    # the paragraph before does not reach into or out of it.
+    frontmatter: bool = False
     # Computed once per unit and reused for every match in it (MET-42): see _text.
     cache: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -448,7 +451,9 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
     raw_files, unchecked = _read_files(skill, notes)
     files, limited = _limit_lines(raw_files)
     units = [u for path, text in files for u in _units(path, text)]
-    units += _frontmatter_value_units(skill, files)
+    value_units, value_limited = _frontmatter_value_units(skill, files)
+    units += value_units
+    limited += value_limited
     aliases = {
         path: frozenset([*(f"module:{n}" for n in _SHUTIL_ALIAS.findall(text)),
                          *(f"function:{n}" for n in _RMTREE_ALIAS.findall(text))])
@@ -479,7 +484,10 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
             found[key] = finding
 
     for u_index, unit in enumerate(units):
-        previous = units[u_index - 1] if u_index and units[u_index - 1].path == unit.path else None
+        previous = units[u_index - 1] if u_index else None
+        if previous is not None and (previous.path != unit.path or unit.frontmatter
+                                     or previous.frontmatter):
+            previous = None
         considered = 0  # prose matches in this unit weighed for clearing (MET-42)
         unbounded = False
         considered_code = 0  # code matches cleared by a phrase, bounded as prose ones are
@@ -610,18 +618,20 @@ def _hidden_characters(path: str, text: str) -> list[Finding]:
 
 
 def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], list[Finding]]:
-    """(relative path, text) for SKILL.md and every markdown or script file, and a CRITICAL
-    scan-limit finding for each one that could only be checked in part, or not at all.
+    """(relative path, text) for SKILL.md, every markdown or script file and every other
+    file that starts with `#!`, and a CRITICAL scan-limit finding for each one that could
+    only be checked in part, or not at all.
 
     Files that are links, or reached through one (a symlink or a Windows junction), are
     not read, so a link cannot make the check read something outside the skill.
     """
-    files, unchecked = [("SKILL.md", skill.body)], []
+    files, unchecked = [("SKILL.md", skill.body.replace("\x00", ""))], []
     for rel in skill.files:
         rel = Path(rel)
-        if rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES:
-            continue
         name, path = rel.as_posix(), Path(skill.path) / rel
+        if (rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES
+                and not _has_shebang(path)):
+            continue
         try:
             if through_link(skill.path, path):
                 continue
@@ -636,12 +646,35 @@ def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], 
                                          "scan-limit-file"))
             continue
         if len(raw) > MAX_FILE_BYTES:
-            raw = raw[:MAX_FILE_BYTES]
+            raw = _whole_characters(raw[:MAX_FILE_BYTES])
             notes.append(f"{name}: only the first {MAX_FILE_BYTES} bytes were checked")
             unchecked.append(_scan_limit(name, 1, f"more than {MAX_FILE_BYTES} bytes",
                                          "scan-limit-file"))
         files.append((name, _decode(name, raw, notes)))
     return files, unchecked
+
+
+def _has_shebang(path: Path) -> bool:
+    """Whether a file with another suffix, or none, is a script all the same: it starts
+    with `#!`, so it can be run by its name. Links are not read."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        with path.open("rb") as stream:
+            return stream.read(2) == b"#!"
+    except OSError:
+        return False
+
+
+def _whole_characters(raw: bytes) -> bytes:
+    """raw without a UTF-8 character that was cut off at its end, so that cutting a file
+    to size does not make it look like it is not UTF-8."""
+    for back in range(1, min(4, len(raw)) + 1):
+        byte = raw[-back]
+        if byte & 0xC0 != 0x80:  # the first byte of the last character
+            length = 1 if byte < 0xC0 else 2 if byte < 0xE0 else 3 if byte < 0xF0 else 4
+            return raw[:-back] if length > back else raw
+    return raw
 
 
 def _decode(name: str, raw: bytes, notes: list[str]) -> str:
@@ -670,41 +703,69 @@ def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
     for lineno, line in enumerate(lines, 1):
         stripped = line.strip()
         if block and (not stripped or stripped == "---" or _YAML_KEY.match(line)):
-            units.append(_Unit(path, "prose", block))
+            units.append(_Unit(path, "prose", block, frontmatter=True))
             block = []
         if stripped and stripped != "---":
             block.append((lineno, line))
     if block:
-        units.append(_Unit(path, "prose", block))
+        units.append(_Unit(path, "prose", block, frontmatter=True))
     return units
 
 
-def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]) -> list[_Unit]:
-    """Frontmatter text values that read differently once parsed (escapes, folded lines),
-    which the agent is shown parsed: each is prose, reported at its key's line."""
+def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
+                             ) -> tuple[list[_Unit], list[Finding]]:
+    """Every text in the parsed frontmatter, keys included, as prose reported at its
+    top-level key's line: the agent is shown it parsed, so escapes and folded lines are
+    undone. Each text is held to the same limit on commands per line as a file; the
+    findings for the lines over it come with the units."""
     text = dict(files).get("SKILL.md", "")
     match = _FRONTMATTER.match(text.removeprefix("\ufeff"))
     if match is None or frontmatter_too_large(skill.frontmatter):
-        return []  # too large has a finding of its own, and is not walked
+        return [], []  # too large has a finding of its own, and is not walked
     block = text[:match.end()]
+    # The one-line `key: value` units, by line: such a value is already scanned as it is.
+    one_line = {unit.lines[0][0]: unit.lines[0][1]
+                for unit in _frontmatter_units("SKILL.md", block.splitlines())
+                if len(unit.lines) == 1}
     units: list[_Unit] = []
-    seen: set[int] = set()
+    limited: list[Finding] = []
+    containers: set[int] = set()
+    done: set[str] = set()  # aliases repeat a string; scan it once
+
+    def scan(value: str, lineno: int) -> None:
+        if not value.strip() or value in done:
+            return
+        written = one_line.get(lineno, "")
+        # Not with a comment or an escape: then the line says more, or something else.
+        if "#" not in written and "\\" not in written and value.strip() in written:
+            return
+        done.add(value)
+        lines = [line for line in value.replace("\x00", "").splitlines() if line.strip()]
+        [(_, kept)], over = _limit_lines([("SKILL.md", "\n".join(lines))])
+        limited.extend(_scan_limit("SKILL.md", lineno, f.quote) for f in over[:1])
+        kept_lines = [line for line in kept.splitlines() if line.strip()]
+        if kept_lines:
+            units.append(_Unit("SKILL.md", "prose", [(lineno, line) for line in kept_lines],
+                               frontmatter=True))
 
     def walk(value: Any, lineno: int) -> None:
+        if isinstance(value, bytes):  # !!binary
+            value = value.decode("utf-8", errors="replace")
         if isinstance(value, str):
-            if value.strip() and value.strip() not in block:
-                units.append(_Unit("SKILL.md", "prose",
-                                   [(lineno, line) for line in value.splitlines()
-                                    if line.strip()]))
-        elif isinstance(value, (dict, list, tuple)) and id(value) not in seen:
-            seen.add(id(value))
-            for child in (value.values() if isinstance(value, dict) else value):
+            scan(value, lineno)
+        elif isinstance(value, (dict, list, tuple, set)) and id(value) not in containers:
+            containers.add(id(value))
+            children = ([*value.keys(), *value.values()] if isinstance(value, dict)
+                        else list(value))
+            for child in children:
                 walk(child, lineno)
 
     for key, value in skill.frontmatter.items():
         at = re.search(rf"(?m)^{re.escape(str(key)[:200])}[ \t]*:", block)
-        walk(value, block.count("\n", 0, at.start()) + 1 if at else 1)
-    return units
+        lineno = block.count("\n", 0, at.start()) + 1 if at else 1
+        walk(key, lineno)
+        walk(value, lineno)
+    return units, limited
 
 
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
@@ -715,7 +776,8 @@ _WARNING_BLOCK = re.compile(
 
 
 def _units(path: str, text: str) -> list[_Unit]:
-    if Path(path).suffix.lower() in SCRIPT_SUFFIXES:
+    suffix = Path(path).suffix.lower()
+    if suffix in SCRIPT_SUFFIXES or (suffix not in MARKDOWN_SUFFIXES and text.startswith("#!")):
         return [_Unit(path, "script", list(enumerate(text.splitlines(), 1)))]
 
     units: list[_Unit] = []
@@ -859,8 +921,13 @@ _RM = re.compile(r"(?<![\w.-])rm\s+")
 # name the file imports it as. Another object's rmtree (sftp.rmtree) is not this one.
 _RMTREE = re.compile(r"(?<![\w.])(?<!def )(?:(?P<module>[A-Za-z_]\w*)\s*\.\s*)?(?P<name>[A-Za-z_]\w*)\s*\(")
 _RMTREE_QUICK = re.compile(r"\brmtree\b")
-_SHUTIL_ALIAS = re.compile(r"\bimport\s+(?:[\w.]+\s*,\s*)*shutil\s+as\s+([A-Za-z_]\w*)")
-_RMTREE_ALIAS = re.compile(r"\bfrom\s+shutil\s+import\s+[^\n#]*?\brmtree\s+as\s+([A-Za-z_]\w*)")
+_SHUTIL_RMTREE = re.compile(r"shutil\s*\.\s*rmtree\s*\(")  # also self.shutil.rmtree
+# Bounded, so many imports on one long line stay linear (MET-42).
+_SHUTIL_ALIAS = re.compile(
+    r"\bimport\s+(?:[\w.]+\s*,\s*){0,50}shutil\s+as\s+([A-Za-z_]\w*)")
+_RMTREE_ALIAS = re.compile(  # on one line, or in the parentheses of one import
+    r"\bfrom\s+shutil\s+import\s+(?:\([^)#]{0,500}?|[^\n#(]{0,500}?)"
+    r"\brmtree\s+as\s+([A-Za-z_]\w*)")
 _PY_STR = r"""(?:[rRbBuU]?(?P<q>['"])(?P<s>[^'"]*)(?P=q))"""
 # Python expressions for the home folder: os.environ["HOME"], os.getenv("HOME"),
 # os.path.expanduser("~"), Path.home() and pathlib.Path.home().
@@ -953,11 +1020,33 @@ def _follows(target: str) -> bool:
     return target.endswith("/") or bool(re.search(r"/[^/]*[*?\[]", target))
 
 
+# Just before a quote: what runs the string that follows, as a command.
+_RUNS_STRING = re.compile(
+    r"(?:\b(?:ba|z|da|k)?sh[\"']?[\s,]+(?:[\"']?-[A-Za-z]+[\"']?[\s,]+){0,5}[\"']?-[A-Za-z]*c[\"']?[\s,]+"
+    r"|\beval\s+|\bssh\s+[^;&|]{0,80}\s"
+    r"|\b(?:os\.system|os\.popen|subprocess\.\w+|execSync|exec|system|popen)\s*\(\s*)"
+    r"[rRbBfF]{0,2}\Z")
+_RUNS_STRING_REACH = 120  # characters before the quote the pattern is searched in
+
+
 def _no_target(text: str, start: int, prose: bool, path: str) -> bool:
     """Whether a recursive delete with nothing written to delete still counts: in code it
-    does, as it deletes what is piped to it, unless it only stands in a comment or a string
-    (a pattern such as `grep 'rm -rf|...'` names the command without running it)."""
-    return not prose and not _inside(path, text, start)
+    does, as it deletes what is piped to it, unless it only stands in a comment, or in a
+    string nothing runs (a pattern such as `grep 'rm -rf|...'` names the command without
+    running it)."""
+    if prose:
+        return False
+    span = _span_at(path, text, start)
+    if span is None:
+        return True
+    opened, _, kind = span
+    if kind == "comment":
+        return False
+    if _RUNS_STRING.search(text, max(0, opened - _RUNS_STRING_REACH), opened):
+        return True
+    # "$(...)" and "`...`" run inside a double-quoted shell string.
+    return text[opened] == '"' and (text.find("$(", opened, start) >= 0
+                                    or text.find("`", opened, start) >= 0)
 
 
 def _deletes(text: str, prose: bool, path: str = "",
@@ -989,17 +1078,24 @@ def _deletes(text: str, prose: bool, path: str = "",
                          f"rm {' '.join(flags)} {targets[0]}", interactive,
                          [(t, _follows(t)) for t in targets]))
 
-    if _RMTREE_QUICK.search(text) or any(a.partition(":")[2] in text for a in aliases):
+    # A file's aliases are looked up per call, not searched for one by one in every line.
+    if _RMTREE_QUICK.search(text) or aliases and "(" in text:
+        calls = {m.end(): m.start() for m in _SHUTIL_RMTREE.finditer(text)}
         for m in _RMTREE.finditer(text):
             module, name = m.group("module"), m.group("name")
             if not (name == "rmtree" and (module is None or module == "shutil"
                                           or f"module:{module}" in aliases)
                     or module is None and f"function:{name}" in aliases):
                 continue
-            argument = _first_argument(text, m.end())
+            if (prose and module is None and text[m.end("name"):m.end() - 1]
+                    and not _in_inline_code(text, m.start())):
+                continue  # "use rmtree (see the docs)" is a sentence, not a call
+            calls.setdefault(m.end(), m.start())
+        for end, start in sorted(calls.items()):
+            argument = _first_argument(text, end)
             path_ = _python_path(argument)
             is_name = path_ is None and re.fullmatch(r"[A-Za-z_]\w*", argument) is not None
-            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
+            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, start,
                              f"shutil.rmtree({argument})",
                              targets=[(path_ if path_ is not None else argument
                                        or "(unspecified)", False)],
@@ -1010,7 +1106,11 @@ def _deletes(text: str, prose: bool, path: str = "",
         args = _args(text, m.end())
         if not any(_PS_RECURSE.fullmatch(a) for a in args):
             continue
-        targets = [a for a in args if not a.startswith("-") and not _CMD_SWITCHES.fullmatch(a)]
+        # rd, del and the rest are cmd.exe's too, whose switches are not targets. To
+        # Remove-Item and ri, `/a/b` is a path.
+        cmd_too = m.group(0).lower() not in ("remove-item", "ri")
+        targets = [a for a in args if not a.startswith("-")
+                   and not (cmd_too and _CMD_SWITCHES.fullmatch(a))]
         if not targets:
             if not _no_target(text, m.start(), prose, path):
                 continue
@@ -1231,7 +1331,10 @@ def _shell_trace(unit: _Unit) -> list[Finding]:
 # An interpreter runs what it is piped only when given no script of its own:
 # "| bash" runs the download, "| python3 -c '...'" only parses it as data.
 _CURL_PIPE = re.compile(
-    r"(?<![\w-])(?:curl|wget)\b[^\n|]*\|\s*(?:sudo(?:\s+(?:-[ug]\s+[\w-]+|-[\w=-]+))*\s+)?"
+    # sudo's flags, some with a separate argument. That argument cannot start with "-", so
+    # a run of flags is read one way only, not in exponentially many.
+    r"(?<![\w-])(?:curl|wget)\b[^\n|]*\|\s*"
+    r"(?:sudo(?:\s+(?:(?:-[ug]|--user|--group)\s+(?!-)[\w.-]+|-[\w=.-]+))*\s+)?"
     r"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
     r"(?!\s+(?:-[a-zA-Z]*c\b|-m\b|[^\s-]))"
     r"|(?<![\w-])(?:sh|bash|zsh)\b[^\n]*<\(\s*(?:curl|wget)\b"
@@ -1482,15 +1585,19 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
     suffix = Path(path).suffix.lower()
     if suffix in (".bat", ".cmd") and _BATCH_COMMENT.match(line):
         return ((0, len(line), "comment"),)
+    # PowerShell and cmd.exe do not escape with a backslash: "C:\dir\" ends at the quote.
+    escapes = suffix not in (".ps1", ".psm1", ".bat", ".cmd")
     spans, quote, opened, i = [], "", 0, 0
     while i < len(line):
         c = line[i]
         if quote:
-            if c == "\\" and quote == '"':
+            if c == "\\" and quote == '"' and escapes:
                 i += 1
             elif c == quote:
                 spans.append((opened, i + 1, "string"))
                 quote = ""
+        elif c == "\\" and escapes:
+            i += 1  # `don\'t` opens no string
         elif c in "'\"":
             quote, opened = c, i
         elif (i == 0 or line[i - 1].isspace()) and (
@@ -1504,11 +1611,18 @@ def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
     return tuple(spans)
 
 
-def _inside(path: str, line: str, col: int) -> str:
-    """"string" or "comment" if column col of a line of code is in one, else ""."""
+def _span_at(path: str, line: str, col: int) -> tuple[int, int, str] | None:
+    """The string or comment column col of a line of code is in, if one."""
+    spans = _quoted_spans(path, line)
+    # Spans do not overlap and are in order: bisect, as a line can hold thousands.
+    i = bisect_right(spans, col, key=lambda span: span[0]) - 1
+    if i < 0:
+        return None
+    start, end, kind = spans[i]
     # Strictly inside: a match that begins at a quote or a # is the command itself.
-    return next((kind for start, end, kind in _quoted_spans(path, line) if start < col < end
-                 or (kind == "comment" and col == start)), "")
+    if start < col < end or (kind == "comment" and col == start):
+        return spans[i]
+    return None
 
 
 def _confirmations(unit: _Unit, line_index: int) -> int | None:
@@ -1667,6 +1781,16 @@ def link_text(path: Path | str) -> str:
     return without_extended_prefix(target) if os.name == "nt" else target
 
 
+def _climbs_out(relative: str) -> bool:
+    """Whether the `..` in a relative path lead above where it starts."""
+    depth = 0
+    for part in relative.split("/"):
+        depth += -1 if part == ".." else part not in ("", ".")
+        if depth < 0:
+            return True
+    return False
+
+
 def _normalize(target: str) -> str:
     t = target.strip().strip("'\"").replace("\\", "/")
     # `~/./Documents` and `~//Documents` name the same folder as `~/Documents`.
@@ -1675,9 +1799,12 @@ def _normalize(target: str) -> str:
     # judged as written, CRITICAL), and so is any path whose start is not known.
     if t.startswith(("/", "~/", "$HOME/", "${HOME}/")) and "/../" in t and not t.endswith("/.."):
         head, rest = (t.split("/", 1) if not t.startswith("/") else ("", t[1:]))
-        resolved = posixpath.normpath("/" + rest)
         if "$" not in rest:
-            t = head + resolved if head else resolved
+            if head and _climbs_out(rest):
+                t = head + "/.."  # above the home folder: no safer than naming its parent
+            else:
+                resolved = posixpath.normpath("/" + rest)
+                t = head + resolved if head else resolved
     while t.endswith(("/*", "/.")) and len(t) > 2:
         t = t[:-2]
     while t.endswith("/") and len(t) > 1:
