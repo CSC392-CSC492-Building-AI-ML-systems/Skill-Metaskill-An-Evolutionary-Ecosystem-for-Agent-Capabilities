@@ -130,7 +130,9 @@ The numbers come from the CVSS band ceilings, not hand-picked; see [severity-sca
 | cmd.exe | `rmdir`, `rd`, `del`, `erase` with `/s`, also written together (`rd/s/q`, `/S/Q`) |
 | PowerShell | `Remove-Item` and its aliases `ri`, `rd`, `rmdir`, `del`, `erase` with `-Recurse` or any shorter form (`-r`, `-Rec`), also `-Recurse:$true`; not `-Recurse:$false`. (`rm` is read as the shell's) |
 
-**No written target** (version 7). In a code block or a script, a recursive delete with nothing to delete written after it, as in `find ~ | xargs rm -rf` or `Get-ChildItem $HOME | Remove-Item -Recurse`, deletes what is piped to it: it is a finding with an unknown target (HIGH). Not when it only stands in a comment, or in a string that nothing runs, as in `grep -qE 'rm -rf|...'`. A string given to `sh -c`, `eval`, `ssh`, `os.system`, `subprocess` or `exec`, and `$(...)` in a double-quoted string, does count.
+**Inside a string** (version 7). In a code block or a script, a delete written in a string ends where the string does: the target of `os.system("rm -rf /")` is `/`. When the string holds no target, what follows it is read too (`"rm -rf " + folder`).
+
+**No written target** (version 7). In a code block or a script, a recursive delete with nothing to delete written after it, as in `find ~ | xargs rm -rf` or `Get-ChildItem $HOME | Remove-Item -Recurse`, deletes what is piped to it: it is a finding with an unknown target (HIGH). Not when it only stands in a comment, or in a string that nothing runs, as in `grep -qE 'rm -rf|...'`. A string given to `sh -c`, `eval`, `ssh`, `Invoke-Expression`, `cmd /c`, `powershell -Command`, `os.system`, `subprocess` or `exec`, and `$(...)` in a double-quoted string, does count.
 
 **Paths** are compared with `/./` and repeated slashes removed, so `~/./Documents` and `~//Documents` are `~/Documents`. A `..` in the middle of a path that starts at `/` or the home folder is resolved; a trailing `..`, and a path whose parts are not all known, are judged as written. A path that climbs above the home folder (`~/../x`) is judged as the home folder's parent (`~/..`).
 
@@ -199,7 +201,7 @@ What a static check cannot see is a symlink the user created on their own machin
 - In markdown: an earlier line of the same code block or paragraph, or the paragraph or list item directly before it.
 - In scripts: the 5 lines before it.
 
-In code blocks and scripts, a phrase inside a comment or a string does not count: it asks nothing of anyone (`# TODO: dry run support`, `echo 'Are you sure?'`). The step itself still does (`read -p`, `input('Delete? [y/N] ')`). Comments and strings are read one line at a time, so the inside of a multi-line string is not recognised as one.
+In code blocks and scripts, a phrase inside a comment or a string does not count: it asks nothing of anyone (`# TODO: dry run support`, `echo 'Are you sure?'`). The step itself still does (`read -p`, `input('Delete? [y/N] ')`). Comments include `/* ... */` in JavaScript and `<# ... #>` in PowerShell. Comments and strings are read one line at a time, so the inside of a multi-line string is not recognised as one.
 
 A backup that is only described, as in "**we** make a backup of the logs weekly", does not count either; "make a backup first" does.
 
@@ -234,7 +236,7 @@ Not covered here: secrets written into the skill itself (that is Configuration C
 
 | Rule | Matches | Severity |
 |---|---|---|
-| `curl-pipe-shell` | `curl` or `wget` piped into `sh`, `bash`, `zsh`, `python`, also through `sudo` with flags (`sudo -E bash`), also `bash <(curl ...)` and `sh -c "$(curl ...)"`. Not when the interpreter gets its own script (`python3 -c '...'`, `python3 parse.py`, `-m`): then the download is only parsed as data | HIGH |
+| `curl-pipe-shell` | `curl` or `wget` piped into `sh`, `bash`, `zsh`, `python`, also through `sudo` or `env` with flags and variables (`sudo -E bash`, `sudo -u "$USER" bash`) and by path (`/bin/bash`), also `bash <(curl ...)` and `sh -c "$(curl ...)"`. Not when the interpreter gets its own script (`python3 -c '...'`, `python3 parse.py`, `-m`): then the download is only parsed as data | HIGH |
 | `insecure-download` | `curl -k`, `--insecure`, `wget --no-check-certificate`, `pip --trusted-host`, downloads over `http://` | MEDIUM |
 | `unpinned-git-install` | `pip install git+...` or `npm install` from a git URL with no commit or tag | MEDIUM |
 | `unpinned-install` | `pip install name` with no version, `npm install -g name` with no version | LOW |
