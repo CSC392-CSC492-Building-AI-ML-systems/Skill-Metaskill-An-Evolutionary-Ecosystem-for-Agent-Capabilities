@@ -50,7 +50,7 @@ The note is shown in the review and kept in `plan.json`.
 If the skills do clearly unrelated jobs, no plan is made; skills for the same job are compared
 however much their descriptions differ in detail or quality. It asks for up to 3 tasks, each
 with input files, `exit_code` check commands and an example answer. The reply is untrusted: names
-must be plain file names, sizes and counts are capped (the model is told the limits), a check may
+must be plain file names that every system can write (not `NUL` or one ending in a dot), sizes and counts are capped (the model is told the limits), a check may
 span several lines but holds no other control characters, and anything else rejects the draft with
 the reason.
 
@@ -74,7 +74,7 @@ right or fair: that is what the review is for.
 |---|---|
 | Draft | refused, with the `approve` command |
 | A plan file changed after approval | refused until approved again |
-| A skill changed after approval | runs the same tasks, with a warning |
+| A skill changed after approval (hidden files, `__pycache__` and `node_modules` do not count) | runs the same tasks, with a warning |
 | A skill is gone | refused |
 | Options such as `--tasks` or `--config` with a plan | refused: the plan brings its own |
 

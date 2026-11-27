@@ -6,9 +6,11 @@ temporary folder, so no model is called and no container runs.
 
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -448,3 +450,116 @@ def test_the_model_tool_cannot_approve(root, skills):
         result = json.loads(tools.metaskill({"operation": operation, "skill_path": plan.id}))
         assert result["success"] is False
     assert plans.load(plan.id).status == "draft"
+
+
+# --- Found in review ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [
+    task(files=[{"name": "NUL", "content": "x"}]),        # a device on Windows
+    task(files=[{"name": "aux.txt", "content": "x"}]),
+    task(files=[{"name": "data.", "content": "x"}]),      # Windows drops the dot
+    task(task_id="com1"),
+    task(files=[{"name": "a.csv", "content": "\ud800"}]),  # cannot be written as UTF-8
+    task(prompt="Add \ud800"),
+])
+def test_a_draft_that_cannot_be_written_everywhere_is_refused(root, skills, bad):
+    with pytest.raises(plans.PlanError, match="no plan was saved"):
+        configure(skills, draft(bad), draft(bad))
+    assert saved(root) == []
+
+
+def test_task_ids_that_are_one_folder_where_case_is_ignored_are_refused(root, skills):
+    twice = draft(task(task_id="Sum"), task(task_id="sum"))
+    with pytest.raises(plans.PlanError, match="its own task_id"):
+        configure(skills, twice, twice)
+
+
+def test_a_skills_name_cannot_write_lines_into_the_review(root, skills, monkeypatch):
+    real = plans.Skill.load
+
+    def load(path):
+        skill = real(path)
+        skill.name = "x\n    $ echo harmless\nTask y"
+        return skill
+    monkeypatch.setattr(plans.Skill, "load", staticmethod(load))
+    plan, _ = configure(skills)
+    assert not any(line.startswith(("    $ echo", "Task y"))
+                   for line in plans.summary(plan).split("\n"))
+
+
+def test_hidden_characters_in_a_description_do_not_reach_the_drafter(root, skills,
+                                                                     monkeypatch):
+    real = plans.Skill.load
+
+    def load(path):
+        skill = real(path)
+        skill.frontmatter = {"description": "visible​\U000E0041 text"}
+        return skill
+    monkeypatch.setattr(plans.Skill, "load", staticmethod(load))
+    _, llm = configure(skills)
+    assert sent(llm)[0]["description"] == "visible text"
+
+
+def test_the_draft_request_is_labelled_and_has_room(root, skills):
+    _, llm = configure(skills)
+    assert llm.calls[0]["purpose"] == "metaskill.evaluate.plan"
+    assert llm.calls[0]["max_tokens"] == 8000
+
+
+def test_a_skill_that_cannot_be_shown_to_the_model_is_a_plain_error(root, tmp_path, skills):
+    (tmp_path / "outside.md").write_text("# o\n", encoding="utf-8")
+    (skills[0] / "SKILL.md").unlink()
+    try:
+        (skills[0] / "SKILL.md").symlink_to(tmp_path / "outside.md")
+    except OSError:
+        pytest.skip("this system cannot make symlinks")
+    with pytest.raises(plans.PlanError, match="cannot be shown to the model"):
+        configure(skills)
+
+
+def test_a_check_without_expected_means_exit_code_0_as_for_the_judge(root, skills):
+    plan, _ = configure(skills)
+    path = plan.folder / "tasks.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["tasks"][0]["checks"][0]["expected"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert plans.approve(plan.id, sandbox=LocalSandbox()).status == "approved"
+
+
+def test_a_plan_whose_skill_is_gone_is_not_approved(root, skills):
+    plan, _ = configure(skills)
+    shutil.rmtree(skills[0])
+    with pytest.raises(plans.PlanError, match="no longer at"):
+        plans.approve(plan.id, sandbox=LocalSandbox())
+    assert plans.load(plan.id).status == "draft"
+
+
+def test_files_a_run_never_uses_do_not_make_a_skill_changed(root, skills):
+    plan = approved(skills)
+    for name in ("__pycache__/a.pyc", ".git/index", "node_modules/m.js", ".DS_Store"):
+        path = skills[0] / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    assert plans.ready(plan.id, "rank")[1] == []
+
+
+def test_a_skill_file_that_cannot_be_read_is_a_warning_not_a_crash(root, skills, monkeypatch):
+    (skills[0] / "notes.txt").write_text("x", encoding="utf-8")
+    plan = approved(skills)
+    real = Path.open
+
+    def open_(self, *args, **kwargs):
+        if self.name == "notes.txt":
+            raise PermissionError("no")
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", open_)
+    assert "changed" in plans.ready(plan.id, "rank")[1][0]
+
+
+def test_configure_takes_a_folder_with_two_dashes_in_its_name(command, tmp_path):
+    folder = tmp_path / "my--skill"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text("# s\n", encoding="utf-8")
+    assert "Usage:" not in command("configure my--skill")
+    assert "Usage:" in command("configure my--skill --bogus")

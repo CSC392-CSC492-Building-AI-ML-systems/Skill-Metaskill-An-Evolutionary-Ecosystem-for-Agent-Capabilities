@@ -384,7 +384,7 @@ def _configure(request, ctx, cwd, where):
         options[option[1]] = option[2].strip().strip("\"'")
         request = request[:option.start()]
     skills = request.strip().strip("\"'")
-    if not skills or "--" in skills:
+    if not skills or re.search(r"(?:^|\s)--", skills):  # an option left over
         return f"{_CONFIGURE_USAGE}\n{where}"
     paths, problems = _find_skills("rank", skills, cwd)
     if problems or not paths:

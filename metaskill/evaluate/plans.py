@@ -32,7 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .judge import MAX_REASON_CHARS, Judge, JudgeError, JudgeUnavailable, clean, skill_sources
+from .judge import (
+    MAX_REASON_CHARS, Judge, JudgeError, JudgeUnavailable, clean, skill_sources, strip_hidden)
 from .models import EvaluationConfig, Skill
 from .tasks import SAFE_NAME, TaskError, load_tasks
 
@@ -47,6 +48,10 @@ MAX_FILE_CHARS, MAX_COMMAND_CHARS, MAX_TEXT_CHARS = 4_000, 2_000, 1_000
 MAX_DESCRIPTION_CHARS = 600
 MAX_INSTRUCTION_CHARS = 4_000  # of each skill's SKILL.md, given to the drafter
 MAX_NOTE_CHARS = 600
+MAX_NAME_CHARS = 100  # of a skill's name, as stored and shown
+DRAFT_MAX_TOKENS = 8000  # room for the tasks, and for a model that reasons first
+# Names Windows reads as devices, whatever follows the first dot.
+_DEVICE_NAMES = re.compile(r"(?i)(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?")
 CHECK_TIMEOUT = 60  # seconds for one check command while validating
 DRAFT_ATTEMPTS = 2  # a draft that fails validation is asked for once more, with why
 
@@ -190,7 +195,8 @@ def configure(skill_paths: list[str | Path], *, ctx: Any = None, sandbox: Any = 
                     "status": DRAFT, "label": label,
                     **({"note": note} if note else {}), "created": _now(),
                     "drafted_by": judge.judge_model,
-                    "skills": [{"name": str(s.name), "path": str(Path(s.path).absolute())}
+                    # Cleaned: a name with line breaks could write lines into the review.
+                    "skills": [{"name": _name(s.name), "path": str(Path(s.path).absolute())}
                                for s in skills],
                 }
                 _write_json(staging / "config.json", {"runs_per_task": RUNS_PER_TASK})
@@ -199,6 +205,9 @@ def configure(skill_paths: list[str | Path], *, ctx: Any = None, sandbox: Any = 
                 return Plan(root / plan_id, data)
         except PlanError as e:
             problems = [str(e)]
+        except OSError as e:
+            raise PlanError(f"the plan could not be written in {root}: "
+                            f"{type(e).__name__}") from e
         finally:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
@@ -213,11 +222,12 @@ def approve(plan_id: str, *, sandbox: Any = None, root: Path | None = None) -> P
     problems = validate(plan.folder, sandbox)
     if problems:
         raise PlanError(f"{plan.id} was not approved: " + "; ".join(problems[:4]))
+    for skill in plan.data["skills"]:
+        _require_skill(plan, skill)
+        skill["fingerprint"] = fingerprint(Path(skill["path"]))
     plan.data["status"] = APPROVED
     plan.data["approved"] = _now()
     plan.data["approved_files"] = files_fingerprint(plan.folder)
-    for skill in plan.data["skills"]:
-        skill["fingerprint"] = fingerprint(Path(skill["path"]))
     _write_json(plan.folder / "plan.json", plan.data)
     return plan
 
@@ -240,13 +250,21 @@ def ready(plan_id: str, operation: str, *, root: Path | None = None
         raise PlanError(f"{plan.id} has one skill: use /metaskill evaluate {plan.id}")
     warnings = []
     for skill in plan.data["skills"]:
-        path = Path(skill["path"])
-        if not (path.is_dir() or path.is_file()):
-            raise PlanError(f"{plan.id}: the skill {skill['name']} is no longer at {path}")
-        if fingerprint(path) != skill.get("fingerprint"):
-            warnings.append(f"{skill['name']} has changed since {plan.id} was approved; the "
-                            "same tasks are run")
+        _require_skill(plan, skill)
+        if fingerprint(Path(skill["path"])) != skill.get("fingerprint"):
+            warnings.append(f"{_name(skill['name'])} has changed since {plan.id} was "
+                            "approved; the same tasks are run")
     return plan, warnings
+
+
+def _require_skill(plan: Plan, skill: dict[str, Any]) -> None:
+    path = Path(skill["path"])
+    if not (path.is_dir() or path.is_file()):
+        raise PlanError(f"{plan.id}: the skill {_name(skill['name'])} is no longer at {path}")
+
+
+def _name(name: object) -> str:
+    return clean(str(name), MAX_NAME_CHARS)
 
 
 def resolve(reference: str, root: Path | None = None) -> str | None:
@@ -309,11 +327,11 @@ def summary(plan: Plan) -> str:
     """What a person reviews: each task, its input files and its actual check commands."""
     tasks = load_tasks(plan.folder / "tasks.json")
     runs = _config(plan.folder).runs_per_task
-    skills = [s["name"] for s in plan.data["skills"]]
+    skills = [_name(s["name"]) for s in plan.data["skills"]]
     sessions = len(tasks) * 2 * runs * len(skills)
     lines = [f"{plan.id} ({plan.status}): {len(skills)} skill(s): {', '.join(skills)}"]
     if plan.data.get("note"):
-        lines.append(f"Your note: {plan.data['note']}")
+        lines.append(f"Your note: {clean(plan.data['note'], MAX_NOTE_CHARS)}")
     for task in tasks:
         lines += ["", f"Task {task.task_id}: {task.description}",
                   f"  Prompt: {task.prompt}",
@@ -335,7 +353,11 @@ def summary(plan: Plan) -> str:
 
 def _ask(judge: Judge, skills: list[Skill], note: str,
          problems: list[str]) -> dict[str, Any]:
-    material = json.dumps([_described(s) for s in skills], indent=2)
+    try:
+        material = json.dumps([_described(s) for s in skills], indent=2)
+    except (JudgeError, OSError) as e:  # e.g. a SKILL.md that links outside its skill
+        raise PlanError(f"a skill cannot be shown to the model: "
+                        f"{clean(e, MAX_REASON_CHARS)}") from e
     instructions = INSTRUCTIONS
     if note:  # the user's own words, so part of the instructions, not of the material
         instructions += ("\n\nThe person who will review these tasks asks the following. Follow "
@@ -345,10 +367,11 @@ def _ask(judge: Judge, skills: list[Skill], note: str,
         instructions += ("\n\nYour previous tasks were rejected. Fix this:\n- "
                          + "\n- ".join(problems[:6]))
     try:
-        return judge.ask(instructions, material, SCHEMA, "metaskill.plan.draft",
-                         system_prompt=DRAFTER_PROMPT, max_tokens=4000)
+        return judge.ask(instructions, material, SCHEMA, "plan",
+                         system_prompt=DRAFTER_PROMPT, max_tokens=DRAFT_MAX_TOKENS)
     except (JudgeError, JudgeUnavailable) as e:
-        raise PlanError(f"the model could not draft tasks: {type(e).__name__}") from e
+        raise PlanError(f"the model could not draft tasks ({type(e).__name__}): "
+                        f"{clean(e, MAX_REASON_CHARS)}") from e
 
 
 def _described(skill: Skill) -> dict[str, str]:
@@ -360,8 +383,8 @@ def _described(skill: Skill) -> dict[str, str]:
     text = re.sub(r"\A---.*?\n---\s*", "", text, flags=re.DOTALL).strip()
     if len(text) > MAX_INSTRUCTION_CHARS:
         text = text[:MAX_INSTRUCTION_CHARS] + "\n[cut]"
-    return {"name": str(skill.name),
-            "description": description.strip()[:MAX_DESCRIPTION_CHARS]
+    return {"name": _name(skill.name),
+            "description": strip_hidden(description).strip()[:MAX_DESCRIPTION_CHARS]
             if isinstance(description, str) else "",
             "instructions": text}
 
@@ -373,20 +396,21 @@ def _write_draft(folder: Path, reply: dict[str, Any]) -> None:
     if not isinstance(drafted, list) or not 1 <= len(drafted) <= MAX_TASKS:
         raise PlanError(f"expected 1 to {MAX_TASKS} tasks")
     tasks, examples = [], {}
+    seen: set[str] = set()  # task ids as a folder name: Windows and macOS ignore case
     for item in drafted:
         if not isinstance(item, dict):
             raise PlanError("a task is not an object")
         task_id = item.get("task_id")
-        if not (isinstance(task_id, str) and len(task_id) <= 60 and SAFE_NAME.fullmatch(task_id)
-                and task_id not in examples):
+        if not (_plain_name(task_id) and task_id.casefold() not in seen):
             raise PlanError("each task needs its own task_id of letters, digits, _ . -")
+        seen.add(task_id.casefold())
         checks = item.get("checks")
         problem = _checks_problem(checks)
         if problem:
             raise PlanError(f"{task_id}: {problem}")
         texts = [item.get("description"), item.get("prompt")]
         if not all(isinstance(t, str) and t.strip() and len(t) <= MAX_TEXT_CHARS
-                   for t in texts):
+                   and _encodes(t) for t in texts):
             raise PlanError(f"{task_id}: needs a description and a prompt")
         files = _files(item.get("files"), task_id)
         for name, content in files.items():
@@ -431,14 +455,30 @@ def _files(items: Any, task_id: str) -> dict[str, str]:
     for item in items:
         name = item.get("name") if isinstance(item, dict) else None
         content = item.get("content") if isinstance(item, dict) else None
-        if not (isinstance(name, str) and len(name) <= 60 and SAFE_NAME.fullmatch(name)
+        if not (_plain_name(name)
                 and name.casefold() not in {n.casefold() for n in files}):
             raise PlanError(f"{task_id}: file names must be distinct plain names")
-        if not isinstance(content, str) or len(content) > MAX_FILE_CHARS:
+        if (not isinstance(content, str) or len(content) > MAX_FILE_CHARS
+                or not _encodes(content)):
             raise PlanError(f"{task_id}: {name} must be text of at most {MAX_FILE_CHARS} "
                             "characters")
         files[name] = content
     return files
+
+
+def _plain_name(name: Any) -> bool:
+    """A file or task name that is one file of that name on every system."""
+    return (isinstance(name, str) and len(name) <= 60 and bool(SAFE_NAME.fullmatch(name))
+            and not name.endswith(".") and not _DEVICE_NAMES.fullmatch(name))
+
+
+def _encodes(text: str) -> bool:
+    """Whether text can be written as UTF-8: a model's reply can hold a lone surrogate."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 # --- Validation ----------------------------------------------------------------
@@ -495,44 +535,61 @@ def _try_task(task: Any, example: dict[str, str], sandbox: Any) -> str:
 
 def _passes(check: Any, workspace: Any) -> bool:
     code = workspace.run_command(check.target, CHECK_TIMEOUT).exit_code
-    return code is not None and str(code) == check.expected.strip()
+    # As the judge reads it (judge.py): no `expected` means exit code 0.
+    return code == int(check.expected or "0")
 
 
 # --- Helpers -------------------------------------------------------------------
 
 
 def fingerprint(path: Path) -> str:
-    """A hash of a skill folder's files (or of one file): their names and contents. Links
-    are not followed."""
+    """A hash of a skill folder's files: their names and contents. Only the files a run can
+    use count (Skill.load): not hidden ones, __pycache__ or node_modules, which tools write
+    on their own. Links are not followed. A file that cannot be read counts as such."""
     path = Path(path)
     if path.is_file():
         path = path.parent
     digest = hashlib.sha256()
+    isjunction = getattr(os.path, "isjunction", lambda p: False)  # Python 3.12 and later
     for folder, subfolders, files in os.walk(path):
-        subfolders.sort()
-        for name in sorted(files):
+        subfolders[:] = sorted(d for d in subfolders if _counts(d)
+                               and not isjunction(os.path.join(folder, d)))
+        for name in sorted(filter(_counts, files)):
             file = Path(folder) / name
             if file.is_symlink() or not file.is_file():
                 continue
             content = hashlib.sha256()
-            with file.open("rb") as stream:
-                for block in iter(lambda: stream.read(65536), b""):
-                    content.update(block)
-            entry = [file.relative_to(path).as_posix(), content.hexdigest()]
+            try:
+                with file.open("rb") as stream:
+                    for block in iter(lambda: stream.read(65536), b""):
+                        content.update(block)
+                found = content.hexdigest()
+            except OSError:
+                found = "unreadable"
+            entry = [file.relative_to(path).as_posix(), found]
             digest.update(json.dumps(entry).encode())
     return digest.hexdigest()
+
+
+def _counts(name: str) -> bool:
+    return not name.startswith(".") and name not in ("__pycache__", "node_modules")
 
 
 def files_fingerprint(folder: Path) -> str:
     """A hash of everything in a plan that decides a run: all but plan.json."""
     digest = hashlib.sha256()
-    for file in sorted(p for p in Path(folder).rglob("*") if p.is_file() or p.is_symlink()):
-        name = file.relative_to(folder).as_posix()
-        if name == "plan.json":
-            continue
-        content = (f"link:{os.readlink(file)}".encode() if file.is_symlink()
-                   else file.read_bytes())
-        digest.update(json.dumps([name, hashlib.sha256(content).hexdigest()]).encode())
+    try:
+        for file in sorted(p for p in Path(folder).rglob("*")
+                           if p.is_file() or p.is_symlink()):
+            name = file.relative_to(folder).as_posix()
+            if name == "plan.json":
+                continue
+            content = (f"link:{os.readlink(file)}".encode() if file.is_symlink()
+                       else file.read_bytes())
+            digest.update(json.dumps([name, hashlib.sha256(content).hexdigest()]).encode())
+    except OSError as e:
+        raise PlanError(f"{Path(folder).name}: a file of the plan cannot be read: "
+                        f"{type(e).__name__}") from e
     return digest.hexdigest()
 
 
