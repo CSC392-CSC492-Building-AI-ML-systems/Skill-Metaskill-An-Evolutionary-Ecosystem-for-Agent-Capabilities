@@ -130,7 +130,7 @@ The numbers come from the CVSS band ceilings, not hand-picked; see [severity-sca
 | cmd.exe | `rmdir`, `rd`, `del`, `erase` with `/s`, also written together (`rd/s/q`, `/S/Q`) |
 | PowerShell | `Remove-Item` and its aliases `ri`, `rd`, `rmdir`, `del`, `erase` with `-Recurse` or any shorter form (`-r`, `-Rec`), also `-Recurse:$true`; not `-Recurse:$false`. (`rm` is read as the shell's) |
 
-**Inside a string** (version 7). In a code block or a script, a delete written in a string ends where the string does: the target of `os.system("rm -rf /")` is `/`. When the string holds no target, what follows it is read too (`"rm -rf " + folder`).
+**Inside a string** (version 7). In a code block or a script, a delete written in a string ends where the string does: the target of `os.system("rm -rf /")` is `/`. When the string holds no target, or something is joined to it (`"rm -rf " + folder`, `"rm -rf /tmp/%s" % name`), what follows it is read too.
 
 **No written target** (version 7). In a code block or a script, a recursive delete with nothing to delete written after it, as in `find ~ | xargs rm -rf` or `Get-ChildItem $HOME | Remove-Item -Recurse`, deletes what is piped to it: it is a finding with an unknown target (HIGH). Not when it only stands in a comment, or in a string that nothing runs, as in `grep -qE 'rm -rf|...'`. A string given to `sh -c`, `eval`, `ssh`, `Invoke-Expression`, `cmd /c`, `powershell -Command`, `os.system`, `subprocess` or `exec`, and `$(...)` in a double-quoted string, does count.
 
