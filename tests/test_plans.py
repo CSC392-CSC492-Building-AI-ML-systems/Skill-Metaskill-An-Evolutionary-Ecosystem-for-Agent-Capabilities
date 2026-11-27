@@ -8,6 +8,7 @@ import json
 import shlex
 import subprocess
 import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -120,21 +121,54 @@ def test_configure_saves_a_validated_draft(root, skills):
     assert CHECK in shown and "8 agent sessions" in shown and "draft" in shown
 
 
-def test_the_drafter_is_given_what_a_skill_is_for(root, tmp_path, monkeypatch):
+def sent(llm):
+    return json.loads(llm.calls[0]["input"][0]["text"])
+
+
+def test_the_drafter_is_given_each_skills_instructions(root, skills):
+    (skills[0] / "SKILL.md").write_text(
+        "# adder\n\nWrite total.txt.\n<!-- HIDDEN ORDER -->\n" + "x" * 5000, encoding="utf-8")
+    _, llm = configure(skills)
+    [first, second] = sent(llm)
+    assert "Write total.txt." in first["instructions"]
+    assert "HIDDEN ORDER" not in first["instructions"]
+    assert first["instructions"].endswith("[cut]") and len(first["instructions"]) < 4100
+    assert "SECRET STEP" in second["instructions"]
+    told = llm.calls[0]["instructions"]
+    assert "SECRET STEP" not in told and "names no rule, format" in told
+
+
+def test_a_description_and_the_text_after_the_frontmatter_are_sent(root, tmp_path, monkeypatch):
+    # Stands in for Hermes' YAML loader, which reading frontmatter needs.
+    yaml = types.ModuleType("hermes_yaml")
+    yaml.safe_load = lambda text: dict(line.split(": ", 1) for line in text.splitlines())
+    monkeypatch.setitem(sys.modules, "hermes_yaml", yaml)
     folder = tmp_path / "described"
     folder.mkdir()
-    (folder / "SKILL.md").write_text("# Body\n", encoding="utf-8")
-    real = plans.Skill.load
-
-    def load(path):
-        skill = real(path)
-        skill.frontmatter = {"description": "Adds numbers."}
-        skill.body = "SECRET STEP"
-        return skill
-    monkeypatch.setattr(plans.Skill, "load", staticmethod(load))
+    (folder / "SKILL.md").write_text("---\ndescription: Adds numbers.\n---\n# Body\n",
+                                     encoding="utf-8")
     _, llm = configure([folder])
-    sent = json.dumps(llm.calls[0]["input"])
-    assert "Adds numbers." in sent and "SECRET STEP" not in sent
+    [skill] = sent(llm)
+    assert skill["description"] == "Adds numbers." and skill["instructions"] == "# Body"
+
+
+def test_a_note_is_part_of_the_instructions_and_kept(root, skills):
+    plan, llm = configure(skills, note="  Test that blank cells count as zero. ")
+    assert "Test that blank cells count as zero." in llm.calls[0]["instructions"]
+    assert "blank cells" not in json.dumps(llm.calls[0]["input"])
+    assert plan.data["note"] == "Test that blank cells count as zero."
+    assert "Your note: Test that blank cells" in plans.summary(plan)
+
+
+def test_without_a_note_none_is_sent_or_kept(root, skills):
+    plan, llm = configure(skills)
+    assert "asks the following" not in llm.calls[0]["instructions"] and "note" not in plan.data
+
+
+def test_a_note_that_is_too_long_is_refused_before_any_call(root, skills):
+    with pytest.raises(plans.PlanError, match="at most 600"):
+        configure(skills, note="x" * 601)
+    assert saved(root) == []
 
 
 @pytest.mark.parametrize("bad", [
@@ -322,9 +356,23 @@ def test_configure_approve_and_rank(command, skills, root, tmp_path):
     assert f"- Plan: {plan_id}" in report_file.with_suffix(".md").read_text()
 
 
+@pytest.mark.parametrize("options", [
+    '--name sums --note "Check the -- blank cells, please"',
+    '--note Check the blank cells --name sums',
+])
+def test_configure_takes_a_name_and_a_note_in_either_order(command, skills, root, options):
+    out = command(f"configure skills/adder, skills/summer {options}")
+    [plan_id] = saved(root)
+    data = plans.load(plan_id).data
+    assert data["label"] == "sums" and "blank cells" in data["note"]
+    assert "Your note:" in out
+
+
 @pytest.mark.parametrize("request_text, expected", [
     ("configure", "Usage: /metaskill configure"),
     ("configure --name x", "Usage: /metaskill configure"),
+    ("configure a --note x --note y", "Usage: /metaskill configure"),
+    ("configure a --force", "Usage: /metaskill configure"),
     ("configure nothing-here", "No skill found"),
     ("approve", "Usage: /metaskill approve"),
     ("approve plan-000000", "there is no plan"),

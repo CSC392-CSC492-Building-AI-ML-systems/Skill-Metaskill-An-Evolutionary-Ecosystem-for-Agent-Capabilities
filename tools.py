@@ -27,7 +27,7 @@ USAGE = (
     "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
     "generalize <skill> | "
     f"personalize <skill> --config <file> | skills [text] | quality-pilot\n"
-    "Plans: configure <skill>, <skill> [--name <label>] | approve <plan> | plans | "
+    "Plans: configure <skill>, <skill> [--name <label>] [--note <text>] | approve <plan> | plans | "
     f"evaluate <plan> | rank <plan>\n{SKILL_HELP}"
 )
 
@@ -360,7 +360,11 @@ def _parse_evaluate_command(request):
 
 # A plan ID as a command's first argument (metaskill/evaluate/plans.py PLAN_ID).
 _PLAN = re.compile(r"(plan-[0-9a-f]{6})(?:\s+(.*))?", re.DOTALL)
-_LABEL = re.compile(r"\s+--name\s+(\"[^\"]*\"|'[^']*'|[^\"'].*?)\s*$")
+# A trailing `--name LABEL` or `--note TEXT`; quoted, or up to the other option.
+_PLAN_OPTION = re.compile(
+    r"\s+--(name|note)\s+(\"[^\"]*\"|'[^']*'|(?:(?!\s+--(?:name|note)\s).)+?)\s*$", re.DOTALL)
+_CONFIGURE_USAGE = ("Usage: /metaskill configure <skill>, <skill> [--name <label>] "
+                    "[--note \"<what the tasks should test>\"]")
 
 
 def _plans_module():
@@ -371,20 +375,24 @@ def _plans_module():
 
 
 def _configure(request, ctx, cwd, where):
-    """`/metaskill configure <skills> [--name <label>]`: draft a plan and show it."""
-    label = _LABEL.search(request)
-    if label:
-        request = request[:label.start()]
+    """`/metaskill configure <skills> [--name <label>] [--note <text>]`: draft a plan and
+    show it."""
+    options = {}
+    while (option := _PLAN_OPTION.search(request)) is not None:
+        if option[1] in options:
+            return f"{_CONFIGURE_USAGE}\n{where}"
+        options[option[1]] = option[2].strip().strip("\"'")
+        request = request[:option.start()]
     skills = request.strip().strip("\"'")
     if not skills or "--" in skills:
-        return f"Usage: /metaskill configure <skill>, <skill> [--name <label>]\n{where}"
+        return f"{_CONFIGURE_USAGE}\n{where}"
     paths, problems = _find_skills("rank", skills, cwd)
     if problems or not paths:
         return "\n".join([*problems, SKILL_HELP, where])
     plans = _plans_module()
     try:
-        plan = plans.configure(paths, ctx=ctx,
-                               label=label[1].strip("\"'") if label else "")
+        plan = plans.configure(paths, ctx=ctx, label=options.get("name", ""),
+                               note=options.get("note", ""))
         shown = plans.summary(plan)
     except plans.PlanError as e:
         return f"metaskill configure failed: {e}"

@@ -6,7 +6,7 @@ and approves, and every later run reuses unchanged. Tasks are still never genera
 is made.
 
 ```
-/metaskill configure meeting-action-items, document-to-action-items [--name <label>]
+/metaskill configure meeting-action-items, document-to-action-items [--name <label>] [--note "<text>"]
 /metaskill approve plan-1a2b3c
 /metaskill rank plan-1a2b3c          # evaluate plan-1a2b3c for a plan with one skill
 /metaskill plans
@@ -31,14 +31,27 @@ Edit any of them before approving.
 
 ## 2. Drafting
 
-`configure` gives the judge model each skill's **name and description** (the start of its text
-when it has no description), not its steps: tasks written around one skill's steps would favour
-that skill. If the skills do clearly unrelated jobs, no plan is made; skills for the same job are compared
+`configure` gives the judge model each skill's name, description and the start of its `SKILL.md`
+(4,000 characters, hidden text removed). It is asked to test what the skills teach, such as the
+result's format or where settings come from, **without saying it in the task prompt**, so that
+an agent without a skill has to guess and the runs can show whether a skill helps. Where the
+skills differ, it is asked to test what serves any user of the job, never what only one skill
+says.
+
+`--note` (up to 600 characters) says in your own words what the tasks should test, for example
+`--note "The company comes from config.json"`. The model is told to follow it over those rules.
+The note is shown in the review and kept in `plan.json`.
+
+If the skills do clearly unrelated jobs, no plan is made; skills for the same job are compared
 however much their descriptions differ in detail or quality. It asks for up to 3 tasks, each
 with input files, `exit_code` check commands and an example answer. The reply is untrusted: names
 must be plain file names, sizes and counts are capped (the model is told the limits), a check may
 span several lines but holds no other control characters, and anything else rejects the draft with
 the reason.
+
+**These are requests to a model, not guarantees.** A draft may still give away the answer, test
+too little, or favour a skill whose instructions it follows closely. Read every prompt and check
+before approving. A run in which skills show no lift suggests the tasks are too easy.
 
 ## 3. Validation
 
