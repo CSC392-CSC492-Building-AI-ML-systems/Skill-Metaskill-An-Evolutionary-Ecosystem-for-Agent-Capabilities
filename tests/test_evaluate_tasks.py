@@ -315,6 +315,13 @@ def test_no_skill_name_breaks_the_report_or_shares_a_log_folder(tmp_path, harnes
         assert all(f"(full log: {skill.log_folder}/logs/" in t.output for t in skill.tests)
 
 
+def test_without_tasks_no_log_folder_is_named(tmp_path, harness):
+    result = rank_skills([make_skill(tmp_path / "x", "same"), make_skill(tmp_path / "y", "same")],
+                         output_path=tmp_path / "out")
+    assert [s.log_folder for s in report(result).skills] == [None, None]
+    assert not any("Logs" in w for w in result["warnings"])
+
+
 def test_a_skill_whose_logs_cannot_be_written_keeps_its_row(tmp_path, harness, monkeypatch):
     real_mkdir = Path.mkdir
 

@@ -130,7 +130,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `location` | File and line, e.g. `SKILL.md:42` |
 | `message` | What is wrong, in plain words, for the report |
 
-**Log folder (`log_folder`).** The folder, beside the report, that holds the skill's run logs: `skill-01`, `skill-02`, in the order the skills were given, never the skill's name. Absent in a report made before this was recorded.
+**Log folder (`log_folder`).** The folder, beside the report, that holds the skill's run logs: `skill-01`, `skill-02`, in the order the skills were given, never the skill's name. Absent when no task ran, and in a report made before this was recorded.
 
 **Local warnings (`local_warnings`).** What the skill would delete on the machine that ran the evaluation, when that looks important ([safety/local.md](safety/local.md)). Specific to that machine and never scored. They contain real local paths, so remove them before sharing a report.
 

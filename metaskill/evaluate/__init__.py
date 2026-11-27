@@ -172,15 +172,17 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
             log_folder = _log_folder(number)
             if skill.name in names and skill.name not in shared:
                 shared.add(skill.name)
+                where = ("" if tasks is None else
+                         ", and each one's Logs line says which folder holds its runs")
                 warnings.append(clean(
                     f"more than one skill is named {skill.name}: the report has a row for "
-                    "each, and each one's Logs line says which folder holds its runs",
-                    MAX_REASON_CHARS))
+                    f"each{where}", MAX_REASON_CHARS))
             names.add(skill.name)
             result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                            agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
                                            log_folder=log_folder)
-            result.log_folder = log_folder
+            if tasks is not None:  # without task runs there are no logs to point to
+                result.log_folder = log_folder
         except Exception as e:  # one bad skill must not stop the others
             warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                   MAX_REASON_CHARS))

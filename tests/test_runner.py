@@ -386,6 +386,14 @@ def test_the_skills_name_is_never_the_log_folder(skill, run_dir, name):
     assert [p.name for p in run_dir.iterdir()] == ["skill-01"]
 
 
+def test_calls_without_a_log_folder_never_share_one(skill, run_dir):
+    (run_dir / "skill-02").mkdir(parents=True)  # taken by something else
+    first, second = (run_tasks(skill, [task()], FakeAgent(), config=config(runs=1),
+                               run_dir=run_dir) for _ in range(2))
+    assert "(full log: skill-01/logs/" in first.tests[0].output
+    assert "(full log: skill-03/logs/" in second.tests[0].output
+
+
 @pytest.mark.parametrize("folder", ["../escape", "/abs", "C:\\abs", "", ".hidden", "a/b", 123])
 def test_a_log_folder_that_is_not_a_plain_name_is_refused(skill, run_dir, folder):
     with pytest.raises(ValueError, match="log folder"):

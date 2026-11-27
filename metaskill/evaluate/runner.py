@@ -160,18 +160,20 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     workspace each run happens in, and runs its `exit_code` commands; None means a
     `DockerSandbox` whose run folders are `config.sandbox_disk` in size. `judges`
     replaces the judges built from these, for tests. Logs go to
-    `run_dir/[log_folder]/logs/`; `log_folder` defaults to `skill-01`, and a caller
-    running more than one skill into a run_dir gives each its own. The skill's name is
-    never used as a folder: it comes from the skill's own frontmatter.
+    `run_dir/[log_folder]/logs/`; without a `log_folder`, the first `skill-01`,
+    `skill-02`, ... that run_dir does not hold yet, so one call never overwrites
+    another's logs. The skill's name is never used as a folder: it comes from the
+    skill's own frontmatter.
 
     Raises ValueError if log_folder is not a plain folder name.
     """
-    folder = "skill-01" if log_folder is None else log_folder
-    if not isinstance(folder, str) or not SAFE_NAME.fullmatch(folder):
-        raise ValueError(f"log folder {folder!r} may only contain letters, digits, "
+    if log_folder is not None and (not isinstance(log_folder, str)
+                                   or not SAFE_NAME.fullmatch(log_folder)):
+        raise ValueError(f"log folder {log_folder!r} may only contain letters, digits, "
                          "'_', '.' and '-'")
     pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
     result = RunnerResult(tests=[], task_ids=[task.task_id for task in tasks])
+    folder = log_folder or _free_folder(run_dir)
     log_dir = run_dir / folder / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -207,6 +209,19 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
         result.judge_model = pool.llm.judge_model
         result.judge_usage = pool.llm.total_usage
     return result
+
+
+def _free_folder(run_dir: Path) -> str:
+    """Make and return the first `skill-NN` folder run_dir does not have."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    number = 1
+    while True:
+        folder = f"skill-{number:02d}"
+        try:
+            (run_dir / folder).mkdir()
+            return folder
+        except FileExistsError:
+            number += 1
 
 
 def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
