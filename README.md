@@ -38,7 +38,7 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not 
 /metaskill stop
 ```
 
-`/metaskill stop` stops a running `evaluate` or `rank`: Ctrl-C does not, because Hermes runs the command in its gateway, which goes on after the CLI lets go. Run it from the same session or another one of the same profile; the stopped command then returns with no report.
+`/metaskill stop` stops a running `evaluate` or `rank`: Ctrl-C does not, because Hermes runs the command in its gateway, which goes on after the CLI lets go. Run it from any session of the same profile on that gateway; the stopped command then returns with no report. In the TUI that can be the same session. The classic CLI waits for the command, so press Ctrl-C first to stop waiting, then send `/metaskill stop` there or from another session. Without a gateway, the classic CLI runs the command in its own process, where no other session can reach it; there, Ctrl-C stops it.
 
 `<skill>` is an installed skill's name (`claude-code`), its category and name (`autonomous-ai-agents/claude-code`), or a path to the skill's folder, relative to your session's folder or absolute. A path that exists wins over a name. If a name matches several skills, the command lists them and runs nothing, so you can give the one you mean. `hermes skills list` shows what is installed.
 

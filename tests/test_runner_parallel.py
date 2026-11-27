@@ -592,6 +592,64 @@ def test_cancel_wakes_a_worker_in_a_rate_limit_pause_at_once():
     assert gate.cancelled
 
 
+def test_linked_backoffs_share_a_pause_but_not_a_cancel():
+    now = [0.0]
+    sleep = lambda s: now.__setitem__(0, now[0] + s)  # noqa: E731
+    call = Backoff(initial=5, sleep=sleep, clock=lambda: now[0], jitter=0)
+    runs = call.linked()
+    assert runs.limited() == 5  # the runs hit a limit ...
+    call.wait()  # ... and the call's other model use waits it out too
+    assert now[0] == 5 and call.limits == 1
+    runs.cancel()  # a runner call stopping (e.g. one that failed) ...
+    assert runs.cancelled and not call.cancelled  # ... leaves the later skills' scoring be
+    assert call.linked().limited() == 10  # still one pause: it doubles across views
+
+
+def test_call_retries_a_rate_limit_and_makes_no_call_once_cancelled():
+    gate = Backoff(initial=1, sleep=lambda s: None, jitter=0)
+    replies = [RateLimitError("429"), RateLimitError("429"), "ok"]
+
+    def fn():
+        reply = replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+    assert gate.call(fn) == "ok" and gate.limits == 2
+    with pytest.raises(ValueError):  # not a rate limit: raised at once
+        gate.call(lambda: (_ for _ in ()).throw(ValueError("bad")))
+    gate.cancel()
+    with pytest.raises(backoff_module.BackoffCancelled):
+        gate.call(lambda: pytest.fail("called after cancel"))
+
+
+def test_call_gives_up_after_its_attempts():
+    gate = Backoff(initial=1, attempts=3, sleep=lambda s: None, jitter=0)
+    tries = []
+
+    def limited():
+        tries.append(1)
+        raise RateLimitError("429")
+    with pytest.raises(RateLimitError):
+        gate.call(limited)
+    assert len(tries) == 3
+
+
+def test_a_backed_off_llm_retries_ctx_llm_and_passes_the_rest_through():
+    class Llm:
+        name = "ctx.llm"
+        calls = 0
+
+        def complete_structured(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RateLimitError("429")
+            return kwargs
+    inner = Llm()
+    llm = backoff_module.BackedOffLlm(inner, Backoff(initial=1, sleep=lambda s: None, jitter=0))
+    assert llm.complete_structured(task="t") == {"task": "t"} and inner.calls == 2
+    assert llm.name == "ctx.llm"
+
+
 def test_stopping_the_pool_ends_its_pause_and_no_judge_call_is_made_after():
     pool = runner._Judges(None, config(), None, FakeSandbox())
     pool.backoff.limited()

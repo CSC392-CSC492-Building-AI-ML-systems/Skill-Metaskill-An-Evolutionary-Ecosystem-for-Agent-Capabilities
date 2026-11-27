@@ -158,7 +158,8 @@ def run_skill(skill: Skill, tasks_file: str | Path, agent: Agent, *,
 def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
               config: EvaluationConfig, run_dir: Path, ctx: Any = None,
               judges: Mapping[JudgeType, TaskJudge] | None = None,
-              sandbox: Sandbox | None = None, log_folder: str | None = None) -> RunnerResult:
+              sandbox: Sandbox | None = None, log_folder: str | None = None,
+              backoff: Backoff | None = None) -> RunnerResult:
     """Run every task `config.runs_per_task` times per variant and judge each run.
 
     `ctx` is the Hermes plugin context, needed only for LLM checks. `sandbox` opens the
@@ -166,7 +167,10 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     `DockerSandbox` whose run folders are `config.sandbox_disk` in size. `judges`
     replaces the judges built from these, for tests. Logs go to
     `run_dir/[log_folder]/logs/`; `log_folder` defaults to the skill's name, and a caller
-    running two skills of the same name into one run_dir gives each its own.
+    running two skills of the same name into one run_dir gives each its own. `backoff` is
+    the caller's rate-limit pause, when other model calls share the provider with these
+    runs (evaluate's background scoring); the runs wait on it through a view of their own
+    (Backoff.linked), so stopping them does not cancel it for the caller. None: a new one.
 
     Raises ValueError if the skill's name or log_folder cannot be a folder name: the name
     comes from the skill's own frontmatter, so `../x` or an absolute path would put the
@@ -176,7 +180,8 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
     if not isinstance(folder, str) or not SAFE_NAME.fullmatch(folder):
         raise ValueError(f"skill name {folder!r} may only contain letters, digits, "
                          "'_', '.' and '-'")
-    pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk))
+    pool = _Judges(ctx, config, judges, sandbox or DockerSandbox(disk=config.sandbox_disk),
+                   backoff.linked() if backoff is not None else None)
     # One agent serves every skill of a rank call. A stop() in an earlier call cancelled it
     # (HermesAgent.cancel); if its caller went on to this skill, this skill's runs must not
     # all be refused as "stopped".
@@ -555,14 +560,15 @@ class _Judges:
     known, so stop() can remove them all."""
 
     def __init__(self, ctx: Any, config: EvaluationConfig,
-                 given: Mapping[JudgeType, TaskJudge] | None, sandbox: Sandbox):
+                 given: Mapping[JudgeType, TaskJudge] | None, sandbox: Sandbox,
+                 backoff: Backoff | None = None):
         self.ctx, self.config, self.sandbox = ctx, config, sandbox
         self.judges: dict[JudgeType, TaskJudge] = dict(given or {})
         self.llm: Judge | None = None
         self.llm_error = ""
         self.sandbox_error: str | None = None  # None until the sandbox is asked
         # One pause for every session and LLM check of the call, after a rate limit.
-        self.backoff = Backoff()
+        self.backoff = backoff if backoff is not None else Backoff()
         self.stopping = False
         self._lock = threading.Lock()
         self._open: dict[int, Workspace] = {}  # by id(): a workspace need not be hashable

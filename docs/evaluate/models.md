@@ -72,7 +72,7 @@ Settings for one `evaluate` or `rank` call.
 | `max_parallel_runs` | `16` | Task sessions of one skill run at once ([runner.md](runner.md) 2.7), an integer from 1 to 16; capped at what Docker has room for. 1 runs them one at a time. Not hashed: it changes how long runs take, not their results |
 | `prewarm_agents` | `true` | Start the Hermes process of upcoming sessions ahead of them, so each skips Hermes' ~2 s import ([hermes_agent.md](hermes_agent.md), warm start). Costs up to `max_parallel_runs` idle Hermes processes. A boolean. Not hashed |
 
-- `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, `tasks_path` and `max_parallel_runs` (so it covers `agent_max_iterations` and `agent_timeout`: a lower limit can turn a pass into a failure), since where the reports and the task file are does not affect scores (the tasks do, and the agent model is hashed). The result becomes `ReportMeta.config`.
+- `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, `tasks_path`, `max_parallel_runs` and `prewarm_agents` (so it covers `agent_max_iterations` and `agent_timeout`: a lower limit can turn a pass into a failure), since where the reports and the task file are does not affect scores (the tasks do, and the agent model is hashed). The result becomes `ReportMeta.config`.
 - `to_meta(timestamp, skills, scanner_version, checks_version, clarity_rubric_version="")` builds the `ReportMeta` for a run.
 - `from_dict` re-validates `weights` after loading them.
 

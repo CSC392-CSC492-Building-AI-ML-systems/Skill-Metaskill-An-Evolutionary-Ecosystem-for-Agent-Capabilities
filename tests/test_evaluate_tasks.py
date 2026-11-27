@@ -666,3 +666,116 @@ def test_the_background_thread_keeps_the_callers_context(tmp_path, harness, monk
     finally:
         scope.reset(token)
     assert seen == ["profile", "profile"]
+
+
+# --- The dimensions scored in the background share the runs' rate-limit pause -------------
+
+
+class RateLimitError(Exception):
+    """Named like the provider SDKs' error."""
+
+
+def test_a_rate_limit_on_a_background_judge_call_is_waited_out_not_an_error(
+        tmp_path, harness, monkeypatch):
+    # Review of #53: Clarity's one judge call, made while the sessions ran, got a 429 and
+    # was not retried, so the skill had no Clarity score, no overall and no rank.
+    import functools
+    from metaskill.evaluate.backoff import Backoff
+    monkeypatch.setattr(evaluate, "Backoff",
+                        functools.partial(Backoff, sleep=lambda s: None, jitter=0))
+
+    class LimitedOnce(FakeLlm):
+        calls = 0
+
+        def complete_structured(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RateLimitError("429 Too Many Requests")
+            return super().complete_structured(**kwargs)
+
+    llm = LimitedOnce(*[{"ratings": []}] * 8)
+    harness.config.write_text(json.dumps({"runs_per_task": RUNS, "judge_retries": 0,
+                                          "max_parallel_runs": 4}))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks,
+                            ctx=SimpleNamespace(llm=llm))
+    clarity = report(result).skills[0].dimensions[Dimension.CLARITY]
+    assert llm.calls == 2  # the limited call, and the same call made again
+    assert clarity.detail != evaluate.PROVIDER_FAILED
+
+
+def test_a_failed_skills_background_judge_use_is_still_counted(tmp_path, harness, placeholder,
+                                                                 monkeypatch):
+    # Review of #53: a skill whose result failed after its background scoring started left
+    # that scoring's judge usage out of the report header.
+    placeholder(Dimension.CONFIG_CLEANLINESS, OWN_JUDGE)
+    real = evaluate.run_tasks
+
+    def failing_for_a(skill, *args, **kwargs):
+        if skill.name == "a":
+            raise RuntimeError("the runner broke")
+        return real(skill, *args, **kwargs)
+
+    monkeypatch.setattr(evaluate, "run_tasks", failing_for_a)
+    result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    assert any("could not be evaluated" in w for w in result["warnings"])
+    meta = report(result).meta
+    assert meta.judge_model == "openai/rubric-model"
+    assert meta.judge_usage == {"input_tokens": 1000, "output_tokens": 100, "calls": 2}
+
+
+def test_an_interrupt_stops_the_background_scoring_at_its_next_dimension(tmp_path, harness,
+                                                                         monkeypatch):
+    # Ctrl-C left the background thread scoring the skill's remaining dimensions, with
+    # their model calls, after the call had ended.
+    import threading
+    started, release, done, scored = threading.Event(), threading.Event(), threading.Event(), []
+    real_score, real_static = evaluate._score, evaluate._static_scores
+
+    def slow_first(dimension, *args):
+        scored.append(dimension)
+        if len(scored) == 1:
+            started.set()
+            release.wait(10)
+        return real_score(dimension, *args)
+
+    def static(*args):
+        try:
+            return real_static(*args)
+        finally:
+            done.set()
+
+    def interrupted(*args, **kwargs):
+        started.wait(10)  # the background scoring is under way
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(evaluate, "_score", slow_first)
+    monkeypatch.setattr(evaluate, "_static_scores", static)
+    monkeypatch.setattr(evaluate, "run_tasks", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                       output_path=tmp_path / "out", tasks_path=harness.tasks)
+    release.set()
+    assert done.wait(10)
+    assert len(scored) == 1  # the dimension under way ended; no later one started
+
+
+def test_an_agent_a_stopped_call_cancelled_is_resumed_before_its_check(tmp_path, harness,
+                                                                       monkeypatch):
+    class Cancelled(CheckedAgent):
+        cancelled = True
+
+        def resume(self):
+            self.cancelled = False
+
+        def check(self, workspace):
+            if self.cancelled:  # as HermesAgent: a cancelled agent kills the check's process
+                raise HermesAgentUnavailable("the check was stopped")
+            return super().check(workspace)
+
+    agent = Cancelled(cheap_with_skill)
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks, agent=agent)
+    assert result.get("status") != "error" and agent.checks == 1

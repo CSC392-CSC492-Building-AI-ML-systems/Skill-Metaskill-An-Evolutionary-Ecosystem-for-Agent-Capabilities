@@ -56,6 +56,7 @@ from .models import (
 from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
 from . import cancel
+from .backoff import BackedOffLlm, Backoff
 from .runner import RunnerResult, report_dir, run_tasks, timestamp
 from .tasks import TaskError, load_tasks
 from .threads import submit
@@ -118,9 +119,17 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
     try:
         # Registered while it runs, so /metaskill stop (or Hermes interrupting the turn)
         # can stop it: Ctrl-C does not reach a command Hermes runs in its gateway (cancel.py).
-        with cancel.running():
-            return _evaluate_once(paths, config_path, output_path, tasks_path, ctx, agent,
-                                  sandbox, judges, used)
+        with cancel.running() as run:
+            try:
+                return _evaluate_once(paths, config_path, output_path, tasks_path, ctx, agent,
+                                      sandbox, judges, used)
+            except BaseException as e:
+                # Ctrl-C (where it reaches the process) or a failure of ours ends the call:
+                # the background scoring, which sees this run's stop at its next dimension
+                # (_score_unless_stopped), makes no more model calls for a call that is over.
+                if not isinstance(e, cancel.EvaluationStopped):
+                    run.stop("the evaluation was interrupted")
+                raise
     except cancel.EvaluationStopped as e:
         # Every container is removed and every Hermes session stopped (runner.stop); the
         # runs it cut short are not a result, so no report is written. Logs already
@@ -181,6 +190,11 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
                     "dependencies": [asdict(d) for d in missing]}
         agent = agent if agent is not None else _make_agent(config)
         used.append(agent)
+        # An agent a stopped call cancelled (HermesAgent.cancel), passed in again: it must
+        # warm and check again, not kill its pre-flight check's process at once.
+        resume = getattr(agent, "resume", None)
+        if callable(resume):
+            resume()
         _prewarm(agent, config, tasks, sandbox)  # starts while the check below runs
         problem = _check_agent(agent, sandbox)
         if problem:  # one clear error now, not one per run
@@ -192,8 +206,19 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
     # With tasks, before scoring: the runs write their logs into this call's folder.
     created = not config.output_dir.exists()
     run_dir, started = _new_run_dir(config) if tasks is not None else (None, "")
+    # One rate-limit pause for every model call of this call: the task runs' sessions and
+    # checks (each runner call through a view of its own) and the dimensions scored while
+    # they run. Those dimensions' calls (Clarity's judge, Safety's Cisco analyzer and
+    # review, through `llm`) wait out the pause the runs set off, and a rate-limited one is
+    # made again, rather than costing the skill its score (runner.md 2.7).
+    backoff = Backoff()
+    scoring = backoff.linked()  # cancelled when this call ends (below)
     llm = getattr(ctx, "llm", None)
+    if llm is not None:
+        llm = BackedOffLlm(llm, scoring)
     judge = _judge(ctx, config)
+    if judge is not None:
+        judge.backoff = scoring  # its own ctx.llm calls: the same pause and retries
     results: list[SkillResult] = []
     warnings: list[str] = []
     sessions = run_errors = 0
@@ -236,7 +261,7 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
                         f"{log_folder}, ...)", MAX_REASON_CHARS))
                 result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                                agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
-                                               log_folder=log_folder,
+                                               log_folder=log_folder, backoff=backoff,
                                                static=static[i].result if i in static else None)
                 result.log_folder = log_folder
             except cancel.EvaluationStopped:
@@ -244,6 +269,9 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
             except Exception as e:  # one bad skill must not stop the others
                 warnings.append(clean(f"{path} could not be evaluated: {type(e).__name__}",
                                       MAX_REASON_CHARS))
+                # Its background scoring may have called the judge all the same: those
+                # calls were made, so the report's totals count them (as _tally would).
+                judge_usage = judge_usage + _static_usage(static.get(i), judge_models)
                 continue
             results.append(result)
             judge_usage = judge_usage + _tally(result, runs, judged, warnings, judge_models)
@@ -260,6 +288,9 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
             # Interrupted (Ctrl-C) or done: no skill's scoring starts after this, and the call
             # does not wait for one under way, whose result nobody reads.
             background.shutdown(wait=False, cancel_futures=True)
+        # A background judge call still waiting out a pause makes no call after this one
+        # ended (stopped, or interrupted): it raises instead, and nobody reads it.
+        scoring.cancel()
     if not results:
         _remove_if_empty(run_dir, config.output_dir if created else None)
         return {"status": "error", "error": "no skill could be evaluated",
@@ -469,19 +500,22 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
             judge: Judge | None = None, agent: Any = None, sandbox: Any = None,
             run_dir: Path | None = None, ctx: Any = None, log_folder: str | None = None, judges: Any = None,
             static: Callable[[], dict[Dimension, DimensionScore]] | None = None,
+            backoff: Backoff | None = None,
             ) -> tuple[SkillResult, RunnerResult | None, list[tuple[str, dict[str, int]]]]:
     """The skill's result, its task runs (None when no tasks ran), and the (judge_model,
     judge_usage) of every dimension that judged with a judge of its own. judge is the
     run's shared Judge, for the dimensions in JUDGED; evaluate totals its use itself.
     `static` gives the scores of the dimensions that do not read the runs, when they were
-    scored elsewhere (on _evaluate's background thread); None scores them here."""
+    scored elsewhere (on _evaluate's background thread); None scores them here. `backoff`
+    is the call's rate-limit pause, which the task runs share (run_tasks)."""
     from . import safety
 
     runs = None
     if tasks is not None:
         try:
             runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
-                             sandbox=sandbox, log_folder=log_folder, judges=judges)
+                             sandbox=sandbox, log_folder=log_folder, judges=judges,
+                             backoff=backoff)
         except ValueError as e:  # a skill name that cannot be a log folder: no run made
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
                                 errors=[clean(str(e), MAX_REASON_CHARS)])
@@ -510,6 +544,30 @@ def _static_scores(skill: Skill, config: EvaluationConfig, llm: Any, judge: Judg
     _score turns every failure into the dimension's `error`."""
     return {d: _score_unless_stopped(d, skill, config, llm, None, judge, task)
             for d in Dimension if d not in TASK_DIMENSIONS}
+
+
+def _static_usage(future: Future | None, judge_models: set[str]) -> TokenUsage:
+    """The judge tokens a failed skill's background scoring used, its judge models added to
+    `judge_models`: the dimensions that judged with a judge of their own (the deep safety
+    tier). Clarity's calls are on the shared judge, which evaluate totals itself. Waits for
+    the scoring, which _evaluate does before reading the totals anyway; nothing if it was
+    not scored or failed."""
+    if future is None:
+        return TokenUsage()
+    try:
+        scored = future.result()
+    except cancel.EvaluationStopped:
+        raise  # the whole call stops, as everywhere else
+    except Exception:
+        return TokenUsage()
+    used = TokenUsage()
+    for score in scored.values():
+        if score.judge_usage:
+            judge_models.update(m for m in score.judge_model.split(", ") if m)
+            usage = score.judge_usage
+            used = used + TokenUsage(usage.get("input_tokens", 0),
+                                     usage.get("output_tokens", 0), usage.get("calls", 0))
+    return used
 
 
 def _score_unless_stopped(dimension: Dimension, *args: Any) -> DimensionScore:

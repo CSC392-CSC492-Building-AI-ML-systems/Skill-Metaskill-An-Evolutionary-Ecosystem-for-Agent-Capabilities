@@ -113,7 +113,9 @@ class FakeLlm:
         self.calls.append(kwargs)
         if self.fail:
             raise RuntimeError("Hermes: model unavailable")
-        schema = json.loads(kwargs["instructions"].split("JSON schema:\n", 1)[1])
+        # Only the schema object: translate() may add a reply instruction after it.
+        schema = json.JSONDecoder().raw_decode(
+            kwargs["instructions"].split("JSON schema:\n", 1)[1])[0]
         return FakeResult(parsed=minimal(schema))
 
 

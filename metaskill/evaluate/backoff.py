@@ -14,6 +14,9 @@ import random
 import threading
 import time
 from collections.abc import Callable
+from typing import Any, TypeVar
+
+R = TypeVar("R")
 
 # Seconds of the first pause, and the longest one: a provider's rate-limit window is
 # usually a minute, so the pauses reach it in a few doublings and stop there.
@@ -78,15 +81,28 @@ class Backoff:
             raise ValueError(f"attempts must be >= 1, got {attempts}")
         self.initial, self.maximum, self.attempts = initial, maximum, attempts
         self._cancelled = threading.Event()
+        self._given_sleep = sleep
         # The default waits on the event, so cancel() wakes a waiting worker at once.
         self._sleep = sleep if sleep is not None else self._cancelled.wait
         self._clock = clock
-        self._lock = threading.Lock()
         self.jitter = jitter
-        self._resume_at = 0.0
-        self._delay = 0.0  # the pause in force, or the last one
-        self._streak = 0  # pauses since the last success
-        self.limits = 0  # every rate limit seen, for the log
+        self._pause = _Pause()
+
+    def linked(self) -> Backoff:
+        """A Backoff that shares this one's pause (a rate limit seen by either pauses both)
+        but has a cancel() of its own. evaluate keeps one pause for its whole call, so the
+        dimensions it scores in the background wait out the limits the task runs hit; each
+        runner call stops only its own workers, not the scoring of the skills after it."""
+        other = Backoff(initial=self.initial, maximum=self.maximum, attempts=self.attempts,
+                        sleep=self._given_sleep, clock=self._clock, jitter=self.jitter)
+        other._pause = self._pause
+        return other
+
+    @property
+    def limits(self) -> int:
+        """Every rate limit seen on this pause, by any linked Backoff, for the log."""
+        with self._pause.lock:
+            return self._pause.limits
 
     @property
     def cancelled(self) -> bool:
@@ -99,8 +115,8 @@ class Backoff:
     def wait(self) -> None:
         paused = False
         while not self._cancelled.is_set():
-            with self._lock:
-                left = self._resume_at - self._clock()
+            with self._pause.lock:
+                left = self._pause.resume_at - self._clock()
             if left <= 0:
                 if paused and self.jitter > 0 and not self._cancelled.is_set():
                     self._sleep(random.uniform(0, self.jitter))
@@ -110,15 +126,66 @@ class Backoff:
 
     def limited(self) -> float:
         """Record a rate limit; returns the length of the pause in force."""
-        with self._lock:
-            self.limits += 1
+        pause = self._pause
+        with pause.lock:
+            pause.limits += 1
             now = self._clock()
-            if now >= self._resume_at:  # not covered by the pause in force: a longer one
-                self._delay = min(self.maximum, self.initial * 2 ** self._streak)
-                self._streak = min(self._streak + 1, _MAX_STREAK)
-                self._resume_at = now + self._delay
-            return self._delay
+            if now >= pause.resume_at:  # not covered by the pause in force: a longer one
+                pause.delay = min(self.maximum, self.initial * 2 ** pause.streak)
+                pause.streak = min(pause.streak + 1, _MAX_STREAK)
+                pause.resume_at = now + pause.delay
+            return pause.delay
 
     def succeeded(self) -> None:
-        with self._lock:
-            self._streak = 0
+        with self._pause.lock:
+            self._pause.streak = 0
+
+    def call(self, fn: Callable[[], R]) -> R:
+        """fn(), after any pause in force; made again, up to `attempts` times in all, while
+        it raises a rate limit (is_rate_limited). Raises BackoffCancelled, without calling
+        fn, once cancel() was called; any other error of fn's as it is."""
+        for attempt in range(1, self.attempts + 1):
+            self.wait()
+            if self.cancelled:
+                raise BackoffCancelled("the evaluation was stopped before this model call")
+            try:
+                result = fn()
+            except Exception as e:
+                if attempt == self.attempts or not is_rate_limited(e):
+                    raise
+                self.limited()
+                continue
+            self.succeeded()
+            return result
+        raise AssertionError("unreachable")  # the last attempt returns or raises
+
+
+class BackoffCancelled(Exception):
+    """A model call was not made: the Backoff it would wait on was cancelled."""
+
+
+class _Pause:
+    """The pause state linked Backoffs share (Backoff.linked)."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.resume_at = 0.0
+        self.delay = 0.0  # the pause in force, or the last one
+        self.streak = 0  # pauses since the last success
+        self.limits = 0  # every rate limit seen
+
+
+class BackedOffLlm:
+    """Hermes' ctx.llm, with every complete_structured call made through `backoff`
+    (Backoff.call): it waits out a pause another call started, and a rate-limited call is
+    made again. evaluate hands it to the dimensions it scores while the task runs call the
+    same provider (Safety's Cisco analyzer and review). Anything else is ctx.llm's own."""
+
+    def __init__(self, llm: Any, backoff: Backoff):
+        self._llm, self._backoff = llm, backoff
+
+    def complete_structured(self, **kwargs: Any) -> Any:
+        return self._backoff.call(lambda: self._llm.complete_structured(**kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._llm, name)
