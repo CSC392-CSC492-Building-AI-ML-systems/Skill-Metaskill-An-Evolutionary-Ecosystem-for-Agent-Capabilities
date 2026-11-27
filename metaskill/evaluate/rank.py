@@ -388,6 +388,7 @@ def markdown(meta: ReportMeta, ranking: Ranking) -> str:
         f"- Scanner version: {_md(meta.scanner_version) or 'not run'}",
         f"- Checks version: {_md(meta.checks_version)}",
         f"- Clarity rubric version: {_md(meta.clarity_rubric_version) or 'unknown'}",
+        f"- Overall formula version: {_md(meta.overall_version) or 'unknown'}",
         "", table(ranking),
     ]
     for entry in ranking.entries:

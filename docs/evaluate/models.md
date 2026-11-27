@@ -73,7 +73,7 @@ Settings for one `evaluate` or `rank` call.
 | `prewarm_agents` | `true` | Start the Hermes process of upcoming sessions ahead of them, so each skips Hermes' ~2 s import ([hermes_agent.md](hermes_agent.md), warm start). Costs up to `max_parallel_runs` idle Hermes processes. A boolean. Not hashed |
 
 - `hash()` returns the first 16 hex characters of a SHA-256 over every setting except `output_dir`, `tasks_path`, `max_parallel_runs` and `prewarm_agents` (so it covers `agent_max_iterations` and `agent_timeout`: a lower limit can turn a pass into a failure), since where the reports and the task file are does not affect scores (the tasks do, and the agent model is hashed). The result becomes `ReportMeta.config`.
-- `to_meta(timestamp, skills, scanner_version, checks_version, clarity_rubric_version="")` builds the `ReportMeta` for a run.
+- `to_meta(timestamp, skills, scanner_version, checks_version, clarity_rubric_version="")` builds the `ReportMeta` for a run. It sets `overall_version` to `OVERALL_VERSION` itself, since the formula belongs to the code, not to the config.
 - `from_dict` re-validates `weights` after loading them.
 
 ### `Check`
@@ -165,7 +165,7 @@ A problem found in a skill's files, for Safety or Configuration Cleanliness.
 
 ### `Scores`
 
-One value per dimension plus `overall`, each in `[0, 1]` or `None` (skipped or failed). `overall` is the weighted mean of the six ([rank.md](rank.md)), and `None` if any dimension is `None`, whatever its weight; such a skill is listed below the ranked ones (evaluate.md 5.2). `rank.make_scores(dimension_scores, config)` builds it from the scoring modules' `DimensionScore`s, with `config.weights`.
+One value per dimension plus `overall`, each in `[0, 1]` or `None` (skipped or failed). `overall` is the weighted mean of the six ([rank.md](rank.md)), with Robustness counted scaled by the with-skill pass rate (`rank.robustness_credit`, evaluate.md 5.1), and `None` if any dimension is `None`, whatever its weight; such a skill is listed below the ranked ones (evaluate.md 5.2). The `robustness` field itself stays the unscaled consistency score, so `overall` is not the plain weighted mean of the six fields shown when the pass rate is below 1. `rank.make_scores(dimension_scores, config, tests)` builds it from the scoring modules' `DimensionScore`s, with `config.weights` and the skill's task runs for the pass rate. Which formula produced it is `ReportMeta.overall_version`.
 
 ### `DimensionStatus`
 
@@ -200,6 +200,7 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
 | `judge_usage` | Tokens and calls the judge(s) used (`input_tokens`, `output_tokens`, `calls`): the task runs' LLM checks, the run's shared judge (Clarity), and any dimension that built its own (`DimensionScore.judge_usage`, the deep safety tier); empty if no model judged |
 | `clarity_rubric_version` | `clarity.RUBRIC_VERSION` for the run; empty in reports written before it was recorded |
+| `overall_version` | `models.OVERALL_VERSION`, the version of the `overall` formula: `1` the plain weighted mean, `2` with Robustness scaled by the with-skill pass rate (MET-60). `config` hashes the weights, not the formula, so the same config hash with different versions gives different `overall` for the same runs. Empty in reports written before it was recorded |
 
 ### `Report`
 

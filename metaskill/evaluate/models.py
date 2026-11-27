@@ -98,6 +98,12 @@ DEFAULT_WEIGHTS: Mapping[Dimension, float] = MappingProxyType({
     Dimension.CONFIG_CLEANLINESS: 1,
 })
 
+# Version of the overall formula (evaluate.md 5.1), recorded as ReportMeta.overall_version.
+# The config hash covers the weights, not the formula, so bump this whenever the formula
+# changes: overall from different versions does not compare. 1: plain weighted mean of the
+# six dimensions. 2: Robustness scaled by the with-skill pass rate (MET-60).
+OVERALL_VERSION = "2"
+
 
 def check_weights(weights: Mapping[Dimension, float]) -> None:
     """Raise ValueError unless every key is a Dimension, every weight is a number >= 0
@@ -290,6 +296,7 @@ class EvaluationConfig:
             scanner_version=scanner_version,
             checks_version=checks_version,
             clarity_rubric_version=clarity_rubric_version,
+            overall_version=OVERALL_VERSION,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -439,6 +446,9 @@ class ReportMeta:
     # Tokens and calls the judge used ({input_tokens, output_tokens, calls}); empty if none.
     judge_usage: dict[str, int] = field(default_factory=dict)
     clarity_rubric_version: str = ""  # clarity.RUBRIC_VERSION; ratings across versions differ
+    # OVERALL_VERSION; empty in reports written before it was recorded. overall from
+    # different versions does not compare, even with the same config hash.
+    overall_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -453,6 +463,7 @@ class ReportMeta:
             "agent_model": self.agent_model,
             "judge_usage": dict(self.judge_usage),
             "clarity_rubric_version": self.clarity_rubric_version,
+            "overall_version": self.overall_version,
         }
 
     @classmethod
@@ -470,6 +481,7 @@ class ReportMeta:
             agent_model=data.get("agent_model", ""),
             judge_usage=dict(data.get("judge_usage") or {}),
             clarity_rubric_version=data.get("clarity_rubric_version", ""),
+            overall_version=data.get("overall_version", ""),
         )
 
 

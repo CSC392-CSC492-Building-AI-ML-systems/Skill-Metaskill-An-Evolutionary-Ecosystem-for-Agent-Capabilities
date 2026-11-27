@@ -550,6 +550,29 @@ def test_a_reduced_robustness_credit_is_noted():
     assert not any("counts toward overall" in n for n in full.notes)
 
 
+def test_the_reviewers_example_lowers_overall_by_0_036():
+    """Pass rate 0.8 with Robustness 0.9: 3 x 0.9 x 0.2 / 15 off overall (evaluate.md 5.1)."""
+    found = {**ALL, Dimension.ROBUSTNESS: 0.9}
+    drop = overall(found) - rank_module.overall(found, DEFAULT_WEIGHTS, pass_rate=0.8)
+    assert drop == pytest.approx(0.036)
+
+
+def test_reports_record_the_overall_formula_version():
+    """The config hash covers the weights, not the formula, so the version is recorded
+    on its own: overall from version 1 and version 2 reports does not compare."""
+    from metaskill.evaluate.models import OVERALL_VERSION, ReportMeta
+    meta = EvaluationConfig().to_meta("t", ["a"], "", "2")
+    assert meta.overall_version == OVERALL_VERSION == "2"
+    assert ReportMeta.from_dict(meta.to_dict()).overall_version == OVERALL_VERSION
+    # A report written before the version was recorded loads with it unknown.
+    old = {k: v for k, v in meta.to_dict().items() if k != "overall_version"}
+    assert ReportMeta.from_dict(old).overall_version == ""
+    text = rank_module.markdown(meta, rank([result("a")]))
+    assert f"- Overall formula version: {OVERALL_VERSION}" in text
+    meta.overall_version = ""
+    assert "- Overall formula version: unknown" in rank_module.markdown(meta, rank([result("a")]))
+
+
 def test_table():
     text = table(rank([result("good", quality=0.9), result("partial", clarity=None)]))
     lines = text.splitlines()
