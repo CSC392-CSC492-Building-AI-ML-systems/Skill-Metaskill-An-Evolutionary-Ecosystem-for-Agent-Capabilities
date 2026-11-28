@@ -12,19 +12,19 @@
           "judge": "deterministic",
           "kind": "exit_code",
           "expected": "0",
-          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"pricing\" in l];assert p, \"no pricing item\";assert not [l for l in p if re.search(r\"ana|ben|chris|dana\", l)], \"invented an owner\";assert [l for l in p if re.search(r\"unresolved|unassigned|tbd|no owner|not assigned|unknown|nobody|none|needs an owner|open\", l)], \"owner not marked missing\"'"
+          "target": "python3 -c '\nimport re\nL = [l for l in open(\"actions.md\").read().lower().splitlines() if l.strip()]\nmissing = r\"unresolved|unassigned|tbd|unknown|nobody|no one|none|not assigned|no owner|needs an owner|not specified|unspecified|missing|open\\b\"\nindent = lambda l: len(l) - len(l.lstrip())\ncells = lambda l: [c.strip(\" *_`\") for c in l.strip().strip(\"|\").split(\"|\")]\ncolumn, found, marked = None, False, False\nfor i, l in enumerate(L):\n    if l.lstrip().startswith(\"|\"):\n        if \"owner\" in cells(l): column = cells(l).index(\"owner\"); continue\n    else: column = None\n    if \"pricing\" not in l: continue\n    found, block = True, [l]\n    for n in L[i + 1:]:\n        if indent(n) > indent(l) or re.match(r\"[\\s*_-]*owner\\b\", n): block.append(n)\n        else: break\n    text = \"\\n\".join(block)\n    assert not re.search(r\"\\b(ana|ben|chris|dana)\\b\", text), \"invented an owner\"\n    owners = re.findall(r\"\\bowner\\b[ \\t*_]*(?::|=|—|–| - | is )[ \\t*_(\\[]*([^|;,\\n]*)\", text)\n    if column is not None and column < len(cells(l)): owners.append(cells(l)[column])\n    for o in owners:\n        assert re.match(r\"\\W*(\" + missing + \")\", o) or o in (\"\", \"-\", \"—\"), \"invented an owner\"\n    if owners or re.search(r\"owner (?:and|&|/) due(?: date)?s?:? (?:are )?(?:unresolved|unassigned|tbd)|unresolved owner|unassigned|no owner|not assigned|nobody|no one|needs an owner\", text): marked = True\nassert found, \"no pricing item\"\nassert marked, \"owner not marked missing\"\n'"
         },
         {
           "judge": "deterministic",
           "kind": "exit_code",
           "expected": "0",
-          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"weekly\" in l];assert all(re.search(r\"may|might|consider|optional|option|right|permitted|can |proposal|proposed|undecided|no decision|not decided|not committed|idea|suggest|open question|if \", l) for l in p), \"a proposal listed as a commitment\"'"
+          "target": "python3 -c '\nimport re\nL = [l for l in open(\"actions.md\").read().lower().splitlines() if l.strip()]\nis_head = lambda l: bool(re.match(r\"\\s*#{1,6}\\s|\\s*\\*\\*[^*|]+\\*\\*:?\\s*$|[^-*+|0-9\\s][^|]*:\\s*$\", l))\nR, head = [], \"\"\nfor l in L:\n    if is_head(l): head = l\n    else: R.append((head, l))\n\nline = r\"may|might|consider|optional|option|right|permitted|can |proposal|proposed|undecided|no decision|not decided|not committed|idea|suggest|open question|if \"\nunder = r\"propos|undecided|not (yet )?(decided|committed)|no decision|open question|\\bideas?\\b|consider|suggest|under discussion\"\nassert all(re.search(line, l) or re.search(under, h) for h, l in R if \"weekly\" in l), \"a proposal listed as a commitment\"\n'"
         },
         {
           "judge": "deterministic",
           "kind": "exit_code",
           "expected": "0",
-          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];assert [l for l in L if \"release notes\" in l and \"ana\" in l and \"2026-11-20\" in l], \"explicit owner and date lost\"'"
+          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];assert [l for l in L if \"release notes\" in l and re.search(r\"\\bana\\b\", l) and \"2026-11-20\" in l], \"explicit owner and date lost\"'"
         }
       ]
     },
@@ -46,13 +46,13 @@
           "judge": "deterministic",
           "kind": "exit_code",
           "expected": "0",
-          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"terminat\" in l];assert p, \"no termination item\";assert all(re.search(r\"may|option|right|permitted|can \", l) for l in p), \"a right listed as an obligation\"'"
+          "target": "python3 -c '\nimport re\nL = [l for l in open(\"actions.md\").read().lower().splitlines() if l.strip()]\nis_head = lambda l: bool(re.match(r\"\\s*#{1,6}\\s|\\s*\\*\\*[^*|]+\\*\\*:?\\s*$|[^-*+|0-9\\s][^|]*:\\s*$\", l))\nR, head = [], \"\"\nfor l in L:\n    if is_head(l): head = l\n    else: R.append((head, l))\n\np = [(h, l) for h, l in R if \"terminat\" in l]\nassert p, \"no termination item\"\nunder = r\"\\brights?\\b|\\boptions?\\b|\\boptional\\b|\\bmay\\b|permitted|permissions?\\b\"\nassert all(re.search(r\"may|option|right|permitted|can \", l) or re.search(under, h) and not re.search(r\"\\b(must|shall)\\b\", l) for h, l in p), \"a right listed as an obligation\"\n'"
         },
         {
           "judge": "deterministic",
           "kind": "exit_code",
           "expected": "0",
-          "target": "python3 -c 'import re;t=open(\"actions.md\").read().lower();L=[l for l in t.splitlines() if l.strip()];p=[l for l in L if \"report\" in l];assert p, \"no report item\";assert all(re.search(r\"should|recommend|expected|not mandatory|not binding|soft\", l) for l in p), \"should hardened into must\"'"
+          "target": "python3 -c '\nimport re\nL = [l for l in open(\"actions.md\").read().lower().splitlines() if l.strip()]\nis_head = lambda l: bool(re.match(r\"\\s*#{1,6}\\s|\\s*\\*\\*[^*|]+\\*\\*:?\\s*$|[^-*+|0-9\\s][^|]*:\\s*$\", l))\nR, head = [], \"\"\nfor l in L:\n    if is_head(l): head = l\n    else: R.append((head, l))\n\np = [(h, l) for h, l in R if \"report\" in l]\nassert p, \"no report item\"\nword = r\"should|recommend|expected|not mandatory|not binding|soft\"\nassert all(re.search(word, l) or re.search(word, h) and not re.search(r\"\\b(must|shall)\\b\", l) for h, l in p), \"should hardened into must\"\n'"
         }
       ]
     }

@@ -11,12 +11,12 @@ other separates decisions from proposals.
 /metaskill rank document-to-action-items, meeting-action-items --tasks examples/skill-comparison/tasks.json --config examples/skill-comparison/eval-config.json
 ```
 
-Start Hermes in the repo root. It makes about 12 to 16 short sessions in Docker (2 tasks, 2 runs
-each, each skill and a baseline), so expect several minutes.
+Start Hermes in the repo root. It makes 16 short sessions in Docker (2 skills × 2 tasks × 2 runs,
+each with the skill and without it), so expect several minutes.
 
 The config sets `"safety_tier": "deep"`, so the safety score also gets the LLM review of each
 skill, which costs extra model calls (and the Cisco add-on's LLM analyzer joins in if it is
-installed). Delete that line for the default static tier, which makes no extra calls.
+installed). Set it to `"static"`, the default tier, to make no extra calls.
 
 ## The tasks
 
@@ -26,6 +26,11 @@ installed). Delete that line for the default static tier, which makes no extra c
 - `services-agreement`: `services-agreement.txt` has a `must`, a `should` and two `may` clauses. The
   checks need the deadline kept, the right to terminate not listed as an obligation, and the
   `should` not hardened into a `must`.
+
+A rule can be shown on the line or by the heading above it: `- Move to weekly releases` passes
+under "Proposals", and a right to terminate passes under "Rights". The missing owner of the pricing
+page has to be in the owner column of a table, after an `owner:` label, or said in words such as
+"unassigned"; `unresolved` elsewhere on the line does not count.
 
 The checks are all deterministic. An LLM checklist is not used here: the judge sees only the agent's
 reply, not the file it wrote, so a checklist about `actions.md` cannot be met and fails every run.
