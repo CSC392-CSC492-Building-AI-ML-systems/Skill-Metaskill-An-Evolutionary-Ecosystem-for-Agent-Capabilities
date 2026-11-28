@@ -1,0 +1,9 @@
+Product sync, 2026-11-16
+Attendees: Ana, Ben, Chris, Dana
+
+- Ana will publish the release notes by 2026-11-20.
+- Someone should update the pricing page, but nobody took it.
+- Dana to send the budget to finance by Friday.
+- We might consider moving to weekly releases. No decision yet.
+- Decision: the beta stays invite-only until December.
+- Chris is blocked on the API keys and needs them before he can start the migration.
