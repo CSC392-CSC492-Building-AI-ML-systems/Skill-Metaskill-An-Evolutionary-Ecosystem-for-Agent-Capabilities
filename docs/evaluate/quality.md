@@ -94,6 +94,8 @@ Invalid plans raise ValueError because the caller must fix its configuration. Ma
 
 No tasks or no records without runner errors produce skipped status with null score and unavailable supporting rates/lift. Records without a task plan produce error status. A valid completed failure remains part of the matrix and counts as a failure, not missing evidence.
 
+The runner records some outcomes as failed runs rather than errors, because the skill can cause them and could otherwise leave itself unscored (runner.md 2.3): a skill that cannot be copied into the sandbox (too large, unreadable, or a file name that cannot be written), output the LLM judge returns no usable reply for, and a with_skill run the judge's provider refuses when it judged the task's baseline. These count against the skill. A provider outage or Docker failing is still a runner error.
+
 The scorer cannot verify model, prompt, tool, permission, or fixture equivalence from TestResult alone: those settings are not all in that model. The caller must establish that both conditions used the same task requirements, configuration, settings, and resources.
 
 ## Calculation

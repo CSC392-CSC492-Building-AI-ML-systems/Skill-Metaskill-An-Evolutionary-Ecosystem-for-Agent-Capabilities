@@ -15,6 +15,7 @@ import importlib
 import json
 import os
 import re
+import time
 import unicodedata
 
 DEFAULT_OUTPUT_DIR = "metaskill-output"
@@ -26,7 +27,8 @@ SKILL_HELP = (
 USAGE = (
     "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
     "generalize <skill> | "
-    f"personalize <skill> --config <file> | skills [text] | quality-pilot\n{SKILL_HELP}"
+    f"personalize <skill> --config <file> | skills [text] | quality-pilot | "
+    f"stop (stops running evaluations; Ctrl-C does not)\n{SKILL_HELP}"
 )
 
 # operation -> (module, entry point)
@@ -264,10 +266,14 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tas
         kwargs = {"output_path": output_path or default}
         if operation == "personalize":
             kwargs["config_path"] = config_path
+    started = time.monotonic()
     try:
         result = entry_point(target, **kwargs)
     except Exception as exc:  # report the type only: messages may echo file contents
-        return _error(operation, f"{operation} failed: {type(exc).__name__}")
+        failed = _error(operation, f"{operation} failed: {type(exc).__name__}")
+        failed["elapsed_seconds"] = round(time.monotonic() - started, 1)
+        return failed
+    elapsed = round(time.monotonic() - started, 1)  # the whole run, task sessions included
 
     response = {
         "operation": operation,
@@ -279,6 +285,7 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tas
     }
     response.update(result or {})
     response["operation"] = operation
+    response["elapsed_seconds"] = elapsed
     return response
 
 
@@ -439,7 +446,32 @@ def _summary(result, paths=()):
     if result.get("unresolved"):
         lines.append(f"Unresolved: {len(result['unresolved'])}")
     lines += _saved(result.get("artifacts", []))
+    if isinstance(result.get("elapsed_seconds"), (int, float)):
+        lines.append(f"Took {_duration(result['elapsed_seconds'])}.")
     return "\n".join(lines)
+
+
+def _duration(seconds):
+    """A run's time as people read it: 42.3s, 3m 07s, 1h 02m 05s."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(int(round(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m {secs:02d}s" if hours else f"{minutes}m {secs:02d}s"
+
+
+def _stop_evaluations():
+    """/metaskill stop: Ctrl-C does not reach an evaluation, which Hermes runs in its gateway
+    (metaskill/evaluate/cancel.py). This stops the ones this Hermes profile is running."""
+    module = "metaskill.evaluate.cancel"
+    if __package__:
+        module = f"{__package__}.{module}"
+    stopped = importlib.import_module(module).stop_all()
+    if not stopped:
+        return "No metaskill evaluation is running."
+    return (f"Stopping {stopped} running evaluation(s): no new task session starts, their "
+            "containers are removed and their Hermes sessions stopped. The command that started "
+            "each one returns once it has stopped, with no report.")
 
 
 def make_command_handler(ctx):
@@ -465,6 +497,10 @@ def make_command_handler(ctx):
             if not request:
                 return f"{USAGE}\n{where}"
             command, _, rest = request.partition(" ")
+            if command == "stop":
+                if rest.strip():
+                    return "Usage: /metaskill stop (stops this profile's running evaluations)"
+                return _stop_evaluations()
             if command == "skills":
                 return _list_skills(rest, cwd or os.getcwd())
             if command == "quality-pilot":

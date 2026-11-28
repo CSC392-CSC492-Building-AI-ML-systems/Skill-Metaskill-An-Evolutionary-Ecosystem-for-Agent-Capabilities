@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +22,7 @@ from metaskill.evaluate.models import (
     TestResult,
     Variant,
 )
-from metaskill.evaluate import efficiency, robustness
+from metaskill.evaluate import efficiency, quality, robustness
 from sandbox_helpers import FakeSandbox, FakeWorkspace
 from metaskill.evaluate.runner import (
     AgentRun,
@@ -125,7 +126,8 @@ def test_every_task_runs_n_times_per_variant(skill, run_dir):
         for variant in (Variant.WITH_SKILL, Variant.BASELINE)
         for n in (1, 2, 3)
     ]
-    assert [c.skill for c in agent.calls[:6]] == ["cleanup"] * 3 + [None] * 3
+    # Sessions may start in any order when they run in parallel; the results above may not.
+    assert sorted(c.skill or "" for c in agent.calls) == [""] * 6 + ["cleanup"] * 6
 
 
 def test_runs_are_judged_and_measured(skill, run_dir):
@@ -222,12 +224,16 @@ def test_a_task_that_lost_every_run_is_a_robustness_error(skill, run_dir):
 
 
 def test_one_lost_run_is_a_robustness_error(skill, run_dir):
-    calls = []
+    with_skill, lock = [], threading.Lock()
 
     def fails_once(prompt, skill, workdir):
-        calls.append(skill)
-        if skill is not None and len(calls) == 2:  # the second with_skill run
-            raise JudgeError("docker went away")
+        # The second with_skill session to start, whatever order parallel runs start in.
+        if skill is not None:
+            with lock:
+                with_skill.append(skill)
+                second = len(with_skill) == 2
+            if second:
+                raise JudgeError("docker went away")
         return writes_report_with_skill(prompt, skill, workdir)
 
     result = run_tasks(skill, [task()], FakeAgent(fails_once), config=config(runs=3),
@@ -303,11 +309,11 @@ def test_full_log_is_written_and_output_points_to_it(skill, run_dir):
 
     result = run_tasks(skill, [task()], FakeAgent(chatty),
                        config=config(runs=1, output_max_chars=10), run_dir=run_dir)
-    log = "cleanup/logs/write-report-with_skill-r1.txt"
+    log = "skill-01/logs/write-report-with_skill-r1.txt"
     assert result.tests[0].output == f"{'x' * 10}... (full log: {log})"
     text = (run_dir / log).read_text(encoding="utf-8")
     assert "x" * 50 in text and "tool: ls" in text and "Write report.txt" in text
-    assert (run_dir / "cleanup/logs/write-report-baseline-r1.txt").exists()
+    assert (run_dir / "skill-01/logs/write-report-baseline-r1.txt").exists()
 
 
 def test_output_that_cannot_be_encoded_does_not_stop_the_runs(skill, run_dir):
@@ -317,7 +323,7 @@ def test_output_that_cannot_be_encoded_does_not_stop_the_runs(skill, run_dir):
     result = run_tasks(skill, [task(checks=[output_check("half")])], FakeAgent(cut_emoji),
                        config=config(runs=1), run_dir=run_dir)
     assert [t.passed for t in result.tests] == [True, True] and result.errors == []
-    log = run_dir / "cleanup/logs/write-report-with_skill-r1.txt"
+    log = run_dir / "skill-01/logs/write-report-with_skill-r1.txt"
     assert r"half \ud83d an emoji" in log.read_text(encoding="utf-8")
 
 
@@ -377,11 +383,28 @@ def test_a_run_that_cannot_copy_its_fixtures_is_an_error_and_the_rest_still_run(
     assert result.errors[0].startswith("broken with_skill r1: FileNotFoundError")
 
 
-@pytest.mark.parametrize("name", ["../escape", "/abs", "C:\\abs", "", ".hidden", 123])
-def test_a_skill_name_that_is_not_a_folder_name_is_refused(skill, run_dir, name):
+@pytest.mark.parametrize("name", [
+    "../escape", "/abs", "C:\\abs", "", ".hidden", "NUL", "ranked-evaluation.json", "foo.", 123])
+def test_the_skills_name_is_never_the_log_folder(skill, run_dir, name):
     skill.name = name
-    with pytest.raises(ValueError, match="skill name"):
-        run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir)
+    result = run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir)
+    assert len(result.tests) == 2 and result.errors == []
+    assert [p.name for p in run_dir.iterdir()] == ["skill-01"]
+
+
+def test_calls_without_a_log_folder_never_share_one(skill, run_dir):
+    (run_dir / "skill-02").mkdir(parents=True)  # taken by something else
+    first, second = (run_tasks(skill, [task()], FakeAgent(), config=config(runs=1),
+                               run_dir=run_dir) for _ in range(2))
+    assert "(full log: skill-01/logs/" in first.tests[0].output
+    assert "(full log: skill-03/logs/" in second.tests[0].output
+
+
+@pytest.mark.parametrize("folder", ["../escape", "/abs", "C:\\abs", "", ".hidden", "a/b", 123])
+def test_a_log_folder_that_is_not_a_plain_name_is_refused(skill, run_dir, folder):
+    with pytest.raises(ValueError, match="log folder"):
+        run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
+                  log_folder=folder)
     assert not run_dir.exists()
 
 
@@ -392,8 +415,9 @@ def test_exit_code_checks_run_in_the_runs_workspace(skill, run_dir):
     with_skill, baseline = result.tests
     assert with_skill.passed and not baseline.passed
     assert baseline.reason == "`python test.py` exited 1, expected 0: AssertionError"
-    # Run in the workspace the agent ran in, after the agent, before it is closed.
-    assert sandbox.commands == [("python test.py", ["report.txt"]), ("python test.py", [])]
+    # Run in the workspace the agent ran in, after the agent, before it is closed. Runs can
+    # overlap (max_parallel_runs), so the commands are compared as a set of what each saw.
+    assert sorted(sandbox.commands) == [("python test.py", []), ("python test.py", ["report.txt"])]
     assert result.errors == []
 
 
@@ -503,7 +527,9 @@ def test_with_skill_runs_get_the_skill_in_skill_dir_and_baselines_none(skill, ru
     sandbox = FakeSandbox()
     run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
               sandbox=sandbox)
-    with_skill, baseline = sandbox.opened
+    # Both runs start at once (max_parallel_runs), so either may open its workspace first.
+    [with_skill] = [w for w in sandbox.opened if w.skill]
+    [baseline] = [w for w in sandbox.opened if w is not with_skill]
     skill_md = (skill.path / "SKILL.md").read_bytes()
     assert with_skill.skill == {
         "/tmp/skill": {"SKILL.md": skill_md, "notes.md": b"\x00binary"},
@@ -563,10 +589,11 @@ def test_links_in_the_skill_are_not_copied(skill, run_dir, tmp_path, make_link):
     sandbox = FakeSandbox()
     run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
               sandbox=sandbox)
-    assert sandbox.opened[0].skill == {
+    [with_skill] = [w for w in sandbox.opened if w.skill]  # runs open in either order
+    assert with_skill.skill == {
         "/tmp/skill": {"SKILL.md": (skill.path / "SKILL.md").read_bytes()}}
     # The log says what was left out, so a run that needed it is not a mystery.
-    logs = run_dir / "cleanup" / "logs"
+    logs = run_dir / "skill-01" / "logs"
     assert "skill files left out (links): notes.md\n" in (
         logs / "write-report-with_skill-r1.txt").read_text(encoding="utf-8")
     assert "left out" not in (logs / "write-report-baseline-r1.txt").read_text(
@@ -722,7 +749,130 @@ def test_a_skill_too_large_for_the_sandbox_is_a_failed_run(skill, run_dir):
     # The agent was not started for it, and the baseline ran as usual.
     assert [c.skill for c in agent.calls] == [None]
     assert all(w.closed for w in sandbox.opened)
-    assert (run_dir / "cleanup" / "logs" / "write-report-with_skill-r1.txt").is_file()
+    assert (run_dir / "skill-01" / "logs" / "write-report-with_skill-r1.txt").is_file()
+
+
+# --- Runs that would leave the skill unscored --------------------------------
+
+
+class ScriptedLlm:
+    """Judges a run by its output: `behaviour(material)` gives a reply, or raises."""
+
+    def __init__(self, behaviour):
+        self.behaviour = behaviour
+        self.materials = []
+
+    def complete_structured(self, **kwargs):
+        material = kwargs["input"][0]["text"]
+        self.materials.append(material)
+        return SimpleNamespace(provider="fake", model="judge-model",
+                               text=self.behaviour(material), parsed=None,
+                               content_type="text",
+                               usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+
+
+class Refusal(Exception):
+    status_code = 400
+
+
+class Outage(Exception):
+    status_code = 503
+
+
+MET = json.dumps({"items": [{"item": 1, "met": True, "reason": "r",
+                             "quote": "wrote the report to report.txt"}]})
+SKILL_OUTPUT = "wrote the report"  # only the with_skill output holds it
+
+
+def on_skill_output(action, otherwise=MET):
+    def behaviour(material):
+        if SKILL_OUTPUT not in material:
+            return otherwise
+        if isinstance(action, Exception):
+            raise action
+        return action
+    return behaviour
+
+
+def judged_runs(skill, run_dir, behaviour, act=writes_report_with_skill, runs=2):
+    return run_tasks(skill, [task(checks=[LLM_CHECK])], FakeAgent(act),
+                     config=config(runs=runs), run_dir=run_dir,
+                     ctx=SimpleNamespace(llm=ScriptedLlm(behaviour)))
+
+
+def quality_of(result, runs=2):
+    return quality.assess_runs(config(runs=runs), result).dimension_score
+
+
+@pytest.mark.parametrize("action, reason", [
+    ("I would rather not answer in JSON.", "not a JSON object"),
+    (Refusal("content_filter"), "refused to judge"),
+])
+def test_output_that_stops_the_judge_fails_the_run_and_quality_is_scored(
+        skill, run_dir, action, reason):
+    result = judged_runs(skill, run_dir, on_skill_output(action))
+    assert result.errors == []
+    with_skill = [t for t in result.tests if t.variant is Variant.WITH_SKILL]
+    assert len(with_skill) == 2
+    assert all(not t.passed and t.score == 0.0 and reason in t.reason for t in with_skill)
+    assert quality_of(result).status is Status.OK and quality_of(result).value is not None
+
+
+def test_an_unusable_reply_fails_a_baseline_run_the_same_way(skill, run_dir):
+    result = judged_runs(skill, run_dir, lambda material: "prose")
+    assert result.errors == []
+    assert [t.passed for t in result.tests] == [False] * 4
+
+
+@pytest.mark.parametrize("behaviour", [
+    # Refused whatever the output, so the check or the provider, not the skill.
+    lambda material: (_ for _ in ()).throw(Refusal("bad request")),
+    # Refused for the baseline only.
+    on_skill_output(MET, otherwise=None),
+])
+def test_a_refusal_the_skill_did_not_cause_is_an_error(skill, run_dir, behaviour):
+    def refuse_baseline(material):
+        reply = behaviour(material)
+        if reply is None:
+            raise Refusal("bad request")
+        return reply
+
+    result = judged_runs(skill, run_dir, refuse_baseline)
+    assert all("JudgeRefused" in e for e in result.errors)
+    assert any("baseline r1" in e for e in result.errors)
+    assert all(t.passed for t in result.tests)
+    assert quality_of(result).value is None
+
+
+def test_a_refusal_with_no_judged_baseline_is_an_error(skill, run_dir):
+    def act(prompt, skill, workdir):
+        if skill is None:
+            raise RuntimeError("no session")  # a failed run, which no judge saw
+        return writes_report_with_skill(prompt, skill, workdir)
+
+    result = judged_runs(skill, run_dir, on_skill_output(Refusal("bad request")), act=act)
+    assert [t.variant for t in result.tests] == [Variant.BASELINE] * 2
+    assert [e.split(":")[0] for e in result.errors] == [
+        "write-report with_skill r1", "write-report with_skill r2"]
+    assert result.transcripts == {}
+
+
+def test_a_provider_outage_is_still_an_error(skill, run_dir):
+    result = judged_runs(skill, run_dir, on_skill_output(Outage("unavailable")))
+    assert [t.variant for t in result.tests] == [Variant.BASELINE] * 2
+    assert all("JudgeCallFailed" in e for e in result.errors) and len(result.errors) == 2
+
+
+def test_a_lone_surrogate_in_the_output_is_not_sent_to_the_judge(skill, run_dir):
+    def act(prompt, skill, workdir):
+        return AgentRun(output="wrote the report \ud800to report.txt")
+
+    llm = ScriptedLlm(lambda material: MET)
+    result = run_tasks(skill, [task(checks=[LLM_CHECK])], FakeAgent(act),
+                       config=config(runs=1), run_dir=run_dir, ctx=SimpleNamespace(llm=llm))
+    assert result.errors == [] and all(t.passed for t in result.tests)
+    for material in llm.materials:
+        material.encode("utf-8")
 
 
 def test_planned_task_ids_include_tasks_whose_runs_all_failed_to_be_made(skill, run_dir):

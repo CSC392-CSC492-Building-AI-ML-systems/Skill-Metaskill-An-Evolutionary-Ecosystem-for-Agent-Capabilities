@@ -18,6 +18,7 @@ on this machine: it needs the user's provider and credentials, which never go in
 
 from __future__ import annotations
 
+import errno
 import io
 import math
 import os
@@ -31,7 +32,8 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -76,6 +78,10 @@ KILLED = 137  # how `timeout -s KILL` exits, as does a command that was killed b
 TIMEOUT_NOTICE = b"timeout: sending signal KILL to command"
 # How `tar -x` says its folder is full: a write that failed, or one cut short.
 TAR_FULL = re.compile(r"No space left|Wrote only \d+ of \d+ bytes")
+COPY_REFUSED = re.compile(r"^(tar|mkdir): ", re.MULTILINE)
+# errno values a file or its name can cause when read.
+FILE_ERRNOS = {errno.EACCES, errno.EPERM, errno.ENAMETOOLONG, errno.ELOOP, errno.EILSEQ,
+               errno.EINVAL}
 
 
 @dataclass
@@ -102,8 +108,8 @@ class Workspace(Protocol):
 
     def put(self, paths: list[Path], folder: str) -> None:
         """Copy files and folders of this machine into `folder` in the workspace, by
-        name. Raises JudgeError if they do not fit, or RunFailed if what does not fit is
-        the skill."""
+        name. Files outside root are the skill's: RunFailed if they cannot be read, do
+        not fit or cannot be written. Otherwise JudgeError."""
         ...
 
     def export(self, dest: Path) -> None:
@@ -119,7 +125,7 @@ class Workspace(Protocol):
 
 class RunFailed(JudgeError):
     """The run broke its own workspace: it stopped the container, left a folder that
-    cannot be copied out, or came with a skill too large to copy in. Unlike other
+    cannot be copied out, or came with a skill that cannot be copied in. Unlike other
     JudgeErrors this is the run's doing, so the run fails rather than being left out, or
     a skill could leave itself unscored."""
 
@@ -170,6 +176,7 @@ class DockerSandbox:
         self.disk, self.files = disk, files  # size and file count of the run's folder
         # The archive holds the folder plus a header per file, so twice it is room enough.
         self.export_limit = max(EXPORT_LIMIT, 2 * size_bytes(disk))
+        self._capacity: int | None = None  # capacity(), once Docker has said
 
     @property
     def pull_command(self) -> str:
@@ -208,6 +215,26 @@ class DockerSandbox:
             return problem[1]
         self.sweep()
         return ""
+
+    def capacity(self) -> int | None:
+        """How many workspaces Docker can hold at once at this sandbox's limits: its CPUs
+        divided by `cpus`, and its memory divided by `memory`, whichever is fewer, and at
+        least 1. None if Docker does not say. The runner runs no more sessions at once
+        (runner.md 2.7), so parallel runs share the machine without starving each other.
+        A known answer is kept: the runner asks once per skill, and `docker info` takes a
+        second or more on Docker Desktop."""
+        if self._capacity is not None:
+            return self._capacity
+        try:
+            result = self._docker("info", "--format", "{{.NCPU}} {{.MemTotal}}")
+            cpus, memory = (int(v) for v in result.stdout.split())
+            per_cpu = float(self.cpus)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        if result.returncode != 0 or cpus < 1 or memory < 1 or per_cpu <= 0:
+            return None
+        self._capacity = max(1, min(int(cpus // per_cpu), memory // size_bytes(self.memory)))
+        return self._capacity
 
     def sweep(self) -> None:
         """Remove containers past ORPHAN_AGE: what a crash, or `docker rm` failing, left
@@ -349,7 +376,8 @@ class DockerWorkspace:
         # they are the skill's to choose and it goes into the report.
         in_root = PurePosixPath(folder).is_relative_to(WORKDIR)
         limit = size_bytes(self.sandbox.disk if in_root else TMP)
-        size = _size(paths)
+        with _reading(skill=not in_root):
+            size = _size(paths)
         if size > limit:
             if not in_root:
                 raise RunFailed(f"the skill is too large for the sandbox: {size} bytes in "
@@ -357,7 +385,8 @@ class DockerWorkspace:
             raise JudgeError(f"could not copy {names} into the sandbox: {size} bytes, over "
                              f"the {limit} bytes {folder} can hold")
         with tempfile.TemporaryFile() as spool:  # on disk: not all of it in memory
-            _archive(paths, spool)
+            with _reading(skill=not in_root):
+                _archive(paths, spool)
             spool.seek(0)
             result = self.run_command(
                 f"mkdir -p {shlex.quote(folder)} && tar -x -f - -C {shlex.quote(folder)}",
@@ -367,6 +396,12 @@ class DockerWorkspace:
             if not in_root and TAR_FULL.search(result.stderr):
                 raise RunFailed("the skill is too large for the sandbox: its files are "
                                 f"over the {limit} bytes it may use")
+            # tar or mkdir ran and refused a file, e.g. a name too long for the
+            # container. Anything else, e.g. a timeout, is not known to be the skill's.
+            if (not in_root and result.exit_code in (1, 2)
+                    and COPY_REFUSED.search(result.stderr)):
+                raise RunFailed("the skill could not be copied into the sandbox: a file "
+                                "or folder of it could not be written there")
             raise JudgeError(f"could not copy {names} into the sandbox: "
                              f"{result.stderr.strip()[-200:]}")
 
@@ -470,6 +505,21 @@ def _feed(stdin: IO[bytes], data: bytes) -> None:
             stdin.write(data)
     except (BrokenPipeError, OSError):
         pass  # the command ended without reading it all; its exit code says so
+
+
+@contextmanager
+def _reading(*, skill: bool) -> Iterator[None]:
+    """Around reading files to copy in. For a skill's files, an error its files can cause
+    (unreadable, a name that cannot be encoded) is RunFailed. Others, such as a full
+    disk, and any error with fixtures, are left as they are. Names are left out of the
+    message, as they are the skill's to choose."""
+    try:
+        yield
+    except (OSError, UnicodeError) as e:
+        if not skill or (isinstance(e, OSError) and e.errno not in FILE_ERRNOS):
+            raise
+        raise RunFailed("the skill could not be copied into the sandbox: a file of it "
+                        f"could not be read ({type(e).__name__})") from e
 
 
 def _archive(paths: list[Path], file: IO[bytes]) -> None:

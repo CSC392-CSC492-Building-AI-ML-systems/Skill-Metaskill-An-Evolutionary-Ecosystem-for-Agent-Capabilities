@@ -415,6 +415,51 @@ def test_a_job_is_closed_after_a_session_that_finished(monkeypatch):
     assert job.closed and not job.killed
 
 
+def test_a_timed_out_child_is_reaped_even_if_something_holds_its_stderr(monkeypatch):
+    # No job, and taskkill failed: a process the child started may still hold its stderr
+    # pipe, and a plain communicate() would wait for it forever.
+    monkeypatch.setattr(hermes_agent, "_windows", lambda: True)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(hermes_agent, "_contain", lambda proc: None)
+    monkeypatch.setattr(hermes_agent.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no taskkill")))
+
+    class PipeHeld(FakeProc):
+        def communicate(self, timeout=None):
+            assert timeout is not None, "an unbounded wait on the pipe"
+            raise subprocess.TimeoutExpired("child", timeout)
+
+        def wait(self, timeout=None):
+            self.waited = timeout
+            return -9
+    monkeypatch.setattr(hermes_agent.subprocess, "Popen", PipeHeld)
+    with pytest.raises(TimeoutError):
+        hermes_agent._run_child(["child"], 0.1)
+    assert FakeProc.last.killed and FakeProc.last.waited is not None
+
+
+@pytest.mark.parametrize("failure", ["contain raises", "winjob will not import"])
+def test_a_suspended_child_is_killed_when_containing_it_fails_unexpectedly(monkeypatch, failure):
+    # Not an OSError (a ctypes error, an import error): before, it left the child suspended
+    # forever, neither resumed nor killed.
+    import metaskill.evaluate as package
+    if failure == "contain raises":
+        fake = SimpleNamespace(contain=lambda pid: 1 / 0, resume=lambda pid: None)
+        monkeypatch.setitem(sys.modules, "metaskill.evaluate.winjob", fake)
+        monkeypatch.setattr(package, "winjob", fake, raising=False)
+    else:
+        monkeypatch.setitem(sys.modules, "metaskill.evaluate.winjob", None)
+        monkeypatch.delattr(package, "winjob", raising=False)
+
+    class Suspended(FakeProc):
+        def communicate(self, timeout=None):
+            return None, ""
+    proc = Suspended(["child"])
+    with pytest.raises(hermes_agent.HermesAgentUnavailable, match="could not be contained"):
+        hermes_agent._contain(proc)
+    assert proc.killed
+
+
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Objects")
 # The fake child runs on this interpreter. A Microsoft Store Python's is started by app
 # activation, outside the caller's job, so these show nothing there (Hermes' own is not).

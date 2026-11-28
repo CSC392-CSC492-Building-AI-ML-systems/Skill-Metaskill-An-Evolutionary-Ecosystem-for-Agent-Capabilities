@@ -156,8 +156,9 @@ def test_a_dimension_module_is_picked_up(tmp_path, out, placeholder):
     placeholder(PLACEHOLDER, "from metaskill.evaluate.models import *\n"
                              "def score(skill, config, llm=None, **_):\n"
                              f"    return DimensionScore(Dimension.{PLACEHOLDER.name}, 0.75,"
-                             " reason=str(llm))\n")
-    ctx = SimpleNamespace(llm="the-llm")
+                             " reason=llm.complete_structured())\n")
+    # Through the call's rate-limit pause (BackedOffLlm), so a call is what reaches it.
+    ctx = SimpleNamespace(llm=SimpleNamespace(complete_structured=lambda **_: "the-llm"))
     skill = load(evaluate_skill(make_skill(tmp_path, "a"), output_path=out, ctx=ctx)).skills[0]
     assert getattr(skill.scores, PLACEHOLDER.value) == 0.75
     assert skill.dimensions[PLACEHOLDER].reason == "the-llm"  # ctx.llm reached it
