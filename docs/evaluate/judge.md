@@ -199,7 +199,7 @@ The reply is shaped by the material, so the scan is bounded. A scan only tries a
 The judge checks each reply itself (`schema_problems`: type, required fields, enums, items; extra fields are ignored). A reply that does not fit, or has no JSON object in it, is asked for again with the problems listed, up to `EvaluationConfig.judge_retries` times (default 1, so at most two calls). After the last try:
 
 - A JSON object is returned even if it still does not fit. The methods above drop what they cannot use (`review` lists it in `dropped`).
-- Anything else raises `JudgeError`.
+- Anything else raises `JudgeNoVerdict` (a `JudgeError`).
 
 A `ValueError` from `complete_structured` is not retried. Hermes raises it for its own argument checks, before any request is sent, so a retry would repeat the same call. It becomes `JudgeError("judge request was invalid: ...")` at once.
 
@@ -211,7 +211,9 @@ Every call, retries included, counts in `usage`.
 |---|---|---|
 | `JudgeUnavailable` | The judge cannot run. Causes: no `ctx.llm`, no provider or credentials (Hermes' `AuxiliaryClientUnavailable`), a provider/model override that Hermes refused, `make_judge("llm")` without `ctx`, or an `exit_code` check with no sandbox (`run_command`) | Mark the dimension `skipped` (score `null`) |
 | `JudgeError` | The judge ran, but its answer could not be used (no JSON object after every retry), Hermes rejected the request's arguments, or a deterministic check is malformed | Mark the dimension `error` (score `null`) |
-| `JudgeCallFailed` (a `JudgeError`) | The provider did not answer: a rate limit, an outage, a timeout. Not retried by the judge | Mark the dimension `error`, and say the provider was the cause. `evaluate` sets `detail` to `failed: the judge model's provider did not answer` and adds one warning per dimension saying how many skills it hit |
+| `JudgeCallFailed` (a `JudgeError`) | The provider did not answer: a rate limit, an outage, a timeout. Not retried by the judge itself; given a `backoff` (the runner, and `evaluate` for every judge of its call), a rate-limited call is waited out and made again, up to 4 tries | Mark the dimension `error`, and say the provider was the cause. `evaluate` sets `detail` to `failed: the judge model's provider did not answer` and adds one warning per dimension saying how many skills it hit |
+| `JudgeRefused` (a `JudgeCallFailed`) | The provider rejected the request: HTTP 400, 413 or 422, or content filter wording where there is no status | As `JudgeCallFailed`. In a task run, the runner may count it as a failed run (runner.md 2.3) |
+| `JudgeNoVerdict` (a `JudgeError`) | No JSON object after every retry | Mark the dimension `error`. In a task run, the runner counts it as a failed run (runner.md 2.3) |
 | `ValueError` | Programming error, e.g. a check given to the wrong judge type, or an empty checklist | Fix the caller |
 
 `JudgeUnavailable` from a missing provider only shows up once a call is made. Catch it around `rate`, `review`, `check` and `judge`, not only around construction.
