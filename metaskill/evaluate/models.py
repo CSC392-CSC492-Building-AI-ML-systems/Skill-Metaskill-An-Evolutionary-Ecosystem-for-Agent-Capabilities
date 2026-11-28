@@ -167,7 +167,9 @@ class Skill:
             f.relative_to(path)
             for f in path.rglob("*")
             if f.is_file()
-            and f.name != "SKILL.md"
+            # Only the skill's own SKILL.md, which is `body`: one in a subfolder is a
+            # bundled file like any other, copied to the agent and so checked.
+            and f.relative_to(path) != Path("SKILL.md")
             and not any(p.startswith(".") or p in skip for p in f.relative_to(path).parts)
         )
         return Skill(

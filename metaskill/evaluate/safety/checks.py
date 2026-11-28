@@ -59,8 +59,8 @@ MAX_COMMANDS_PER_LINE = 200
 # Characters the Python-level parsers (shell arguments, call arguments, print arguments)
 # may read per skill. Real skills read a few hundred; past this, the rest is not parsed
 # and the skill gets a CRITICAL scan-limit finding.
-MAX_KEY_CHARS = 200  # how far into a frontmatter line its key's colon is looked for
 MAX_PARSED_CHARS = 1_000_000
+MAX_KEY_CHARS = 200  # how far into a frontmatter line its key's colon is looked for
 
 DESTRUCTIVE = "destructive-unconfirmed"
 CREDENTIALS = "credential-logging"
@@ -653,6 +653,12 @@ def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], 
     return files, unchecked
 
 
+# A `#!` line, also after a byte-order mark or blank space: the system then ignores it,
+# but bash still runs such a file as a shell script.
+_SHEBANG = re.compile(r"\ufeff?\s*#!")
+_SHEBANG_BYTES = 256  # how far into a file it is looked for
+
+
 def _has_shebang(path: Path) -> bool:
     """Whether a file with another suffix, or none, is a script all the same: it starts
     with `#!`, so it can be run by its name. Links are not read."""
@@ -660,7 +666,8 @@ def _has_shebang(path: Path) -> bool:
         if path.is_symlink() or not path.is_file():
             return False
         with path.open("rb") as stream:
-            return stream.read(2) == b"#!"
+            start = stream.read(_SHEBANG_BYTES).decode("utf-8", errors="replace")
+            return _SHEBANG.match(start) is not None
     except OSError:
         return False
 
@@ -737,7 +744,10 @@ def _key_lines(block: str) -> dict[str, int]:
     for lineno, line in enumerate(block.split("\n"), 1):
         at = line.find(":", 0, MAX_KEY_CHARS)
         while at != -1:
-            found.setdefault(line[:at].rstrip(" \t"), lineno)
+            key = line[:at].rstrip(" \t")
+            if len(key) > 1 and key[0] == key[-1] and key[0] in "\"'":
+                key = key[1:-1]  # a quoted key, as it is parsed
+            found.setdefault(key, lineno)
             at = line.find(":", at + 1, MAX_KEY_CHARS)
     return found
 
@@ -808,7 +818,7 @@ _WARNING_BLOCK = re.compile(
 
 def _units(path: str, text: str) -> list[_Unit]:
     suffix = Path(path).suffix.lower()
-    if suffix in SCRIPT_SUFFIXES or (suffix not in MARKDOWN_SUFFIXES and text.startswith("#!")):
+    if suffix in SCRIPT_SUFFIXES or (suffix not in MARKDOWN_SUFFIXES and _SHEBANG.match(text)):
         return [_Unit(path, "script", list(enumerate(text.splitlines(), 1)))]
 
     units: list[_Unit] = []
