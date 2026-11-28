@@ -391,6 +391,8 @@ def markdown(meta: ReportMeta, ranking: Ranking) -> str:
         f"- Overall formula version: {_md(meta.overall_version) or 'unknown'}",
         "", table(ranking),
     ]
+    if meta.plan_id:
+        lines.insert(3, f"- Plan: {_md(meta.plan_id)}")
     for entry in ranking.entries:
         lines += _details(entry, meta.runs_per_task)
     return "\n".join(lines) + "\n"

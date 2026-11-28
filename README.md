@@ -36,7 +36,13 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later, and enough memory for 
 /metaskill rank <skill>, <skill>
 /metaskill skills [text]
 /metaskill stop
+/metaskill configure <skill>, <skill>
+/metaskill approve <plan>
+/metaskill plans
+/metaskill rank <plan>
 ```
+
+**Evaluation plans** save writing a task file by hand. `configure` has a model draft tasks for the skills, checks them in the sandbox and shows every check command; after you review the files, `approve` them, then `rank <plan>` (or `evaluate <plan>` for one skill) runs the same tasks every time ([docs/evaluate/plans.md](docs/evaluate/plans.md)).
 
 `/metaskill stop` stops a running `evaluate` or `rank`: Ctrl-C does not, because Hermes runs the command in its gateway, which goes on after the CLI lets go. Run it from any session of the same profile on that gateway; the stopped command then returns with no report. In the TUI that can be the same session. The classic CLI waits for the command, so press Ctrl-C first to stop waiting, then send `/metaskill stop` there or from another session. Without a gateway, the classic CLI runs the command in its own process, where no other session can reach it; there, Ctrl-C stops it.
 
@@ -44,7 +50,7 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later, and enough memory for 
 
 `/metaskill skills` shows the folder relative paths start from, which is your session's, and lists the skills under it and the installed ones; `/metaskill skills <text>` narrows the list. A name that is not found gets suggestions. Hermes does not autocomplete a plugin command's arguments, so this listing stands in for that.
 
-The command runs these itself and prints the result when it finishes. Anything else after `/metaskill` goes to the agent, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply.
+The command runs these itself and prints the result when it finishes. A single word that is no operation gets the usage, or, if it is a plan, the command that runs it. Anything longer goes to the agent, which Hermes only allows once you grant it in `config.yaml`. A classic CLI session (`hermes chat`) does not show the agent's reply.
 
 ```yaml
 plugins:

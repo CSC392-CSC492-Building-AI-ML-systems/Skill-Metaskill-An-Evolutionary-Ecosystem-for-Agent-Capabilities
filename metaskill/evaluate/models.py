@@ -446,12 +446,15 @@ class ReportMeta:
     # Tokens and calls the judge used ({input_tokens, output_tokens, calls}); empty if none.
     judge_usage: dict[str, int] = field(default_factory=dict)
     clarity_rubric_version: str = ""  # clarity.RUBRIC_VERSION; ratings across versions differ
+    # The evaluation plan the run used (plans.py); empty, and left out of to_dict(), without one.
+    plan_id: str = ""
     # OVERALL_VERSION; empty in reports written before it was recorded. overall from
     # different versions does not compare, even with the same config hash.
     overall_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            **({"plan_id": self.plan_id} if self.plan_id else {}),
             "timestamp": self.timestamp,
             "skills": self.skills,
             "config": self.config,
@@ -481,6 +484,7 @@ class ReportMeta:
             agent_model=data.get("agent_model", ""),
             judge_usage=dict(data.get("judge_usage") or {}),
             clarity_rubric_version=data.get("clarity_rubric_version", ""),
+            plan_id=data.get("plan_id", ""),
             overall_version=data.get("overall_version", ""),
         )
 
