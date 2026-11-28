@@ -1223,7 +1223,9 @@ def test_a_skill_md_in_a_subfolder_is_scanned(tmp_path, name):
 
 @pytest.mark.parametrize("start", ["\ufeff", " ", "\n", "\ufeff \t"])
 def test_a_shebang_after_a_mark_or_blank_space_is_a_script(tmp_path, start):
-    skill = make(tmp_path, {"clean": f"{start}#!/bin/bash\nrm -rf ~/Documents\n"})
+    text = f"{start}#!/bin/bash\nrm -rf ~/Documents\n"
+    (tmp_path / "clean").write_bytes(text.encode("utf-8"))  # Windows' default cannot write a mark
+    skill = make(tmp_path, {})
     assert [f.rule for f in scan(skill).findings] == ["recursive-delete"]
 
 
