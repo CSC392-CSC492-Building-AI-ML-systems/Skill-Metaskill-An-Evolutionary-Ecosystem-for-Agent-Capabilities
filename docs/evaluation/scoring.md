@@ -313,7 +313,7 @@ Overall = (4S + 3Q + 3R' + 2C + 2E + K) / 15
 R'      = R × with-skill pass rate
 ```
 
-Robustness measures consistency, not correctness, so in Overall it counts scaled by the with-skill pass rate (MET-60). Unscaled, a skill that fails every run the same way (Robustness 1) would gain as much from Robustness as it loses on Quality, and could rank above a skill that works most of the time. The reported Robustness score is unchanged.
+Robustness measures consistency, not correctness, so in Overall it counts scaled by the with-skill pass rate (MET-60). Unscaled, a skill that fails every run the same way (Robustness 1) would gain as much from Robustness as it loses on Quality, and could rank above a skill that works most of the time. The reported Robustness score is unchanged. **[PROPOSED]** The scaling counts the pass rate in both Quality and Robustness, so it is for team review ([evaluate.md](../evaluate.md), open question 5). Reports record the formula as `overall_version` (`2`); overall from reports without it, or with `1`, does not compare.
 
 The weights are relative: they are divided by their sum, so only their ratios matter. They live in `EvaluationConfig.weights` and are part of the config hash, so a report records which weights produced it. Always display the six component scores, pass rate, lift, and dimension statuses.
 

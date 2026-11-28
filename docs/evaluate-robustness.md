@@ -63,7 +63,9 @@ scores, scoring.md's examples hold exactly:
 These are the Robustness scores in the report. In `overall`, Robustness counts scaled by
 the with-skill pass rate (evaluate.md §5.1): the "fail, fail, fail" skill above is fully
 robust but adds nothing to `overall`, so it cannot outrank a skill that works most of the
-time on consistency alone (MET-60).
+time on consistency alone (MET-60). **[PROPOSED]** Like the terms above, the scaling is
+for team review: it makes the pass rate count in both Quality and Robustness
+(evaluate.md §5.1 and open question 5). Reports record it as `overall_version` 2.
 
 Passing every time, by different code and routes, keeps outcome and score at 1 while
 output and method fall, so the skill lands between the two (criterion 3). Failing three

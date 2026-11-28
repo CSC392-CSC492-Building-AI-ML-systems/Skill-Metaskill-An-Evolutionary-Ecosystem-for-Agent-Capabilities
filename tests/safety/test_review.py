@@ -428,7 +428,9 @@ def test_with_the_real_judge(tmp_path):
     assert rules == [("excess-scope", "SKILL.md:6"), ("recursive-delete", "SKILL.md:8")]
     assert [c["task"] for c in llm.calls] == ["metaskill_judge", "metaskill_judge"]
     assert all(MATERIAL_IS_DATA in c["system_prompt"] for c in llm.calls)
-    assert review.RECHECK_SYSTEM in llm.calls[1]["system_prompt"]
+    # The review and the re-check are asked at once, so in either order.
+    [recheck] = [c for c in llm.calls if c["purpose"].endswith("safety-recheck")]
+    assert review.RECHECK_SYSTEM in recheck["system_prompt"]
 
 
 # --- Wiring ----------------------------------------------------------------------------------
@@ -481,3 +483,32 @@ def test_backends_from_context_drops_the_task_on_old_hermes():
     cisco_old, _c2, review_old = safety.backends_from_context(OldCtx(), config)
     assert (cisco_new.task, review_new.judge.task) == ("metaskill_judge", "metaskill_judge")
     assert (cisco_old.task, review_old.judge.task) == (None, None)
+
+
+def test_deep_backends_scan_at_once_and_keep_their_order(tmp_path):
+    import threading
+    import time
+    from metaskill.evaluate.safety.findings import BackendResult
+
+    lock, running, peak = threading.Lock(), [0], [0]
+
+    class Slow:
+        def __init__(self, name):
+            self.name = name
+
+        def scan(self, skill, tier):
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(0.1)
+            with lock:
+                running[0] -= 1
+            return BackendResult(self.name, BackendStatus.OK, tier)
+
+    backends = [Slow("one"), Slow("two"), Slow("three")]
+    skill = skill_with(tmp_path, "---\nname: s\ndescription: d\n---\n\nHello.\n")
+    results = safety._scan_all(backends, skill, SafetyTier.DEEP)
+    assert [r.backend for r in results] == ["one", "two", "three"] and peak[0] == 3
+    peak[0] = 0
+    safety._scan_all(backends, skill, SafetyTier.STATIC)
+    assert peak[0] == 1  # no model calls at static: in turn

@@ -1,4 +1,5 @@
 import json
+import threading
 from types import SimpleNamespace
 
 from metaskill.evaluate.golden.pilot_runner import PILOT_ROOT
@@ -24,7 +25,9 @@ def test_quality_pilot_command_reports_paired_completions(tmp_path, monkeypatch)
     assert "0.75" in output
     assert len(calls) == 6
     assert all(c["messages"][-1] == calls[0]["messages"][-1] for c in calls)
-    assert [len(c["messages"]) for c in calls] == [3, 3, 3, 2, 2, 2]
+    # Three with the skill (its body as a second system message), three without, in any
+    # order: sessions run in parallel.
+    assert sorted(len(c["messages"]) for c in calls) == [2, 2, 2, 3, 3, 3]
     assert all(gold.strip() not in str(c["messages"]) for c in calls)
     [path] = (tmp_path / "evaluation-reports").glob("*/ranked-evaluation.json")
     [skill] = json.loads(path.read_text(encoding="utf-8"))["skills"]
@@ -86,11 +89,16 @@ def test_evaluate_himalaya_with_opt_in_quality(tmp_path, monkeypatch):
     output = handler(f'evaluate "{HIMALAYA}" --quality-pilot')
     assert "Text-only Quality pilot" in output
     assert len(calls) == 18, output
-    for i in range(0, 18, 6):
-        group = calls[i:i+6]
-        assert all(c["messages"][-1] == group[0]["messages"][-1] for c in group)
-        assert [len(c["messages"]) for c in group] == [3, 3, 3, 2, 2, 2]
-        assert json.dumps(cases[i // 6]["expected"]) not in group[0]["messages"][-1]["content"]
+    # Sessions run in parallel, so calls of different tasks can interleave: grouped by
+    # their task prompt (the last message), each task has three runs with the skill and
+    # three without.
+    groups = {}
+    for c in calls:
+        groups.setdefault(c["messages"][-1]["content"], []).append(c)
+    assert len(groups) == 3
+    for prompt, group in groups.items():
+        assert sorted(len(c["messages"]) for c in group) == [2, 2, 2, 3, 3, 3]
+        assert not any(json.dumps(case["expected"]) in prompt for case in cases)
     [path] = (tmp_path / "evaluation-reports").glob("*/ranked-evaluation.json")
     [skill] = json.loads(path.read_text(encoding="utf-8"))["skills"]
     assert skill["name"] == "himalaya"
@@ -127,13 +135,17 @@ def test_pilot_option_uses_argument_parser_in_either_position():
 
 def test_pilot_route_change_leaves_quality_unscored(tmp_path, monkeypatch):
     monkeypatch.setattr(evaluate, "_make_sandbox", lambda config: FakeSandbox())
-    calls = []
+    calls, lock = [], threading.Lock()
 
     def complete(**kwargs):
-        calls.append(kwargs)
+        # Counted under a lock: sessions run in parallel, and exactly one reply must come
+        # from the first model for the change to happen at all.
+        with lock:
+            calls.append(kwargs)
+            first = len(calls) == 1
         return SimpleNamespace(
             text=(PILOT_ROOT / "expected/normal.json").read_text(encoding="utf-8"),
-            provider="test", model="first" if len(calls) == 1 else "changed",
+            provider="test", model="first" if first else "changed",
         )
 
     ctx = SimpleNamespace(session_cwd=lambda: str(tmp_path),
