@@ -309,11 +309,11 @@ def test_full_log_is_written_and_output_points_to_it(skill, run_dir):
 
     result = run_tasks(skill, [task()], FakeAgent(chatty),
                        config=config(runs=1, output_max_chars=10), run_dir=run_dir)
-    log = "cleanup/logs/write-report-with_skill-r1.txt"
+    log = "skill-01/logs/write-report-with_skill-r1.txt"
     assert result.tests[0].output == f"{'x' * 10}... (full log: {log})"
     text = (run_dir / log).read_text(encoding="utf-8")
     assert "x" * 50 in text and "tool: ls" in text and "Write report.txt" in text
-    assert (run_dir / "cleanup/logs/write-report-baseline-r1.txt").exists()
+    assert (run_dir / "skill-01/logs/write-report-baseline-r1.txt").exists()
 
 
 def test_output_that_cannot_be_encoded_does_not_stop_the_runs(skill, run_dir):
@@ -323,7 +323,7 @@ def test_output_that_cannot_be_encoded_does_not_stop_the_runs(skill, run_dir):
     result = run_tasks(skill, [task(checks=[output_check("half")])], FakeAgent(cut_emoji),
                        config=config(runs=1), run_dir=run_dir)
     assert [t.passed for t in result.tests] == [True, True] and result.errors == []
-    log = run_dir / "cleanup/logs/write-report-with_skill-r1.txt"
+    log = run_dir / "skill-01/logs/write-report-with_skill-r1.txt"
     assert r"half \ud83d an emoji" in log.read_text(encoding="utf-8")
 
 
@@ -383,11 +383,28 @@ def test_a_run_that_cannot_copy_its_fixtures_is_an_error_and_the_rest_still_run(
     assert result.errors[0].startswith("broken with_skill r1: FileNotFoundError")
 
 
-@pytest.mark.parametrize("name", ["../escape", "/abs", "C:\\abs", "", ".hidden", 123])
-def test_a_skill_name_that_is_not_a_folder_name_is_refused(skill, run_dir, name):
+@pytest.mark.parametrize("name", [
+    "../escape", "/abs", "C:\\abs", "", ".hidden", "NUL", "ranked-evaluation.json", "foo.", 123])
+def test_the_skills_name_is_never_the_log_folder(skill, run_dir, name):
     skill.name = name
-    with pytest.raises(ValueError, match="skill name"):
-        run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir)
+    result = run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir)
+    assert len(result.tests) == 2 and result.errors == []
+    assert [p.name for p in run_dir.iterdir()] == ["skill-01"]
+
+
+def test_calls_without_a_log_folder_never_share_one(skill, run_dir):
+    (run_dir / "skill-02").mkdir(parents=True)  # taken by something else
+    first, second = (run_tasks(skill, [task()], FakeAgent(), config=config(runs=1),
+                               run_dir=run_dir) for _ in range(2))
+    assert "(full log: skill-01/logs/" in first.tests[0].output
+    assert "(full log: skill-03/logs/" in second.tests[0].output
+
+
+@pytest.mark.parametrize("folder", ["../escape", "/abs", "C:\\abs", "", ".hidden", "a/b", 123])
+def test_a_log_folder_that_is_not_a_plain_name_is_refused(skill, run_dir, folder):
+    with pytest.raises(ValueError, match="log folder"):
+        run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
+                  log_folder=folder)
     assert not run_dir.exists()
 
 
@@ -576,7 +593,7 @@ def test_links_in_the_skill_are_not_copied(skill, run_dir, tmp_path, make_link):
     assert with_skill.skill == {
         "/tmp/skill": {"SKILL.md": (skill.path / "SKILL.md").read_bytes()}}
     # The log says what was left out, so a run that needed it is not a mystery.
-    logs = run_dir / "cleanup" / "logs"
+    logs = run_dir / "skill-01" / "logs"
     assert "skill files left out (links): notes.md\n" in (
         logs / "write-report-with_skill-r1.txt").read_text(encoding="utf-8")
     assert "left out" not in (logs / "write-report-baseline-r1.txt").read_text(
@@ -732,7 +749,7 @@ def test_a_skill_too_large_for_the_sandbox_is_a_failed_run(skill, run_dir):
     # The agent was not started for it, and the baseline ran as usual.
     assert [c.skill for c in agent.calls] == [None]
     assert all(w.closed for w in sandbox.opened)
-    assert (run_dir / "cleanup" / "logs" / "write-report-with_skill-r1.txt").is_file()
+    assert (run_dir / "skill-01" / "logs" / "write-report-with_skill-r1.txt").is_file()
 
 
 def test_planned_task_ids_include_tasks_whose_runs_all_failed_to_be_made(skill, run_dir):

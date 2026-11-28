@@ -99,7 +99,7 @@ A skill that is not ranked has `-` as its rank and `overall`, and for each dimen
 - A table with one row per task and variant (`with_skill` first): runs passed out of runs made with the percentage, and the mean tokens, LLM calls and tool calls of those runs. Tool calls are averaged over the runs that measured them, and `?` when none did. The `with_skill` row ends with `improved`, `regressed` or `unchanged`, from comparing the two pass rates (as rates, so 1 of 2 against 1 of 3 is an improvement), or `incomplete` when a variant has no runs; the baseline row has `-`.
 - The failed runs, each with its cleaned reason (at most `MAX_REASON_CHARS`), at most `MAX_LISTED_FAILURES` (10) of them and a count of the rest.
 - A note of how many runs are missing against `runs_per_task` (runs the runner could not make, for instance a judge that was unavailable). A task none of whose runs were made has no row, so the dimensions' notes (Quality, Efficiency) are where those are named.
-- The folder of the run logs, `[skill]/logs/`, relative to the report's folder.
+- The folder of the run logs, `skill-NN/logs/` (`SkillResult.log_folder`), relative to the report's folder.
 
 A skill with no tests has no such section, so a report from a call without tasks does not change. Task ids, reasons and the skill name go through `_md`, and `|` is escaped in the table, like the rest of the report. The per-run `### Tests` list stays as the detail.
 

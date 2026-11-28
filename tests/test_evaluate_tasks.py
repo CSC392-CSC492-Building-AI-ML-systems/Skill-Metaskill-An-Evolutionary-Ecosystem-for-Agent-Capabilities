@@ -123,7 +123,7 @@ def test_run_logs_go_into_this_calls_report_folder(tmp_path, harness):
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
                             output_path=tmp_path / "out", tasks_path=harness.tasks)
     run_dir = Path(result["artifacts"][0]).parent
-    logs = sorted(p.name for p in (run_dir / "s" / "logs").iterdir())
+    logs = sorted(p.name for p in (run_dir / "skill-01" / "logs").iterdir())
     assert len(logs) == 2 * RUNS * 2 and "t1-with_skill-r1.txt" in logs
 
 
@@ -135,7 +135,7 @@ def test_the_markdown_report_shows_the_task_table_for_a_run_with_tasks(tmp_path,
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
                             output_path=tmp_path / "out", tasks_path=harness.tasks)
     text = readable(result)
-    assert "### Task results" in text and "Logs: s/logs/ in this report's folder" in text
+    assert "### Task results" in text and "Logs: skill-01/logs/ in this report's folder" in text
     assert f"| t1 | with_skill | {RUNS}/{RUNS} (100%) | 110 | 2.0 | 1.0 | unchanged |" in text
     assert f"| t2 | baseline | {RUNS}/{RUNS} (100%) | 440 | 6.0 | 4.0 | - |" in text
     assert "could not be made" not in text.split("### Task results", 1)[1].split("### ", 2)[1]
@@ -177,8 +177,8 @@ def test_skills_with_the_same_name_keep_their_own_logs(tmp_path, harness, monkey
                          tasks_path=harness.tasks)
     run_dir = Path(result["artifacts"][0]).parent
     logs = {folder: (run_dir / folder / "logs" / "t1-with_skill-r1.txt").read_text(encoding="utf-8")
-            for folder in ("same", "same-2")}
-    assert "from original" in logs["same"] and "from copy" in logs["same-2"]
+            for folder in ("skill-01", "skill-02")}
+    assert "from original" in logs["skill-01"] and "from copy" in logs["skill-02"]
     # Each result names the log of its own session.
     for skill in report(result).skills:
         [test] = [t for t in skill.tests if (t.task_id, t.variant, t.run) == ("t1", Variant.WITH_SKILL, 1)]
@@ -188,18 +188,13 @@ def test_skills_with_the_same_name_keep_their_own_logs(tmp_path, harness, monkey
     # The Markdown points each skill at the folder its runs went to, not at "same" twice.
     [markdown] = [a for a in result["artifacts"] if str(a).endswith(".md")]
     text = Path(markdown).read_text(encoding="utf-8")
-    assert text.count("Logs: same/logs/") == 1 and text.count("Logs: same-2/logs/") == 1
+    assert text.count("Logs: skill-01/logs/") == 1 and text.count("Logs: skill-02/logs/") == 1
+    assert {s.log_folder for s in report(result).skills} == {"skill-01", "skill-02"}
 
 
-@pytest.mark.parametrize("names, folders", [
-    (["a", "b"], ["a", "b"]),
-    (["x", "x", "x"], ["x", "x-2", "x-3"]),
-    (["x", "x-2", "x"], ["x", "x-2", "x-3"]),  # a skill really named x-2 keeps its folder
-    (["Skill", "skill"], ["Skill", "skill-2"]),  # one folder on Windows and macOS
-])
-def test_each_skill_of_a_call_gets_its_own_log_folder(names, folders):
-    taken = set()
-    assert [evaluate._log_folder(name, taken) for name in names] == folders
+def test_log_folders_are_numbered_in_the_order_given():
+    assert [evaluate._log_folder(n) for n in (1, 2, 10, 100)] \
+        == ["skill-01", "skill-02", "skill-10", "skill-100"]
 
 
 def test_a_relative_tasks_path_is_the_users_session_folder(tmp_path, harness):
@@ -274,18 +269,78 @@ def test_an_agent_failing_a_task_is_a_scored_failure_not_an_error(tmp_path, harn
     assert skill.scores.efficiency == 0.0
 
 
-def test_a_skill_name_that_cannot_be_a_log_folder_still_gets_safety(tmp_path, harness, monkeypatch):
-    # The name comes from the skill's frontmatter; set a hostile one directly, since
-    # frontmatter needs Hermes' YAML loader.
-    hostile = evaluate.Skill(path=make_skill(tmp_path, "s"), name="../escape", body="# Skill\n")
-    monkeypatch.setattr(evaluate.Skill, "load", staticmethod(lambda path: hostile))
-    result = evaluate_skill(hostile.path, config_path=harness.config, output_path=tmp_path / "out",
-                            tasks_path=harness.tasks)
-    assert result["task_runs"]["errors"] == 1 and result["task_runs"]["sessions"] == 0
-    skill = report(result).skills[0]
-    assert skill.dimensions[Dimension.EFFICIENCY].status is Status.ERROR
-    assert skill.dimensions[Dimension.SAFETY].status is not Status.SKIPPED
-    assert harness.agents[0].calls == [] and not (tmp_path / "escape").exists()
+# Names that broke the report or a folder when the name was the folder (and the pairs that
+# shared one on Windows or macOS). Set through Skill.load: frontmatter needs Hermes.
+HOSTILE_NAMES = [
+    "ranked-evaluation.json", "ranked-evaluation.md", "Ranked-Evaluation.JSON",
+    "NUL", "CON", "PRN", "AUX", "COM1", "LPT9", "nul.txt", "foo", "foo.", "foo ", "Foo",
+    "../escape", "/etc", "a\\b", "x" * 300, "skill-01", ".", "..",
+]
+
+
+def name_skills(monkeypatch, tmp_path, names):
+    """A skill folder for each name, which Skill.load gives that name."""
+    paths = [make_skill(tmp_path, f"folder{i}") for i in range(len(names))]
+    given = dict(zip(map(str, paths), names))
+    real_load = evaluate.Skill.load
+
+    def load(path):
+        skill = real_load(path)
+        skill.name = given[str(path)]
+        return skill
+    monkeypatch.setattr(evaluate.Skill, "load", staticmethod(load))
+    return paths
+
+
+def test_no_skill_name_breaks_the_report_or_shares_a_log_folder(tmp_path, harness, monkeypatch):
+    paths = name_skills(monkeypatch, tmp_path, HOSTILE_NAMES)
+    harness.agent_act = lambda prompt, skill, workdir: AgentRun(
+        output=f"from {Path(skill.path).name if skill else 'baseline'}", input_tokens=1,
+        llm_calls=1)
+    result = rank_skills(paths, config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    run_dir = Path(result["artifacts"][0]).parent
+    folders = [evaluate._log_folder(n) for n in range(1, len(paths) + 1)]
+    # Only the report's two files and the numbered folders, and nothing outside.
+    assert sorted(p.name for p in run_dir.iterdir()) \
+        == sorted([*folders, "ranked-evaluation.json", "ranked-evaluation.md"])
+    assert [p.name for p in (tmp_path / "out").iterdir()] == [run_dir.name]
+    skills = report(result).skills
+    assert len(skills) == len(paths) and result["task_runs"]["errors"] == 0
+    assert sorted(s.log_folder for s in skills) == sorted(folders)
+    given = dict(zip(folders, paths))
+    for skill in skills:  # each skill's runs, and only they, are in its folder
+        log = (run_dir / skill.log_folder / "logs" / "t1-with_skill-r1.txt").read_text("utf-8")
+        assert f"from {given[skill.log_folder].name}" in log
+        assert all(f"(full log: {skill.log_folder}/logs/" in t.output for t in skill.tests)
+
+
+def test_without_tasks_no_log_folder_is_named(tmp_path, harness):
+    result = rank_skills([make_skill(tmp_path / "x", "same"), make_skill(tmp_path / "y", "same")],
+                         output_path=tmp_path / "out")
+    assert [s.log_folder for s in report(result).skills] == [None, None]
+    assert not any("Logs" in w for w in result["warnings"])
+
+
+def test_a_skill_whose_logs_cannot_be_written_keeps_its_row(tmp_path, harness, monkeypatch):
+    real_mkdir = Path.mkdir
+
+    def mkdir(self, *args, **kwargs):
+        if self.parts[-2:] == ("skill-01", "logs"):
+            raise PermissionError("no")
+        return real_mkdir(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    first, second = sorted(report(result).skills, key=lambda s: len(s.tests))
+    assert first.tests == [] and second.tests
+    # No folder is named for runs that were never made.
+    assert (first.log_folder, second.log_folder) == (None, "skill-02")
+    assert first.dimensions[Dimension.EFFICIENCY].status is Status.ERROR
+    assert first.dimensions[Dimension.SAFETY].status is not Status.SKIPPED
+    assert result["task_runs"]["errors"] == 1
+    assert any("PermissionError" in w for w in result["warnings"])
 
 
 # --- Config ------------------------------------------------------------------------------------

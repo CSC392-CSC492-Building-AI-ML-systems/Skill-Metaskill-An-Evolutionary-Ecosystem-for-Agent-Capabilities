@@ -110,8 +110,8 @@ def test_parallel_results_equal_sequential_in_content_and_order(skill, tmp_path,
         (tid, variant, n) for tid in "abc" for variant in (Variant.WITH_SKILL, Variant.BASELINE)
         for n in (1, 2, 3)]
     # One log per run, the same set of files with the same content.
-    logs = {p.name: p.read_text(encoding="utf-8") for p in (tmp_path / "par/cleanup/logs").iterdir()}
-    assert logs.keys() == {p.name for p in (tmp_path / "seq/cleanup/logs").iterdir()}
+    logs = {p.name: p.read_text(encoding="utf-8") for p in (tmp_path / "par/skill-01/logs").iterdir()}
+    assert logs.keys() == {p.name for p in (tmp_path / "seq/skill-01/logs").iterdir()}
     assert len(logs) == 18
     assert "task b by skill" in logs["b-with_skill-r2.txt"]
 

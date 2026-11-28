@@ -47,7 +47,7 @@ from .models import (
 if TYPE_CHECKING:  # runner imports the sandbox; scoring does not need it
     from .runner import RunnerResult
 
-# The runner appends " (full log: <skill>/logs/<task>-<variant>-r<run>.txt)" to every
+# The runner appends " (full log: <folder>/logs/<task>-<variant>-r<run>.txt)" to every
 # output (runner.md 2.4). The path differs on every run, so it is removed before comparing.
 _LOG_SUFFIX = re.compile(r" \(full log: [^()\n]*\)\Z")
 

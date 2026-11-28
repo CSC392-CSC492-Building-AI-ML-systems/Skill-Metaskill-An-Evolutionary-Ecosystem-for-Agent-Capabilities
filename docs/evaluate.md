@@ -48,7 +48,7 @@ Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their 
     [timestamp]/
       ranked-evaluation.json     # the source of truth for this run
       ranked-evaluation.md       # human-readable report rendered from the JSON
-      [skill]/
+      skill-01/                  # one per skill, numbered as given; the report names which
         logs/
           [task_id]-[variant]-r[run].txt
   ```
@@ -132,6 +132,8 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `location` | File and line, e.g. `SKILL.md:42` |
 | `message` | What is wrong, in plain words, for the report |
 
+**Log folder (`log_folder`).** The folder, beside the report, that holds the skill's run logs: `skill-01`, `skill-02`, in the order the skills were given, never the skill's name. Absent when none of the skill's runs was made, and in a report made before this was recorded.
+
 **Local warnings (`local_warnings`).** What the skill would delete on the machine that ran the evaluation, when that looks important ([safety/local.md](safety/local.md)). Specific to that machine and never scored. They contain real local paths, so remove them before sharing a report.
 
 | Field | Description |
@@ -182,7 +184,7 @@ Example (abridged):
       "reason": "Object exists in bucket, exit code 0",
       "evidence": null,
       "metrics": { "tokens": 4210, "seconds": 18.2, "tool_calls": 5 },
-      "output": "... (full log: gcp-file-transfer/logs/upload-single-file-with_skill-r1.txt)"
+      "output": "... (full log: skill-01/logs/upload-single-file-with_skill-r1.txt)"
     }],
     "rubric": [{
       "criterion": "purpose_and_trigger",
@@ -200,7 +202,8 @@ Example (abridged):
       "location": "SKILL.md:42",
       "message": "Recursively deletes a bucket path with no confirmation step before it"
     }],
-    "local_warnings": []
+    "local_warnings": [],
+    "log_folder": "skill-01"
   }]
 }
 ```

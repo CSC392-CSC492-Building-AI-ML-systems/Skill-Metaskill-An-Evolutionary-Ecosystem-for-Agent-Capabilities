@@ -227,8 +227,8 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
     sessions = run_errors = 0
     judge_models: set[str] = set()
     judge_usage = TokenUsage()
-    folders: set[str] = set()  # log folders taken in this call
-    named: set[str] = set()  # names already warned about
+    names: set[str] = set()  # names of the skills so far
+    shared: set[str] = set()  # names already warned about
     task_name = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
     # Every skill is loaded first. With tasks, the dimensions that do not read the runs
     # (Clarity, Safety, Config Cleanliness) are then scored on a background thread while the
@@ -258,18 +258,21 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
             try:
                 if isinstance(skill, Exception):
                     raise skill
-                log_folder = _log_folder(skill.name, folders)
-                if log_folder != skill.name and skill.name not in named:
-                    named.add(skill.name)
+                log_folder = _log_folder(i + 1)
+                if skill.name in names and skill.name not in shared:
+                    shared.add(skill.name)
+                    where = ("" if tasks is None else
+                             ", and each one's Logs line says which folder holds its runs")
                     warnings.append(clean(
                         f"more than one skill is named {skill.name}: the report has a row for "
-                        f"each, and each has its own run log folder ({skill.name}, "
-                        f"{log_folder}, ...)", MAX_REASON_CHARS))
+                        f"each{where}", MAX_REASON_CHARS))
+                names.add(skill.name)
                 result, runs, judged = _result(skill, config, llm, tasks, judge=judge,
                                                agent=agent, sandbox=sandbox, run_dir=run_dir, ctx=ctx, judges=judges,
                                                log_folder=log_folder, backoff=backoff,
                                                host_room=host_room, static=static[i].result if i in static else None)
-                result.log_folder = log_folder
+                if runs and runs.tests:  # only a run that was made left a log to point to
+                    result.log_folder = log_folder
             except cancel.EvaluationStopped:
                 raise  # the whole call stops, not this skill alone
             except Exception as e:  # one bad skill must not stop the others
@@ -366,19 +369,13 @@ def _tally(result: SkillResult, runs: RunnerResult | None,
     return used
 
 
-def _log_folder(name: str, taken: set[str]) -> str:
-    """A run log folder for a skill named `name` that no other skill of this call has, and
-    mark it taken. Two skills can share a name (a skill and its generalized copy); the
-    second gets `name-2`, or the next free number if a skill is really named that. A name
-    that is not text is returned as it is: the runner refuses it (a ValueError)."""
-    if not isinstance(name, str):
-        return name
-    folder, n = name, 1
-    while folder.casefold() in taken:  # casefold: one folder on Windows and macOS
-        n += 1
-        folder = f"{name}-{n}"
-    taken.add(folder.casefold())
-    return folder
+def _log_folder(number: int) -> str:
+    """The run log folder of the `number`th skill of a call, counted from 1: `skill-01`.
+
+    Never the skill's name, which comes from the skill's own frontmatter and could be a
+    report file (`ranked-evaluation.json`), a Windows device (`NUL`), a path (`../x`) or
+    the same folder as another skill's (`foo` and `foo.` on Windows)."""
+    return f"skill-{number:02d}"
 
 
 def _config(config_path: str | Path | None, output_path: str | Path | None,
@@ -533,9 +530,12 @@ def _result(skill: Skill, config: EvaluationConfig, llm: Any, tasks: list | None
             runs = run_tasks(skill, tasks, agent, config=config, run_dir=run_dir, ctx=ctx,
                              sandbox=sandbox, log_folder=log_folder, judges=judges,
                              backoff=backoff, host_room=host_room)
-        except ValueError as e:  # a skill name that cannot be a log folder: no run made
+        except (ValueError, OSError) as e:
+            # The log folder could not be made (a full disk, a permission): no run, but the
+            # skill keeps its row and every dimension that needs no run.
             runs = RunnerResult(tests=[], task_ids=[t.task_id for t in tasks],
-                                errors=[clean(str(e), MAX_REASON_CHARS)])
+                                errors=[clean(f"task runs: {type(e).__name__}: {e}",
+                                              MAX_REASON_CHARS)])
     task = JUDGE_TASK if hasattr(ctx, "register_auxiliary_task") else None
     scored = static() if static is not None else _static_scores(skill, config, llm, judge, task)
     # In Dimension order, as when every dimension was scored here in turn.

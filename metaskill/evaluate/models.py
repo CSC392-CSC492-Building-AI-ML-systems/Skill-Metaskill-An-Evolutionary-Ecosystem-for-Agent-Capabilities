@@ -846,9 +846,9 @@ class SkillResult:
     rubric: list[RubricRating] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     local_warnings: list[LocalWarning] = field(default_factory=list)  # this machine only
-    # The folder, inside the report's folder, that holds this skill's run logs. It is not the
-    # name when skills share one (same, same-2), so the report reads it from here. Not in
-    # to_dict(): the JSON report names the log in each run's output.
+    # The folder, inside the report's folder, that holds this skill's run logs (skill-01, ...):
+    # never the name, so the report records which folder is whose. Left out of to_dict() when
+    # None.
     log_folder: str | None = None
 
     def __post_init__(self) -> None:
@@ -866,6 +866,7 @@ class SkillResult:
             "rubric": [r.to_dict() for r in self.rubric],
             "findings": [f.to_dict() for f in self.findings],
             "local_warnings": [w.to_dict() for w in self.local_warnings],
+            **({"log_folder": self.log_folder} if self.log_folder else {}),
         }
 
     @classmethod
@@ -881,6 +882,7 @@ class SkillResult:
             rubric=[RubricRating.from_dict(r) for r in data["rubric"]],
             findings=[Finding.from_dict(f) for f in data["findings"]],
             local_warnings=[LocalWarning.from_dict(w) for w in data.get("local_warnings", [])],
+            log_folder=data.get("log_folder"),
         )
 
 
