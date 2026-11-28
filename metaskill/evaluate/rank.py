@@ -5,6 +5,11 @@ with a dimension that scored None (skipped or failed) has no overall: it is not 
 but listed below the ranked skills with the scores it has and a note on what is missing.
 Those scores are never averaged into a stand-in for overall.
 
+Robustness measures consistency, not correctness, so in overall it counts scaled by the
+with-skill pass rate (robustness_credit): a skill that fails every run the same way is
+fully robust, but earns no ranking credit for it (MET-60). The report keeps the plain
+Robustness score.
+
 Skill names, finding locations and status details come from the skill or its backends,
 so they are cleaned before they are printed: a name must not be able to add a row to the
 table or send escape codes to the terminal. table() also escapes the Markdown that could
@@ -15,7 +20,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from .judge import MAX_REASON_CHARS, clean
 from .models import (
@@ -28,6 +33,7 @@ from .models import (
     Severity,
     SkillResult,
     Status,
+    TestResult,
     Variant,
     check_weights,
 )
@@ -119,16 +125,40 @@ def values(scores: Scores) -> dict[Dimension, float | None]:
     return {d: getattr(scores, d.value) for d in Dimension}
 
 
+def with_skill_pass_rate(tests: Iterable[TestResult]) -> float | None:
+    """The share of with-skill runs that passed, or None when there are none."""
+    runs = [t for t in tests if t.variant is Variant.WITH_SKILL]
+    return sum(t.passed for t in runs) / len(runs) if runs else None
+
+
+def robustness_credit(robustness: float | None, pass_rate: float | None) -> float | None:
+    """What Robustness adds to overall: its score times the with-skill pass rate.
+
+    Two runs that fail the same way are fully consistent, so a skill that never works can
+    score Robustness 1.0. Unscaled, that would outweigh Quality's penalty (they have the
+    same weight) and rank a broken skill above one that works most of the time (MET-60).
+    pass_rate None means no with-skill runs were given, and Robustness counts as it is:
+    it cannot have been scored from runs that do not exist.
+    """
+    if robustness is None or pass_rate is None:
+        return robustness
+    return robustness * pass_rate
+
+
 def overall(dimension_values: Mapping[Dimension, float | None],
-            weights: Mapping[Dimension, float]) -> float | None:
+            weights: Mapping[Dimension, float],
+            pass_rate: float | None = None) -> float | None:
     """overall of a skill: the weighted mean of all six dimensions, or None if any of
     them has no value, whatever its weight. The rest are not averaged instead: a mean
-    over fewer dimensions is a different assessment (evaluate.md 2.1)."""
+    over fewer dimensions is a different assessment (evaluate.md 2.1). pass_rate is the
+    skill's with-skill pass rate; Robustness counts as robustness_credit of it."""
     total = weight_sum = 0.0
     for dimension in Dimension:
         value = dimension_values.get(dimension)
         if value is None:
             return None
+        if dimension is Dimension.ROBUSTNESS:
+            value = robustness_credit(value, pass_rate)
         weight = weights.get(dimension, 0.0)
         total += weight * value
         weight_sum += weight
@@ -136,14 +166,16 @@ def overall(dimension_values: Mapping[Dimension, float | None],
 
 
 def make_scores(dimension_scores: Mapping[Dimension, DimensionScore],
-                config: EvaluationConfig) -> Scores:
+                config: EvaluationConfig, tests: Iterable[TestResult] = ()) -> Scores:
     """Scores for a SkillResult, from what each scoring module returned, weighted with
     config.weights. A dimension not in `dimension_scores` counts as not scored (None).
+    tests are the skill's task runs (SkillResult.tests), for Robustness's credit in
+    overall; pass the same ones the SkillResult keeps, so rank() gives the same overall.
     """
     check_weights(config.weights)
     found = {d: (dimension_scores[d].value if d in dimension_scores else None)
              for d in Dimension}
-    return Scores(overall=overall(found, config.weights),
+    return Scores(overall=overall(found, config.weights, with_skill_pass_rate(tests)),
                   **{d.value: v for d, v in found.items()})
 
 
@@ -164,7 +196,7 @@ def rank(results: list[SkillResult], config: EvaluationConfig) -> Ranking:
     unranked: list[RankedSkill] = []
     for result in results:
         found = values(result.scores)
-        score = overall(found, weights)
+        score = overall(found, weights, with_skill_pass_rate(result.tests))
         entry = RankedSkill(
             result=result,
             rank=None,
@@ -226,11 +258,28 @@ def _notes(entry: RankedSkill, mixed: bool, say_unranked: bool = True) -> list[s
         detail = f" ({detail})" if detail else ""
         notes.append(f"Safety is partial{detail}: not comparable with the skills here "
                      "that were scanned in full.")
+    credit = _reduced_robustness(result)
+    if credit is not None and entry.ranked:
+        robustness, pass_rate = credit
+        notes.append(f"Robustness {robustness:.2f} counts toward overall as "
+                     f"{robustness_credit(robustness, pass_rate):.2f}, scaled by its "
+                     f"with-skill pass rate ({pass_rate:.2f}): consistency only counts "
+                     "for runs that work.")
     critical = _critical(result)
     if critical:
         where = ", ".join(clean(f.location, MAX_TEXT_CHARS) for f in critical)
         notes.append(f"{len(critical)} CRITICAL safety finding(s) at {where}.")
     return notes
+
+
+def _reduced_robustness(result: SkillResult) -> tuple[float, float] | None:
+    """(Robustness, with-skill pass rate) when the pass rate lowers Robustness's part of
+    overall, so the table's Robustness and overall can be read together; else None."""
+    robustness = result.scores.robustness
+    pass_rate = with_skill_pass_rate(result.tests)
+    if robustness is None or pass_rate is None or pass_rate >= 1 or robustness == 0:
+        return None
+    return robustness, pass_rate
 
 
 def _safety_status(result: SkillResult) -> Status | None:
@@ -339,6 +388,7 @@ def markdown(meta: ReportMeta, ranking: Ranking) -> str:
         f"- Scanner version: {_md(meta.scanner_version) or 'not run'}",
         f"- Checks version: {_md(meta.checks_version)}",
         f"- Clarity rubric version: {_md(meta.clarity_rubric_version) or 'unknown'}",
+        f"- Overall formula version: {_md(meta.overall_version) or 'unknown'}",
         "", table(ranking),
     ]
     for entry in ranking.entries:

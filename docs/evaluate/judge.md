@@ -211,7 +211,7 @@ Every call, retries included, counts in `usage`.
 |---|---|---|
 | `JudgeUnavailable` | The judge cannot run. Causes: no `ctx.llm`, no provider or credentials (Hermes' `AuxiliaryClientUnavailable`), a provider/model override that Hermes refused, `make_judge("llm")` without `ctx`, or an `exit_code` check with no sandbox (`run_command`) | Mark the dimension `skipped` (score `null`) |
 | `JudgeError` | The judge ran, but its answer could not be used (no JSON object after every retry), Hermes rejected the request's arguments, or a deterministic check is malformed | Mark the dimension `error` (score `null`) |
-| `JudgeCallFailed` (a `JudgeError`) | The provider did not answer: a rate limit, an outage, a timeout. Not retried by the judge | Mark the dimension `error`, and say the provider was the cause. `evaluate` sets `detail` to `failed: the judge model's provider did not answer` and adds one warning per dimension saying how many skills it hit |
+| `JudgeCallFailed` (a `JudgeError`) | The provider did not answer: a rate limit, an outage, a timeout. Not retried by the judge itself; given a `backoff` (the runner, and `evaluate` for every judge of its call), a rate-limited call is waited out and made again, up to 4 tries | Mark the dimension `error`, and say the provider was the cause. `evaluate` sets `detail` to `failed: the judge model's provider did not answer` and adds one warning per dimension saying how many skills it hit |
 | `ValueError` | Programming error, e.g. a check given to the wrong judge type, or an empty checklist | Fix the caller |
 
 `JudgeUnavailable` from a missing provider only shows up once a call is made. Catch it around `rate`, `review`, `check` and `judge`, not only around construction.

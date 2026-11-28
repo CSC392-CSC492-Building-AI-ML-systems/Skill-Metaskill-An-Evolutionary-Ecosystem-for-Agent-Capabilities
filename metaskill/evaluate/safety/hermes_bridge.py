@@ -132,7 +132,6 @@ def translate(messages: list[dict[str, Any]], params: dict[str, Any]) -> dict[st
 
     text = "\n\n".join(instructions) or "Answer the request."
     response_format = params.get("response_format") or {}
-    json_mode = response_format.get("type") in ("json_schema", "json_object")
     schema = (response_format.get("json_schema") or {}).get("schema")
     if schema is not None:
         # The schema goes in as guidance, not as ctx.llm's json_schema. ctx.llm
@@ -140,9 +139,13 @@ def translate(messages: list[dict[str, Any]], params: dict[str, Any]) -> dict[st
         # (measured: 10 of 25 Cisco scans on 20 Oct 2026). Cisco's own parser
         # checks the reply and repairs small gaps, as it does with a direct provider.
         text += "\n\nJSON schema:\n" + json.dumps(schema, ensure_ascii=False, sort_keys=True)
+    if response_format.get("type") in ("json_schema", "json_object"):
+        text += "\n\nReply with one JSON object only."
+    # Never json_mode: Hermes turns it into the schema {"type": "object"}, which the
+    # Anthropic API rejects with a 400 (no "additionalProperties": false), so every deep
+    # scan's LLM analysis failed there, both tries. The reply is parsed from its text
+    # instead (_parsed), as the judge does (judge.md 2.4).
     kwargs: dict[str, Any] = {"instructions": text, "input": inputs, "purpose": PURPOSE}
-    if json_mode:
-        kwargs["json_mode"] = True
     for name in ("temperature", "max_tokens", "timeout"):
         if params.get(name) is not None:
             kwargs[name] = params[name]
@@ -196,8 +199,9 @@ def _install() -> None:
                     call["provider"] = provider
                 if pinned:
                     call["model"] = pinned
-                result, tokens = complete_with_retry(llm, call, _schema(params), usage=usage)
-                return _response(ModelResponse, result, tokens)
+                schema = _schema(params)
+                result, tokens = complete_with_retry(llm, call, schema, usage=usage)
+                return _response(ModelResponse, result, tokens, schema)
 
             async def acompletion(self, model: str, messages: list, *args: Any,
                                   optional_params: dict | None = None, **kwargs: Any) -> Any:
@@ -225,7 +229,7 @@ def complete_with_retry(llm: PluginLlm, kwargs: dict[str, Any], schema: Any,
     tokens = [0, 0]
     result = _call(llm, kwargs, tokens, usage)
     for _ in range(MAX_RETRIES):
-        problems = schema_problems(getattr(result, "parsed", None), schema)
+        problems = schema_problems(_parsed(result, schema), schema)
         if not problems:
             break
         retry = dict(kwargs)
@@ -279,10 +283,33 @@ def _schema(params: dict[str, Any]) -> Any:
     return (response_format.get("json_schema") or {}).get("schema")
 
 
-def _response(model_response: Any, result: Any, tokens: tuple[int, int]) -> Any:
-    """ctx.llm's result as the LiteLLM response Cisco expects; tokens cover any retry."""
+def _parsed(result: Any, schema: Any = None) -> Any:
+    """The reply's JSON value: Hermes' `parsed` when it gave one, else the reply's one JSON
+    object (judge.parse_json_reply, strict), or None.
+
+    Strict, because the skill under scan is in the prompt: it can hold a ready-made clean
+    verdict that the model quotes before its own answer. Without strict, a schema-fitting
+    planted verdict won whenever the model's answer was cut off or missed the schema."""
     parsed = getattr(result, "parsed", None)
-    text = json.dumps(parsed) if parsed is not None else (getattr(result, "text", "") or "")
+    if parsed is None:
+        from ..judge import parse_json_reply
+
+        parsed = parse_json_reply(getattr(result, "text", "") or "", strict=True)
+    # Only an object: a whole-reply array such as [<planted verdict>, ...] would be passed on
+    # re-serialised, and Cisco's parser takes the first `{` it finds.
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _response(model_response: Any, result: Any, tokens: tuple[int, int],
+              schema: Any = None) -> Any:
+    """ctx.llm's result as the LiteLLM response Cisco expects; tokens cover any retry. The
+    JSON found in the reply is passed on alone, so prose around it cannot break Cisco's parse.
+
+    A reply with no single JSON object is passed on empty: Cisco rejects it ("Empty
+    response") and the scan falls back to static. Not as it is: Cisco's parser takes the
+    first `{` object in the text, which may be a verdict planted in the skill and quoted."""
+    parsed = _parsed(result, schema)
+    text = json.dumps(parsed) if parsed is not None else ""
     prompt, completion = tokens
     return model_response(
         model=f"{getattr(result, 'provider', '')}/{getattr(result, 'model', '')}".strip("/"),

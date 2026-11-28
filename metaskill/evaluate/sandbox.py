@@ -170,6 +170,7 @@ class DockerSandbox:
         self.disk, self.files = disk, files  # size and file count of the run's folder
         # The archive holds the folder plus a header per file, so twice it is room enough.
         self.export_limit = max(EXPORT_LIMIT, 2 * size_bytes(disk))
+        self._capacity: int | None = None  # capacity(), once Docker has said
 
     @property
     def pull_command(self) -> str:
@@ -208,6 +209,26 @@ class DockerSandbox:
             return problem[1]
         self.sweep()
         return ""
+
+    def capacity(self) -> int | None:
+        """How many workspaces Docker can hold at once at this sandbox's limits: its CPUs
+        divided by `cpus`, and its memory divided by `memory`, whichever is fewer, and at
+        least 1. None if Docker does not say. The runner runs no more sessions at once
+        (runner.md 2.7), so parallel runs share the machine without starving each other.
+        A known answer is kept: the runner asks once per skill, and `docker info` takes a
+        second or more on Docker Desktop."""
+        if self._capacity is not None:
+            return self._capacity
+        try:
+            result = self._docker("info", "--format", "{{.NCPU}} {{.MemTotal}}")
+            cpus, memory = (int(v) for v in result.stdout.split())
+            per_cpu = float(self.cpus)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        if result.returncode != 0 or cpus < 1 or memory < 1 or per_cpu <= 0:
+            return None
+        self._capacity = max(1, min(int(cpus // per_cpu), memory // size_bytes(self.memory)))
+        return self._capacity
 
     def sweep(self) -> None:
         """Remove containers past ORPHAN_AGE: what a crash, or `docker rm` failing, left
