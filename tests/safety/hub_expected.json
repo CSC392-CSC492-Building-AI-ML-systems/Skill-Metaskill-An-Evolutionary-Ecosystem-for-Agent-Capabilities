@@ -1,0 +1,118 @@
+{
+ "anthropics/academy-guide": [],
+ "anthropics/mcp-builder": [
+  [
+   "recursive-delete",
+   "MEDIUM",
+   "reference/node_mcp_server.md:543"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "reference/evaluation.md:392"
+  ]
+ ],
+ "anthropics/pdf": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:235"
+  ]
+ ],
+ "anthropics/skill-creator": [
+  [
+   "print-secret",
+   "HIGH",
+   "scripts/aggregate_benchmark.py:397"
+  ]
+ ],
+ "anthropics/web-artifacts-builder": [
+  [
+   "recursive-delete",
+   "HIGH",
+   "scripts/bundle-artifact.sh:36"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "scripts/init-artifact.sh:36"
+  ]
+ ],
+ "anthropics/webapp-testing": [],
+ "huggingface/hf-cloud-sagemaker-iam-preflight": [],
+ "huggingface/hf-mem": [],
+ "huggingface/huggingface-spaces": [
+  [
+   "unpinned-git-install",
+   "MEDIUM",
+   "references/3d-gsplat.md:23"
+  ],
+  [
+   "unpinned-git-install",
+   "MEDIUM",
+   "references/3d-models.md:126"
+  ],
+  [
+   "unpinned-git-install",
+   "MEDIUM",
+   "references/requirements.md:106"
+  ],
+  [
+   "unpinned-git-install",
+   "MEDIUM",
+   "references/requirements.md:109"
+  ],
+  [
+   "unpinned-git-install",
+   "MEDIUM",
+   "references/requirements.md:68"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:14"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/3d-cuda-extensions.md:25"
+  ],
+  [
+   "unpinned-install",
+   "LOW",
+   "references/3d-cuda-extensions.md:67"
+  ]
+ ],
+ "huggingface/transformers-js": [],
+ "openai/gh-fix-ci": [],
+ "openai/jupyter-notebook": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:95"
+  ]
+ ],
+ "openai/notion-meeting-intelligence": [],
+ "openai/screenshot": [],
+ "openai/security-ownership-map": [
+  [
+   "unpinned-install",
+   "LOW",
+   "SKILL.md:20"
+  ]
+ ],
+ "openai/skill-installer": [
+  [
+   "recursive-delete",
+   "HIGH",
+   "scripts/install-skill-from-github.py:298"
+  ]
+ ],
+ "openai/vercel-deploy": [
+  [
+   "recursive-delete",
+   "HIGH",
+   "scripts/deploy.sh:175"
+  ]
+ ]
+}
