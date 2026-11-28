@@ -8,12 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
 import re
 from types import MappingProxyType
 from typing import Any, Mapping
+
+from ..links import is_link
 
 # Used for both the run folder name and meta.timestamp, e.g. 2026-10-14-T15-30-02.
 TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
@@ -143,6 +146,26 @@ def load_yaml(text: str) -> Any:
     return safe_load(text)
 
 
+def _bundled_files(root: Path) -> list[Path]:
+    """A skill's files other than its own SKILL.md, relative to root and sorted, without hidden
+    ones, __pycache__ and node_modules. Linked folders are not entered. os.walk and rglob
+    would enter a Windows junction (links.py), and a few junctions that lead back into the
+    skill make that walk take practically forever."""
+    def listed(name: str) -> bool:
+        return not name.startswith(".") and name not in ("__pycache__", "node_modules")
+
+    files = []
+    for folder, dirs, names in os.walk(root):
+        here = Path(folder)
+        dirs[:] = [d for d in dirs if listed(d) and not is_link(here / d)]
+        files += [(here / name).relative_to(root) for name in names
+                  # The skill's own SKILL.md is `body`. One in a subfolder is a bundled
+                  # file like any other, copied to the agent and so checked.
+                  if (here, name) != (root, "SKILL.md") and listed(name)
+                  and (here / name).is_file()]
+    return sorted(files)
+
+
 @dataclass
 class Skill:
     """A skill loaded from disk. Every scoring module takes one of these."""
@@ -175,16 +198,7 @@ class Skill:
             name = str(name)
         if not isinstance(name, str) or not name.strip():
             name = path.name
-        skip = {"__pycache__", "node_modules"}
-        files = sorted(
-            f.relative_to(path)
-            for f in path.rglob("*")
-            if f.is_file()
-            # Only the skill's own SKILL.md, which is `body`: one in a subfolder is a
-            # bundled file like any other, copied to the agent and so checked.
-            and f.relative_to(path) != Path("SKILL.md")
-            and not any(p.startswith(".") or p in skip for p in f.relative_to(path).parts)
-        )
+        files = _bundled_files(path)
         return Skill(
             path=path,
             name=name,

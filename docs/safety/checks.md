@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "11"
+CHECKS_VERSION = "12"
 
 class ChecksBackend:
     name = "own-checks"
@@ -55,6 +55,8 @@ Added in `CHECKS_VERSION` 10. Each of these once left a command unscanned, with 
 Still not scanned: a file with neither a script or markdown suffix nor `#!`, such as a `Makefile` (which `make` runs), and hidden files and `node_modules`, which `Skill.load` leaves out.
 - **A file over `MAX_FILE_BYTES`** (1,000,000 bytes) is scanned up to that size and gets a CRITICAL `scan-limit` finding, as the rest is unknown ([Scan limits](#scan-limits)).
 - **A file that cannot be read** gets the same finding. One that is listed but no longer there is only noted.
+
+**Links are not followed** (version 12 for Windows junctions). A file that is a symlink or a junction, is reached through one, or leads outside the skill is not read; a link that leads outside the skill is a `bundle-symlink` finding. The same test (`metaskill/links.py`) keeps such files out of Cisco's scan copy, configuration evidence and the local warnings' file counts.
 
 ### Warning check
 

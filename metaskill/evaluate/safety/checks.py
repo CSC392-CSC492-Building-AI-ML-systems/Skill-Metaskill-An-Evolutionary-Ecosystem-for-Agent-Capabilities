@@ -19,20 +19,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from ...links import is_link, through_link
 from ..judge import mark_hidden
 from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "11"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
+CHECKS_VERSION = "12"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
                        # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
                        # and bounded clearing, so a hostile skill cannot stall the scan
                        # (MET-42). 9: fewer print-secret and echo-secret false positives
                        # (MET-69). 10: nothing the agent sees is skipped: undecodable bytes,
                        # SKILL.md's frontmatter, `---` blocks and oversized files (MET-62).
                        # 11: more forms of recursive delete; a confirmation must come before
-                       # the command, outside comments and strings (MET-63).
-                       # 6 to 8 were never released
+                       # the command, outside comments and strings (MET-63). 12: Windows
+                       # junctions are links (MET-66). 6 to 8 were never released
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -623,18 +624,18 @@ def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], 
     file that starts with `#!`, and a CRITICAL scan-limit finding for each one that could
     only be checked in part, or not at all.
 
-    Files that are symlinks are not read, so a link cannot make the check read
-    something outside the skill.
+    Files that are links, or reached through one (a symlink or a Windows junction), are
+    not read, so a link cannot make the check read something outside the skill.
     """
     files, unchecked = [("SKILL.md", skill.body.replace("\x00", ""))], []
     for rel in skill.files:
         rel = Path(rel)
         name, path = rel.as_posix(), Path(skill.path) / rel
         if (rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES
-                and not _has_shebang(path)):
+                and not _has_shebang(skill.path, path)):
             continue
         try:
-            if path.is_symlink():
+            if through_link(skill.path, path):
                 continue
             with path.open("rb") as stream:
                 raw = stream.read(MAX_FILE_BYTES + 1)
@@ -661,11 +662,11 @@ _SHEBANG = re.compile(r"\ufeff?\s*#!")
 _SHEBANG_BYTES = 256  # how far into a file it is looked for
 
 
-def _has_shebang(path: Path) -> bool:
+def _has_shebang(root: Path, path: Path) -> bool:
     """Whether a file with another suffix, or none, is a script all the same: it starts
     with `#!`, so it can be run by its name. Links are not read."""
     try:
-        if path.is_symlink() or not path.is_file():
+        if through_link(root, path) or not path.is_file():
             return False
         with path.open("rb") as stream:
             start = stream.read(_SHEBANG_BYTES).decode("utf-8", errors="replace")
@@ -2071,7 +2072,8 @@ def _created_links(units: list[_Unit]) -> set[str]:
 
 
 def _bundle_symlinks(skill: Skill) -> list[tuple[str, str]]:
-    """Symlinks inside the skill's folder that point outside it, as (path, link text)."""
+    """Links (symlinks and Windows junctions) inside the skill's folder that point outside
+    it, as (path, link text)."""
     root = Path(skill.path)
     if not root.is_dir():
         return []
@@ -2080,7 +2082,7 @@ def _bundle_symlinks(skill: Skill) -> list[tuple[str, str]]:
     for folder, dirs, files in os.walk(root, followlinks=False):
         for name in dirs + files:
             path = Path(folder) / name
-            if path.is_symlink():
+            if is_link(path):
                 resolved = os.path.realpath(path)
                 try:
                     inside = os.path.commonpath([real_root, resolved]) == real_root
@@ -2088,6 +2090,8 @@ def _bundle_symlinks(skill: Skill) -> list[tuple[str, str]]:
                     inside = False
                 if not inside:
                     found.append((path.relative_to(root).as_posix(), link_text(path)))
+        # os.walk does not follow symlinks, but it does walk into junctions.
+        dirs[:] = [d for d in dirs if not is_link(Path(folder) / d)]
     return found
 
 

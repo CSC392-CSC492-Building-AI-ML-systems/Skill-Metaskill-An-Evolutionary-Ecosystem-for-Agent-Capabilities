@@ -10,6 +10,7 @@ from pathlib import Path
 from ..generalize.config import PLACEHOLDER_PATTERN
 from ..generalize.detect import Action, Category, detect_file
 from ..generalize.inventory import InventoryError, load_inventory
+from ..links import through_link
 from .models import Dimension, Finding, Severity, Skill
 
 MAX_EVIDENCE = 1000
@@ -45,6 +46,10 @@ def collect_configuration_evidence(skill: Skill) -> ConfigurationEvidence:
     remaining = MAX_ANALYSIS_TOTAL_BYTES
     for source in inventory.files:
         if Path(source.path).suffix.lower() not in INSTRUCTION_SUFFIXES:
+            continue
+        # The inventory walks into Windows junctions, so a file may be outside the skill.
+        if Path(skill.path).is_dir() and through_link(skill.path, Path(skill.path) / source.path):
+            limited.append(source.path)
             continue
         size = len(source.text.encode("utf-8"))
         if size > MAX_ANALYSIS_FILE_BYTES:

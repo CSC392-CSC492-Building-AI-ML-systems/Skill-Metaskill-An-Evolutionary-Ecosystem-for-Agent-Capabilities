@@ -1183,7 +1183,7 @@ def test_real_confirmation_steps_still_count(tmp_path, body):
 
 
 def test_checks_version_was_bumped():
-    assert checks.CHECKS_VERSION == "11"
+    assert checks.CHECKS_VERSION == "12"
 
 
 
