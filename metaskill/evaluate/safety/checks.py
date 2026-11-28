@@ -961,6 +961,7 @@ def _hits(text: str, unit: _Unit, aliases: frozenset[str] = frozenset()) -> list
 
 _RM = re.compile(r"(?<![\w.-])rm\s+")
 _ASKS_FLAG = re.compile(r"-[A-Za-z]*[iI][A-Za-z]*")  # rm -i, -rI
+_RM_LETTERS = re.compile(r"-[dfirIRv]+")  # a group of GNU rm's own one-letter flags
 # rmtree(...) bare, as `from shutil import rmtree` leaves it, or on a module: `shutil` or a
 # name the file imports it as. Another object's rmtree (sftp.rmtree) is not this one.
 _RMTREE = re.compile(r"(?<![\w.])(?<!def )(?:(?P<module>[A-Za-z_]\w*)\s*\.\s*)?(?P<name>[A-Za-z_]\w*)\s*\(")
@@ -1135,6 +1136,25 @@ def _delete_args(text: str, start: int, end: int, prose: bool, path: str,
     return _args(text, end)
 
 
+def _rm_asks(flags: list[str]) -> bool:
+    """Whether rm with these flags asks before deleting. As GNU rm reads them, the last
+    of -i, -I, -f, --interactive and --force wins: `rm -ri -f` does not ask."""
+    asks = False
+    for flag in flags:
+        # Only a word of letters is a flag that asks: not text a quote joined to it.
+        flag = flag.rstrip("'\");,}")
+        if _RM_LETTERS.fullmatch(flag):
+            for letter in flag:
+                if letter in "iIf":
+                    asks = letter != "f"
+        elif flag in ("--force", "--interactive=never", "--interactive=no",
+                      "--interactive=none"):
+            asks = False
+        elif flag.startswith("--interactive") or _ASKS_FLAG.fullmatch(flag):
+            asks = True  # also PowerShell's -Confirm and -WhatIf
+    return asks
+
+
 def _deletes(text: str, prose: bool, path: str = "",
              aliases: frozenset[str] = frozenset()) -> list[_Hit]:
     hits = []
@@ -1158,11 +1178,8 @@ def _deletes(text: str, prose: bool, path: str = "",
             targets = ["(unspecified)"]  # "run `rm -rf` on the build folder", or piped to it
         if prose and not _in_inline_code(text, m.start()):
             targets = targets[:1]  # in plain prose only the next word can be the target
-        # Only a word of letters is a flag that asks: not text a quote joined to it.
-        interactive = any(f == "--interactive" or _ASKS_FLAG.fullmatch(f.rstrip("'\");,}"))
-                          for f in flags)
         hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
-                         f"rm {' '.join(flags)} {targets[0]}", interactive,
+                         f"rm {' '.join(flags)} {targets[0]}", _rm_asks(flags),
                          [(t, _follows(t)) for t in targets]))
 
     # A file's aliases are looked up per call, not searched for one by one in every line.
@@ -1655,11 +1672,25 @@ _CONFIRM = re.compile(
     r"|\b(?:make|take|create|keep)\s+(?:a\s+)?back[\s-]?up\b"
     r"|\bback\s+(?:it|them|everything)\s+up\b"
     r"|\bback\s+up\s+(?:your|the|all|everything|it|them|files|data|my|our|first|before)\b"
-    r"|\bread\s+-[a-zA-Z]*p\b"
+    # `read -p`, `read -r -p` and `read -t 10 -p`: flags, some with a value, before the p.
+    r"|\bread\s+(?:-[a-zA-Z]+\s+(?:(?:'[^']{0,20}'|\"[^\"]{0,20}\"|[^\s;&|<>'\"-][^\s;&|]{0,40})\s+)?){0,6}"
+    r"-[a-zA-Z]*p\b"
     r"|\binput\s*\([^)]*(?:y/n|\byes\b|\bsure\b|\bconfirm\b|\bproceed\b|\bcontinue\b|\[y)"
     r"|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b(?!:\$?(?:false|0)\b)|\bset\s+/p\b"
     r"|\bchoice\s+/[a-z]",
     re.I)
+# A question put to whoever runs the code, which a `read` or an `input()` then answers:
+# `echo "Delete? [y/N]"` followed by `read answer`. Neither is a confirmation alone.
+_PRINTS_QUESTION = re.compile(
+    r"\b(?:echo|printf|print|Write-Host|Write-Output)\b[^;&|\n]{0,80}?"
+    r"(?:are\s+you\s+sure|[\[(]\s*y(?:es)?\s*/\s*n"
+    r"|\b(?:sure|confirm|proceed|continue|delete|remove|wipe|overwrite|erase)\b[^\"'\n]{0,60}\?)",
+    re.I)
+# `read` as a command that waits for the user: not `while read`, not after a pipe, and
+# not from a file. `input()` with no prompt of its own.
+_READS_ANSWER = re.compile(
+    r"(?:\A|;|&&|(?<=\s)(?:then|do|if))\s*(?P<read>read)\b(?![^;&|\n]{0,200}<(?!\s*/dev/tty))"
+    r"|(?<![\w.])(?P<input>input)\s*\(\s*\)")
 # A confirmation phrase is ignored when the words just before it negate it.
 _NEGATION_REACH = 64  # > longest negation word (8) + the 30 characters after it
 _NEGATED_BEFORE = re.compile(
@@ -1788,8 +1819,35 @@ def _confirmations(unit: _Unit, line_index: int) -> int | None:
                     continue
             found = m.start()
             break
+        if unit.kind != "prose" and (answer := _answer(unit, line_index)) is not None:
+            found = answer if found is None else min(found, answer)
         unit.cache[key] = found
     return unit.cache[key]
+
+
+def _question_end(unit: _Unit, line_index: int) -> int | None:
+    """Where the first printed question on a line of code ends, if it prints one. Cached."""
+    key = ("question", line_index)
+    if key not in unit.cache:
+        line = unit.lines[line_index][1]
+        unit.cache[key] = next(
+            (m.end() for m in _PRINTS_QUESTION.finditer(line)
+             if _span_at(unit.path, line, m.start()) is None), None)
+    return unit.cache[key]
+
+
+def _answer(unit: _Unit, line_index: int) -> int | None:
+    """The column of the first `read` or `input()` on a line of code that answers a
+    question printed before it: earlier on the line, or in the lines just before."""
+    line = unit.lines[line_index][1]
+    asked = any(_question_end(unit, i) is not None
+                for i in range(max(0, line_index - CONFIRM_LOOKBACK), line_index))
+    here = _question_end(unit, line_index)
+    for m in _READS_ANSWER.finditer(line):
+        col = m.start("read" if m["read"] else "input")
+        if (asked or here is not None and here <= col) and _span_at(unit.path, line, col) is None:
+            return col
+    return None
 
 
 def _confirmed(unit: _Unit, line_index: int, col: int, previous: _Unit | None) -> bool:

@@ -204,7 +204,7 @@ What a static check cannot see is a symlink the user created on their own machin
 - In markdown: an earlier line of the same code block or paragraph, or the paragraph or list item directly before it.
 - In scripts: the 5 lines before it.
 
-In code blocks and scripts, a phrase inside a comment or a string does not count: it asks nothing of anyone (`# TODO: dry run support`, `echo 'Are you sure?'`). The step itself still does (`read -p`, `input('Delete? [y/N] ')`). Comments include `/* ... */` in JavaScript and `<# ... #>` in PowerShell. A delete in a JavaScript backtick string counts even if nothing is seen to run it, as such a string can span lines. Comments and strings are read one line at a time, so the inside of a multi-line string is not recognised as one.
+In code blocks and scripts, a phrase inside a comment or a string does not count: it asks nothing of anyone (`# TODO: dry run support`, `echo 'Are you sure?'` with nothing reading an answer). The step itself still does (`read -p`, `input('Delete? [y/N] ')`). Comments include `/* ... */` in JavaScript and `<# ... #>` in PowerShell. A delete in a JavaScript backtick string counts even if nothing is seen to run it, as such a string can span lines. Comments and strings are read one line at a time, so the inside of a multi-line string is not recognised as one.
 
 A backup that is only described, as in "**we** make a backup of the logs weekly", does not count either; "make a backup first" does.
 
@@ -213,7 +213,8 @@ Confirmation means an actual step, not just the word. Any of:
 - Asking: "ask the user **before/to confirm/for confirmation**" (asking about the action, not "ask the user for their favourite colour"), "confirm with the user", "get the user's approval", "wait for permission", "are you sure".
 - A dry run: "dry run", `--dry-run`, `-WhatIf`, `-n` on `git clean`.
 - A backup: "make a backup", "back up first", "back up your files", "back everything up" — "back up" needs an object, so "go back up one level" does not count.
-- Flags and code: `-i` or `--interactive` on `rm`, `read -p`, `confirm(`, `Read-Host`, `-Confirm` and `-WhatIf` (not with `:$false`), `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
+- Flags and code: `-i`, `-I` or `--interactive` on `rm` unless a later `-f` or `--force` overrides it, `read -p` (also `read -r -p`), `confirm(`, `Read-Host`, `-Confirm` and `-WhatIf` (not with `:$false`), `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
+- In code and scripts, a printed question and then its answer: `echo`, `printf`, `print`, `Write-Host` or `Write-Output` showing "are you sure", `[y/N]`, or a question about proceeding or deleting, followed by `read` or `input()` on the same line or within the 5 lines after. The `read` must come before the delete, and one that reads a loop, a pipe or a file does not count.
 
 At the `deep` tier, a delete or other destructive command cleared by one of these phrases is re-checked ([review.md](review.md)), in code and scripts as well as in prose; one cleared by a flag on the command itself (`rm -i`) is not. At most `MAX_CLEARED_PER_UNIT` matches in a code block or script are cleared this way; later ones are reported.
 

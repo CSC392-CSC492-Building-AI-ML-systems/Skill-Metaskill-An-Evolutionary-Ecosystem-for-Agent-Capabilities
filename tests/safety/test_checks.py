@@ -12,6 +12,11 @@ FIXTURES = Path(__file__).parent / "fixtures" / "skills"
 CRITICAL, HIGH, MEDIUM, LOW = Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW
 
 
+def _short_id(value):
+    """A test id short enough for Windows, where pytest puts it in an environment variable."""
+    return value[:30] if isinstance(value, str) else None
+
+
 def load(path):
     """Like Skill.load(), without needing Hermes' YAML loader for the frontmatter."""
     path = Path(path)
@@ -411,7 +416,7 @@ def test_code_matches_past_the_recheck_bound_are_reported(tmp_path):
     "rm -rf a; " * 190,
     "read -p x y; " * 150,
     "'" * 50_000 + " rm -rf ~",
-])
+], ids=_short_id)
 def test_many_matches_on_a_line_stay_quick(tmp_path, line):
     import time
     start = time.monotonic()
@@ -625,7 +630,10 @@ def test_curl_piped_through_sudo_with_arguments(tmp_path, sudo):
     ("a.py", "import " + "a, " * 100_000 + "\n"),
     ("a.sh", "'a' " * 20_000 + "x | xargs rm -r; " * 150 + "\n"),
     ("a.sh", '"x | xargs rm -r" ' * 20_000 + "\n"),
-])
+    ("a.sh", "if read x " * 40_000 + "\nrm -rf ~\n"),
+    ("a.sh", "echo " * 190 + "\n" + "; read x " * 40_000 + "\nrm -rf ~\n"),
+    ("a.sh", "read " + "-a " * 100_000 + "\nrm -rf ~\n"),
+], ids=_short_id)
 def test_review_inputs_cannot_stall_the_scan(tmp_path, name, text):
     skill = make(tmp_path, {name: text})
     start = time.monotonic()
@@ -1427,7 +1435,7 @@ def test_python_assignment_values_drop_comments_and_trailing_space(tmp_path):
     ("just under the line limit", ("rm -rf x " * (199) + "\n") * 100),
     ("space run in an assignment", "```\nx = a" + " " * 200_000 + "b\n```\n"),
     ("blank lines", "```\n" + "\n" * 200_000 + "```\n"),
-])
+], ids=_short_id)
 def test_hostile_input_cannot_stall_the_scan(tmp_path, name, body):
     # Each of these took minutes to hours before MET-42 (quadratic in the input).
     start = time.monotonic()
@@ -1632,3 +1640,62 @@ def test_a_quoted_frontmatter_key_gives_one_finding_at_its_line(tmp_path, key):
     skill = make(tmp_path, {"SKILL.md": f'---\nname: x\n{key}: "rm -rf ~/Documents"\n---\n'})
     skill.frontmatter = {"name": "x", "description": "rm -rf ~/Documents"}
     assert [f.location for f in scan(skill).findings] == ["SKILL.md:3"]
+
+
+ANSWERED_DELETE = "[[ $ans == y ]] || exit 1\nrm -rf ~/Documents"
+
+
+@pytest.mark.parametrize("asking", [
+    'read -r -p "Are you sure? [y/N] " ans',
+    'read -t 10 -p "Delete? " ans',
+    "read -r -d '' -p 'Delete? ' ans",
+    'echo "Are you sure? [y/N]"\nread ans',
+    'printf "Delete these files? "\nread -r ans',
+    'echo -n "Continue [y/N] " && read ans',
+    'echo "Proceed?"; read ans </dev/tty',
+])
+def test_a_question_and_its_answer_confirm_a_delete(tmp_path, asking):
+    assert prose(tmp_path, f"```bash\n{asking}\n{ANSWERED_DELETE}\n```").findings == []
+    assert script(tmp_path / "s", *asking.split("\n"), *ANSWERED_DELETE.split("\n")) == []
+
+
+@pytest.mark.parametrize("not_asking", [
+    'echo "Are you sure? [y/N]"',
+    "read ans",
+    'echo "Cleaning up"\nread ans',
+    '# echo "Are you sure?"\nread ans',
+    'msg=\'echo "Are you sure?"\'\nread ans',
+    'echo "Are you sure?"\n# read ans',
+    'echo "Are you sure?"\nwhile read f; do :; done',
+    'echo "Are you sure?"\nread ans < answers.txt',
+    'read ans\necho "Are you sure?"',
+])
+def test_a_question_or_a_read_alone_does_not_confirm(tmp_path, not_asking):
+    result = prose(tmp_path, f"```bash\n{not_asking}\n{ANSWERED_DELETE}\n```")
+    assert [f.severity for f in result.findings] == [CRITICAL]
+
+
+def test_an_answer_read_after_the_delete_does_not_confirm(tmp_path):
+    body = '```bash\necho "Are you sure?"\nrm -rf ~/Documents; read ans\n```'
+    assert [f.severity for f in prose(tmp_path, body).findings] == [CRITICAL]
+
+
+def test_a_printed_question_answered_by_input_confirms(tmp_path):
+    body = ("```python\nprint('Delete everything? [y/N]')\nif input() == 'y':\n"
+            "    shutil.rmtree(Path.home())\n```")
+    assert prose(tmp_path, body).findings == []
+
+
+@pytest.mark.parametrize("command", [
+    "rm -ri -f", "rm -r -i -f", "rm -rif", "rm -i -r --force", "rm -r --interactive=never",
+])
+def test_a_later_force_overrides_asking(tmp_path, command):
+    assert code(tmp_path, f"{command} ~/Documents") == [CRITICAL]
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rfi", "rm -rf -i", "rm -f -r -I", "rm -r --force --interactive",
+    "rm -r --interactive=always",
+])
+def test_asking_set_last_still_confirms(tmp_path, command):
+    assert code(tmp_path, f"{command} ~/Documents") == []
