@@ -27,18 +27,25 @@ installed). Set it to `"static"`, the default tier, to make no extra calls.
   checks need the deadline kept, the right to terminate not listed as an obligation, and the
   `should` not hardened into a `must`.
 
-A rule can be shown on the line or by the heading above it: `- Move to weekly releases` passes
-under "Proposals", and a right to terminate passes under "Rights". The missing owner of the pricing
-page has to be in the owner column of a table, after an `owner:` label, or said in words such as
-"unassigned"; `unresolved` elsewhere on the line does not count.
+The checks match text, so they are approximate. A proposal can be marked on its line (`consider`,
+`no decision`) or by the heading just above it ("Proposals"; not "Proposed tasks", which lists things
+to do). A right to terminate can be shown by "may", "if" or a "Rights" heading, on any line about
+it, as long as no other line orders it. The report's "should" needs to appear on one line about the
+report, with none saying it is required. The missing owner of the pricing page has to be in a
+table's owner column, after an `owner:` label, or said in words such as "unassigned". A layout the
+checks do not expect, such as a proposal two headings deep, can fail although it is correct.
 
 The checks are all deterministic. An LLM checklist is not used here: the judge sees only the agent's
 reply, not the file it wrote, so a checklist about `actions.md` cannot be met and fails every run.
 
 ## What to expect
 
-Without a skill the agent tends to give every item an owner and turn every clause into a duty,
-so the baseline should fail the checks. The scores of the two skills will tell you which one's rules
-the checks reward more. Read them as a comparison on these two tasks, not as a ranking of the skills.
-Every skill still needs a Config Cleanliness score to get an overall, so the ranking itself
-stays blank (see the open issues on evaluate UX).
+On one run with `gpt-5.4-nano` (2 runs of each task, with and without each skill), every output kept
+the first five rules, with or without a skill. Only the report's "should" told them apart:
+`document-to-action-items` kept it in both runs, while `meeting-action-items` and every run without
+a skill turned it into a duty. So `meeting-notes` does not separate the skills on that model. A
+stronger or weaker model may differ.
+
+Read the scores as a comparison on these two tasks, not as a ranking of the skills. Every skill still
+needs a Config Cleanliness score to get an overall, so the ranking itself stays blank (see the open
+issues on evaluate UX).
