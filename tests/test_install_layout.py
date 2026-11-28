@@ -68,7 +68,7 @@ def _generalize(tmp_path, with_addon: bool) -> dict:
 def test_generalize_loads_when_installed_as_a_package(tmp_path):
     result = _generalize(tmp_path, with_addon=False)
     # "not implemented yet" would mean the generalize entry point failed to import.
-    assert result["status"] == "partial", result
+    assert result["status"] == "ok", result
     assert result["detectors"] == ["regex"]
     assert result["counts"]["by_category"] == {"email": 1}
     assert "metaskill-laya" in result["note"]
@@ -76,7 +76,7 @@ def test_generalize_loads_when_installed_as_a_package(tmp_path):
 
 def test_addon_reaches_core_when_both_are_installed(tmp_path):
     result = _generalize(tmp_path, with_addon=True)
-    assert result["status"] == "partial", result
+    assert result["status"] == "ok", result
     assert "note" not in result  # core saw the add-on's registration
     [warning] = result["warnings"]
     assert warning.startswith("laya detector failed (LayaError): METASKILL_LAYA_MODEL is set")

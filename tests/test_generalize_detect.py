@@ -351,6 +351,8 @@ def test_reference_and_value_are_told_apart():
     ("ds_config.yaml", "allgather_bucket_size: 5e8"),  # a setting about buckets
     ("run.sh", "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH"),
     ("config.yaml", "model_path: /path/to/model.gguf"),
+    ("config.toml", 'backend.host = "imap.gmail.com"'),  # a provider's public endpoint
+    ("config.toml", 'message.send.backend.host = "smtp.mail.me.com"'),
 ])
 def test_not_configuration(path, text):
     assert values(path, text, Category.CONFIGURATION) == []
