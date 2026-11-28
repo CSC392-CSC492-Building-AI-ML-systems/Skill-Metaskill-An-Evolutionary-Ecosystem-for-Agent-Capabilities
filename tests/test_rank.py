@@ -14,7 +14,12 @@ from metaskill.evaluate.models import (
     Severity,
     SkillResult,
     Status,
+    JudgeType,
+    Metrics,
+    TestResult,
+    Variant,
 )
+from metaskill.evaluate import quality, robustness
 from metaskill.evaluate import rank as rank_module
 from metaskill.evaluate.rank import table
 
@@ -37,7 +42,7 @@ def make_scores(dimension_scores):
     return rank_module.make_scores(dimension_scores, CONFIG)
 
 
-def result(name, lift=0.0, dimensions=None, findings=(), **scores):
+def result(name, lift=0.0, dimensions=None, findings=(), tests=(), **scores):
     """A SkillResult with every dimension at 0.5 unless given; None leaves one out."""
     found = {**{d.value: 0.5 for d in Dimension}, **scores}
     return SkillResult(
@@ -45,8 +50,18 @@ def result(name, lift=0.0, dimensions=None, findings=(), **scores):
         scores=Scores(overall=None, **found),
         lift=lift,
         dimensions=dimensions or {},
+        tests=list(tests),
         findings=list(findings),
     )
+
+
+def task_run(n, passed, variant=Variant.WITH_SKILL, output="same output"):
+    return TestResult(
+        task_id="t", description="d", variant=variant, run=n,
+        judge=JudgeType.DETERMINISTIC, passed=passed, score=1.0 if passed else 0.0,
+        reason="ok" if passed else "check 'tests pass' failed",
+        metrics=Metrics(tool_calls=4, llm_calls=5), output=output)
+
 
 
 # --- overall --------------------------------------------------------------
@@ -473,6 +488,89 @@ def test_make_scores_and_rank_agree_on_overall():
     scores = make_scores(dimension_scores)
     entry = rank([SkillResult("a", scores, 0.0)]).ranked[0]
     assert entry.overall == pytest.approx(scores.overall)
+
+
+def test_make_scores_and_rank_agree_on_overall_with_runs():
+    tests = [task_run(1, True), task_run(2, False), task_run(1, False, Variant.BASELINE)]
+    dimension_scores = {d: DimensionScore(d, v) for d, v in
+                        zip(Dimension, (0.9, 0.2, 0.4, 0.7, 0.1, 0.6))}
+    scores = rank_module.make_scores(dimension_scores, CONFIG, tests)
+    entry = rank([SkillResult("a", scores, 0.0, tests=tests)]).ranked[0]
+    assert entry.overall == pytest.approx(scores.overall)
+
+
+# --- Robustness counts scaled by the with-skill pass rate (MET-60) ---------
+
+
+def test_robustness_counts_scaled_by_the_with_skill_pass_rate():
+    found = {**ALL, Dimension.ROBUSTNESS: 0.8}
+    assert rank_module.overall(found, DEFAULT_WEIGHTS, pass_rate=0.5) == pytest.approx(
+        overall({**ALL, Dimension.ROBUSTNESS: 0.4}))
+    # Without runs there is no pass rate, and Robustness counts as it is.
+    assert rank_module.overall(found, DEFAULT_WEIGHTS) == pytest.approx(overall(found))
+
+
+def test_with_skill_pass_rate_ignores_the_baseline():
+    tests = [task_run(1, True), task_run(2, False), task_run(1, True, Variant.BASELINE)]
+    assert rank_module.with_skill_pass_rate(tests) == 0.5
+    assert rank_module.with_skill_pass_rate([task_run(1, True, Variant.BASELINE)]) is None
+
+
+def test_failing_the_same_way_every_run_does_not_outrank_a_skill_that_mostly_works():
+    """The MET-60 repro: A fails every run the same way, B passes two of three."""
+    base = [task_run(n, False, Variant.BASELINE) for n in (1, 2, 3)]
+    runs = {"A broken": [task_run(n, False) for n in (1, 2, 3)] + base,
+            "B 2/3": [task_run(1, True), task_run(2, True),
+                      task_run(3, False, output="other")] + base}
+    w = DEFAULT_WEIGHTS
+    share = {}
+    for name, tests in runs.items():
+        q = quality.assess(tests, task_ids=["t"], runs_per_task=3).dimension_score.value
+        r = robustness.score_from_runs(tests, runs_per_task=3, task_ids=["t"]).value
+        credit = rank_module.robustness_credit(r, rank_module.with_skill_pass_rate(tests))
+        share[name] = (w[Dimension.QUALITY] * q + w[Dimension.ROBUSTNESS] * credit) / 15
+    assert robustness.score_from_runs(runs["A broken"], runs_per_task=3).value == 1.0
+    assert share["A broken"] == 0.0
+    assert share["B 2/3"] > share["A broken"]
+    # And in the ranking, all else equal, including Efficiency.
+    ranking = rank([result(name, tests=tests, quality=quality.assess(
+                        tests, task_ids=["t"], runs_per_task=3).dimension_score.value,
+                        robustness=robustness.score_from_runs(
+                            tests, runs_per_task=3).value)
+                    for name, tests in runs.items()])
+    assert [e.result.name for e in ranking.ranked] == ["B 2/3", "A broken"]
+
+
+def test_a_reduced_robustness_credit_is_noted():
+    tests = [task_run(1, True), task_run(2, False)]
+    [entry] = rank([result("a", tests=tests, robustness=0.6)]).ranked
+    assert any("Robustness 0.60 counts toward overall as 0.30" in n and "(0.50)" in n
+               for n in entry.notes)
+    [full] = rank([result("b", tests=[task_run(1, True), task_run(2, True)])]).ranked
+    assert not any("counts toward overall" in n for n in full.notes)
+
+
+def test_the_reviewers_example_lowers_overall_by_0_036():
+    """Pass rate 0.8 with Robustness 0.9: 3 x 0.9 x 0.2 / 15 off overall (evaluate.md 5.1)."""
+    found = {**ALL, Dimension.ROBUSTNESS: 0.9}
+    drop = overall(found) - rank_module.overall(found, DEFAULT_WEIGHTS, pass_rate=0.8)
+    assert drop == pytest.approx(0.036)
+
+
+def test_reports_record_the_overall_formula_version():
+    """The config hash covers the weights, not the formula, so the version is recorded
+    on its own: overall from version 1 and version 2 reports does not compare."""
+    from metaskill.evaluate.models import OVERALL_VERSION, ReportMeta
+    meta = EvaluationConfig().to_meta("t", ["a"], "", "2")
+    assert meta.overall_version == OVERALL_VERSION == "2"
+    assert ReportMeta.from_dict(meta.to_dict()).overall_version == OVERALL_VERSION
+    # A report written before the version was recorded loads with it unknown.
+    old = {k: v for k, v in meta.to_dict().items() if k != "overall_version"}
+    assert ReportMeta.from_dict(old).overall_version == ""
+    text = rank_module.markdown(meta, rank([result("a")]))
+    assert f"- Overall formula version: {OVERALL_VERSION}" in text
+    meta.overall_version = ""
+    assert "- Overall formula version: unknown" in rank_module.markdown(meta, rank([result("a")]))
 
 
 def test_table():

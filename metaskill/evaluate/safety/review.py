@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import random
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -17,6 +18,7 @@ from ..judge import Judge, JudgeError, JudgeUnavailable, strip_hidden
 from ..models import Dimension, Finding, SafetyTier, Skill
 from .checks import SkippedWarning, skipped_warnings
 from .findings import BackendResult, BackendStatus, SEVERITY_RANK
+from ..threads import map_in_context, submit
 
 NAME = "llm-review"
 # Skipped matches sent in one re-check, most severe first; the rest are reported as not
@@ -217,21 +219,28 @@ class ReviewBackend:
         if self.judge is None:
             return BackendResult(self.name, BackendStatus.LLM_UNAVAILABLE, SafetyTier.STATIC,
                                  detail="no Hermes LLM access (ctx.llm), so the review did not run")
-        try:
-            result = self.judge.review(skill, CATEGORIES, dimension=Dimension.SAFETY,
-                                       source=self.name, instructions=INSTRUCTIONS)
-        except JudgeUnavailable as e:
-            return BackendResult(self.name, BackendStatus.LLM_UNAVAILABLE, SafetyTier.STATIC,
-                                 detail=f"no judge available: {e}")
-        except Exception as e:  # JudgeError or anything else: never raise into the caller
-            return BackendResult(self.name, BackendStatus.ERROR, tier,
-                                 detail=f"{type(e).__name__}: {e}")
+        # The re-check does not read the review's answer, so both are asked at once: one
+        # model round-trip rather than up to three in turn. Its answer is only used when the
+        # review succeeds, as before. When the review fails, the re-check is still waited
+        # for (leaving the `with`), and its calls are paid for: a call in flight cannot be
+        # taken back, and one left running would add to the usage after it was reported.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="metaskill-recheck") as ex:
+            recheck = submit(ex, self._recheck, skill)
+            try:
+                result = self.judge.review(skill, CATEGORIES, dimension=Dimension.SAFETY,
+                                           source=self.name, instructions=INSTRUCTIONS)
+            except JudgeUnavailable as e:
+                return BackendResult(self.name, BackendStatus.LLM_UNAVAILABLE, SafetyTier.STATIC,
+                                     detail=f"no judge available: {e}")
+            except Exception as e:  # JudgeError or anything else: never raise into the caller
+                return BackendResult(self.name, BackendStatus.ERROR, tier,
+                                     detail=f"{type(e).__name__}: {e}")
 
         notes = _review_notes(result)
         findings = list(result.findings)
         status, result_tier = BackendStatus.OK, tier
         try:
-            restored, note, reliable = self._recheck(skill)
+            restored, note, reliable = recheck.result()
             findings += restored
             if note:
                 notes.append(note)
@@ -261,18 +270,31 @@ class ReviewBackend:
         restored: list[Finding] = []
         notes: list[str] = []
         reliable = True
-        for cfg, kind in ((_WARNING_CHECK, "warning"), (_CONFIRMATION_CHECK, "confirmation")):
-            group = [w for w in skipped if w.kind == kind]
-            if not group:
-                continue
+        groups = [(cfg, [w for w in skipped if w.kind == kind])
+                  for cfg, kind in ((_WARNING_CHECK, "warning"), (_CONFIRMATION_CHECK, "confirmation"))]
+        groups = [(cfg, group) for cfg, group in groups if group]
+
+        def checked(cfg: _CheckConfig, group: list[SkippedWarning]) -> Any:
             try:
-                found, note, ok = self._recheck_group(group, cfg)
-            except Exception as e:  # e.g. JudgeUnavailable or a timeout on this call
-                # Keep this group's matches cleared and keep any earlier group's restored
+                return self._recheck_group(group, cfg)
+            except Exception as e:  # reported below, in the groups' order
+                return e
+
+        # The two kinds are separate calls that do not read each other: asked at once.
+        if len(groups) > 1:
+            with ThreadPoolExecutor(max_workers=len(groups),
+                                    thread_name_prefix="metaskill-recheck") as ex:
+                answers = map_in_context(ex, lambda pair: checked(*pair), groups)
+        else:
+            answers = [checked(cfg, group) for cfg, group in groups]
+        for (cfg, _), answer in zip(groups, answers):
+            if isinstance(answer, Exception):  # e.g. JudgeUnavailable or a timeout on this call
+                # Keep this group's matches cleared and keep the other group's restored
                 # findings, rather than letting one failed call discard the other's results.
-                notes.append(f"{cfg.purpose} did not run ({type(e).__name__}); its matches stay cleared")
+                notes.append(f"{cfg.purpose} did not run ({type(answer).__name__}); its matches stay cleared")
                 reliable = False
                 continue
+            found, note, ok = answer
             restored += found
             if note:
                 notes.append(note)

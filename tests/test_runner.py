@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,7 +126,8 @@ def test_every_task_runs_n_times_per_variant(skill, run_dir):
         for variant in (Variant.WITH_SKILL, Variant.BASELINE)
         for n in (1, 2, 3)
     ]
-    assert [c.skill for c in agent.calls[:6]] == ["cleanup"] * 3 + [None] * 3
+    # Sessions may start in any order when they run in parallel; the results above may not.
+    assert sorted(c.skill or "" for c in agent.calls) == [""] * 6 + ["cleanup"] * 6
 
 
 def test_runs_are_judged_and_measured(skill, run_dir):
@@ -222,12 +224,16 @@ def test_a_task_that_lost_every_run_is_a_robustness_error(skill, run_dir):
 
 
 def test_one_lost_run_is_a_robustness_error(skill, run_dir):
-    calls = []
+    with_skill, lock = [], threading.Lock()
 
     def fails_once(prompt, skill, workdir):
-        calls.append(skill)
-        if skill is not None and len(calls) == 2:  # the second with_skill run
-            raise JudgeError("docker went away")
+        # The second with_skill session to start, whatever order parallel runs start in.
+        if skill is not None:
+            with lock:
+                with_skill.append(skill)
+                second = len(with_skill) == 2
+            if second:
+                raise JudgeError("docker went away")
         return writes_report_with_skill(prompt, skill, workdir)
 
     result = run_tasks(skill, [task()], FakeAgent(fails_once), config=config(runs=3),
@@ -392,8 +398,9 @@ def test_exit_code_checks_run_in_the_runs_workspace(skill, run_dir):
     with_skill, baseline = result.tests
     assert with_skill.passed and not baseline.passed
     assert baseline.reason == "`python test.py` exited 1, expected 0: AssertionError"
-    # Run in the workspace the agent ran in, after the agent, before it is closed.
-    assert sandbox.commands == [("python test.py", ["report.txt"]), ("python test.py", [])]
+    # Run in the workspace the agent ran in, after the agent, before it is closed. Runs can
+    # overlap (max_parallel_runs), so the commands are compared as a set of what each saw.
+    assert sorted(sandbox.commands) == [("python test.py", []), ("python test.py", ["report.txt"])]
     assert result.errors == []
 
 
@@ -503,7 +510,9 @@ def test_with_skill_runs_get_the_skill_in_skill_dir_and_baselines_none(skill, ru
     sandbox = FakeSandbox()
     run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
               sandbox=sandbox)
-    with_skill, baseline = sandbox.opened
+    # Both runs start at once (max_parallel_runs), so either may open its workspace first.
+    [with_skill] = [w for w in sandbox.opened if w.skill]
+    [baseline] = [w for w in sandbox.opened if w is not with_skill]
     skill_md = (skill.path / "SKILL.md").read_bytes()
     assert with_skill.skill == {
         "/tmp/skill": {"SKILL.md": skill_md, "notes.md": b"\x00binary"},
@@ -563,7 +572,8 @@ def test_links_in_the_skill_are_not_copied(skill, run_dir, tmp_path, make_link):
     sandbox = FakeSandbox()
     run_tasks(skill, [task()], FakeAgent(), config=config(runs=1), run_dir=run_dir,
               sandbox=sandbox)
-    assert sandbox.opened[0].skill == {
+    [with_skill] = [w for w in sandbox.opened if w.skill]  # runs open in either order
+    assert with_skill.skill == {
         "/tmp/skill": {"SKILL.md": (skill.path / "SKILL.md").read_bytes()}}
     # The log says what was left out, so a run that needed it is not a mystery.
     logs = run_dir / "cleanup" / "logs"

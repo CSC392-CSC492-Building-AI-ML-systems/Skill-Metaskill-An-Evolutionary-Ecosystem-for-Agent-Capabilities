@@ -55,6 +55,7 @@ Furthermore, `evaluate` and `rank` requests (section 7) will be stored in their 
 
 - `ranked-evaluation.md` has, for each skill whose tasks ran, a task table: each task's pass rate with and without the skill, the mean tokens, LLM calls and tool calls per variant, the reason for each failed run (cleaned and capped), a note of runs that could not be made, and the log folder above. A call without tasks has no such section ([evaluate/rank.md](evaluate/rank.md) 5).
 - The task agent's limits are settings, `agent_max_iterations` (model turns, default 30) and `agent_timeout` (seconds per session, default 600), in the config ([evaluate/models.md](evaluate/models.md)). They are part of the config hash, since a lower limit can turn a pass into a failure.
+- A skill's task sessions run `max_parallel_runs` at a time (default 16, capped at what Docker has room for), with the same results, in the same order, as one at a time; a provider rate limit pauses them all and the limited session is run again ([evaluate/runner.md](evaluate/runner.md) 2.7). Ctrl-C does not stop an evaluation (Hermes runs `/metaskill` in its gateway and does not pass the interrupt on); `/metaskill stop` does, from the same or another Hermes session of the profile: no new session starts, every container still open is removed, and no report is written ([evaluate/runner.md](evaluate/runner.md) 2.7). Clarity, Safety and Config Cleanliness, which do not read the runs, are scored on a background thread while the sessions run.
 - `[timestamp]` is simply the time the skill was invoked (written as YYYY-MM-DD-T(Hour)-Minute-Seconds).
 - Reports are kept. Nothing is deleted or overwritten automatically.
 - Every ranking is computed fresh. `rank` evaluates the skills it is given in one run and never reads earlier reports or reuses earlier results, so all skills in a ranking are scored under the same settings. Old reports are a record only.
@@ -78,6 +79,7 @@ The structures below are defined in `models.py`. The Markdown report presents th
 | `scanner_version` | Version of the external safety scanner; empty if it did not run |
 | `checks_version` | Version of our own safety rule set ([evaluate-safety.md](evaluate-safety.md), section 3.2) |
 | `clarity_rubric_version` | Version of the Clarity rubric (`clarity.RUBRIC_VERSION`); ratings from different versions do not compare ([evaluate-clarity.md](evaluate-clarity.md), section 1) |
+| `overall_version` | Version of the `overall` formula (`models.OVERALL_VERSION`, section 5.1); `overall` from different versions does not compare, even under the same `config` hash |
 
 **Per skill.** Name, the six dimension scores plus `overall`, `lift` (section 4.1; `null` if no tasks ran), a status for each dimension (`dimensions`), and four lists: `tests`, `rubric`, `findings` and `local_warnings`.
 
@@ -153,7 +155,8 @@ Example (abridged):
     "safety_tier": "static",
     "scanner_version": "...",
     "checks_version": "...",
-    "clarity_rubric_version": "3"
+    "clarity_rubric_version": "3",
+    "overall_version": "2"
   },
   "skills": [{
     "name": "gcp-file-transfer",
@@ -319,7 +322,14 @@ Code: `rank.py`, documented in [evaluate/rank.md](evaluate/rank.md).
 
 ```
 overall = sum(weight[d] * score[d]) / sum(weight[d])     # divided by 15 with the defaults
+score[robustness] = robustness × with-skill pass rate     # in overall only (MET-60)
 ```
+
+Robustness measures consistency, not correctness: a skill that fails every run the same way scores Robustness `1.0`. With the same weight as Quality, that would outweigh Quality's penalty, and a skill that never works could rank above one that works most of the time. So in `overall`, Robustness counts scaled by the share of with-skill runs that passed: consistency only earns ranking credit for runs that work. The report's `robustness` score, and the tie-break on it (5.2), stay the plain consistency measure, and a ranked skill whose credit was reduced gets a note saying so. With no with-skill runs there is no pass rate, and Robustness counts as it is; it cannot have been scored then.
+
+**[PROPOSED]** This counts correctness twice more in `overall`: Quality is already built from the pass rate, and the scaled Robustness now depends on it too. A pass rate below 1 therefore costs more than before. For example, a pass rate of 0.8 with Robustness 0.9 lowers `overall` by `3 × 0.9 × 0.2 / 15 = 0.036` against the unscaled formula. The scaling was the fix MET-60 suggested, but it sits on Robustness terms that are themselves still proposed ([evaluate-robustness.md](evaluate-robustness.md)), so the team should agree to it (open question 5).
+
+The formula is versioned apart from the config: `models.OVERALL_VERSION` (now `2`; `1` was the plain weighted mean) is recorded in every report as `overall_version`. The config hash covers the weights but not the formula, so two reports with the same config hash but different versions give different `overall` for the same runs whenever the pass rate is below 1, and must not be compared on it. Bump the version whenever the formula changes.
 
 The weights are relative, not fractions: they are divided by their sum, so only their ratios matter. They live in `EvaluationConfig.weights` and are part of the config hash, so a report records which weights produced it. Both `rank.make_scores`, which writes `overall` into the report, and `rank.rank`, which orders the skills, take the config and read its weights, so the stored `overall` and the order always come from the same weights.
 
@@ -418,6 +428,7 @@ The tool's response goes into the agent's context, so it holds the table with it
 2. How close two `overall` scores must be to count as a tie, so lift decides. The runner reduces variance (every run starts from the same files, each task runs `n` times) but does not compute a spread; mean and spread come from the quality and robustness modules (section 4.5), which do not report a spread `rank.py` could use yet. Until they do, scores are compared at 9 decimal places. Options: keep that, compare at the 2 displayed decimals, or count scores within the measured spread as tied once it exists.
 3. The weights of `overall` (section 5.1). The current defaults, safety 4, quality and robustness 3, clarity and efficiency 2, configuration cleanliness 1, are in use but may still change.
 4. How we measure the accuracy of an evaluation as a whole: whether a skill's scores, and the order of a ranking, match what a careful human reviewer would conclude. Parts of it are covered: safety detection ([evaluate-safety.md](evaluate-safety.md), section 7), and judge agreement and detection against reviewed labels ([the golden dataset](evaluation/golden_dataset.md)). Nothing yet says what accuracy means for `overall` or the order. To decide: what the reference is (e.g. reviewed scores, or a reviewed order for a set of skills), what is measured (e.g. distance from reviewed scores, rank correlation, whether the top skill agrees), how many skills that takes, and what result is good enough, chosen before looking at the results.
+5. Whether Robustness should count scaled by the with-skill pass rate in `overall` (section 5.1, MET-60). It is in use, as `overall_version` 2, but it counts correctness in both Quality and Robustness. Options: keep it; give Robustness less weight instead and leave it unscaled; or scale only the outcome term inside Robustness, so the output and method agreements still count for failing runs.
 
 ### Answered
 

@@ -22,6 +22,13 @@ TIMESTAMP_FORMAT = "%Y-%m-%d-T%H-%M-%S"
 DISK_SIZE = re.compile(r"[1-9][0-9]*[kmg]")
 DEFAULT_AGENT_MAX_ITERATIONS = 30  # model turns per task session
 DEFAULT_AGENT_TIMEOUT = 600.0  # seconds per task session
+# Task sessions run at once (runner.md 2.7). A session is mostly waiting on the model (about
+# 21 s of work per run, ~1 s of it Docker), so this sets the wall time. Runs finish in
+# waves of this many, each as long as its slowest run: 30 runs took 668 s one at a time,
+# 308 s at 2 and 85 s at 10 (3 waves); 16 makes that 2 waves. A rate limit pauses and
+# retries, and the runner caps it at what Docker can hold.
+DEFAULT_MAX_PARALLEL_RUNS = 16
+MAX_PARALLEL_RUNS = 16
 SANDBOX_MEMORY = "512m"  # the sandbox's memory limit, which its run folder counts against
 
 
@@ -90,6 +97,12 @@ DEFAULT_WEIGHTS: Mapping[Dimension, float] = MappingProxyType({
     Dimension.EFFICIENCY: 2,
     Dimension.CONFIG_CLEANLINESS: 1,
 })
+
+# Version of the overall formula (evaluate.md 5.1), recorded as ReportMeta.overall_version.
+# The config hash covers the weights, not the formula, so bump this whenever the formula
+# changes: overall from different versions does not compare. 1: plain weighted mean of the
+# six dimensions. 2: Robustness scaled by the with-skill pass rate (MET-60).
+OVERALL_VERSION = "2"
 
 
 def check_weights(weights: Mapping[Dimension, float]) -> None:
@@ -211,6 +224,13 @@ class EvaluationConfig:
     # whole session. They change what an agent can finish, so they are part of the hash.
     agent_max_iterations: int = DEFAULT_AGENT_MAX_ITERATIONS
     agent_timeout: float = DEFAULT_AGENT_TIMEOUT
+    # Task sessions of one skill run at once (runner.md 2.7). The results are the same as one
+    # at a time, so it is not part of the hash.
+    max_parallel_runs: int = DEFAULT_MAX_PARALLEL_RUNS
+    # Start Hermes for the next sessions ahead of them (hermes_agent.md, warm start), saving
+    # each session the ~2 s Hermes takes to import, at the cost of up to max_parallel_runs
+    # idle Hermes processes. Timing only, so not part of the hash.
+    prewarm_agents: bool = True
 
     def __post_init__(self) -> None:
         if self.runs_per_task < 1:
@@ -240,6 +260,12 @@ class EvaluationConfig:
                 f"agent_timeout must be a number of seconds > 0, got {self.agent_timeout!r}")
         # 600 and 600.0 are the same limit, so they must be the same in the hash.
         self.agent_timeout = float(self.agent_timeout)
+        if (isinstance(self.max_parallel_runs, bool) or not isinstance(self.max_parallel_runs, int)
+                or not 1 <= self.max_parallel_runs <= MAX_PARALLEL_RUNS):
+            raise ValueError(f"max_parallel_runs must be an integer from 1 to "
+                             f"{MAX_PARALLEL_RUNS}, got {self.max_parallel_runs!r}")
+        if not isinstance(self.prewarm_agents, bool):
+            raise ValueError(f"prewarm_agents must be true or false, got {self.prewarm_agents!r}")
         check_weights(self.weights)
 
     def hash(self) -> str:
@@ -247,11 +273,14 @@ class EvaluationConfig:
 
         output_dir is left out, since where reports are written does not change them, and so
         is where the task file is: the tasks themselves are what change scores, and the same
-        file read from another folder is the same tasks.
+        file read from another folder is the same tasks. max_parallel_runs and prewarm_agents
+        are left out too: they change how long the runs take, not what they give.
         """
         settings = self.to_dict()
         del settings["output_dir"]
         del settings["tasks_path"]
+        del settings["max_parallel_runs"]
+        del settings["prewarm_agents"]
         encoded = json.dumps(settings, sort_keys=True).encode()
         return hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -267,6 +296,7 @@ class EvaluationConfig:
             scanner_version=scanner_version,
             checks_version=checks_version,
             clarity_rubric_version=clarity_rubric_version,
+            overall_version=OVERALL_VERSION,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -286,6 +316,8 @@ class EvaluationConfig:
             "agent_provider": self.agent_provider,
             "agent_max_iterations": self.agent_max_iterations,
             "agent_timeout": self.agent_timeout,
+            "max_parallel_runs": self.max_parallel_runs,
+            "prewarm_agents": self.prewarm_agents,
         }
 
     @classmethod
@@ -306,6 +338,8 @@ class EvaluationConfig:
             agent_provider=data.get("agent_provider", ""),
             agent_max_iterations=data.get("agent_max_iterations", DEFAULT_AGENT_MAX_ITERATIONS),
             agent_timeout=data.get("agent_timeout", DEFAULT_AGENT_TIMEOUT),
+            max_parallel_runs=data.get("max_parallel_runs", DEFAULT_MAX_PARALLEL_RUNS),
+            prewarm_agents=data.get("prewarm_agents", True),
         )
         if "weights" in data:
             config.weights = {
@@ -414,6 +448,9 @@ class ReportMeta:
     clarity_rubric_version: str = ""  # clarity.RUBRIC_VERSION; ratings across versions differ
     # The evaluation plan the run used (plans.py); empty, and left out of to_dict(), without one.
     plan_id: str = ""
+    # OVERALL_VERSION; empty in reports written before it was recorded. overall from
+    # different versions does not compare, even with the same config hash.
+    overall_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -429,6 +466,7 @@ class ReportMeta:
             "agent_model": self.agent_model,
             "judge_usage": dict(self.judge_usage),
             "clarity_rubric_version": self.clarity_rubric_version,
+            "overall_version": self.overall_version,
         }
 
     @classmethod
@@ -447,6 +485,7 @@ class ReportMeta:
             judge_usage=dict(data.get("judge_usage") or {}),
             clarity_rubric_version=data.get("clarity_rubric_version", ""),
             plan_id=data.get("plan_id", ""),
+            overall_version=data.get("overall_version", ""),
         )
 
 
