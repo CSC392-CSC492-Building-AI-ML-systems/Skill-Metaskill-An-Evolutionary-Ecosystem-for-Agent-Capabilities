@@ -11,6 +11,7 @@ Standard library only (ctypes). Import it on Windows only.
 from __future__ import annotations
 
 import ctypes
+import threading
 from ctypes import wintypes
 
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
@@ -87,20 +88,28 @@ def _kernel32():
 
 
 class Job:
-    """A kill-on-close job with one process assigned. `contain` makes one."""
+    """A kill-on-close job with one process assigned. `contain` makes one.
+
+    Thread-safe: HermesAgent.cancel() kills a session's job from one thread while that
+    session's own thread may be closing it. Without the lock, kill() could use the handle
+    value just after close() freed it, when Windows may have given it to a new job (another
+    session's) in the same process."""
 
     def __init__(self, kernel32, handle: int):
         self._k, self._handle = kernel32, handle
+        self._lock = threading.Lock()
 
     def kill(self) -> bool:
-        """Kill every process in the job. False if Windows refused."""
-        return bool(self._handle) and bool(self._k.TerminateJobObject(self._handle, 1))
+        """Kill every process in the job. False if Windows refused, or it is closed."""
+        with self._lock:
+            return bool(self._handle) and bool(self._k.TerminateJobObject(self._handle, 1))
 
     def close(self) -> None:
         """Close the job, which kills whatever is still in it. Safe to call twice."""
-        if self._handle:
-            self._k.CloseHandle(self._handle)
-            self._handle = None
+        with self._lock:
+            if self._handle:
+                self._k.CloseHandle(self._handle)
+                self._handle = None
 
 
 def resume(pid: int) -> None:

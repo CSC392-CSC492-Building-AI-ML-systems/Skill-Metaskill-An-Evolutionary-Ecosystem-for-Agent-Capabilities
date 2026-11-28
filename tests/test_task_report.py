@@ -20,7 +20,8 @@ def run(task, variant, n, passed, *, tokens=100, calls=2, tools=1, reason="ok"):
 
 def render(tests, name="skill-a"):
     found = {d.value: 0.5 for d in Dimension}
-    result = SkillResult(name, Scores(overall=None, **found), 0.0, tests=tests)
+    result = SkillResult(name, Scores(overall=None, **found), 0.0, tests=tests,
+                         log_folder="skill-01")
     ranking = rank_module.rank([result], CONFIG)
     meta = CONFIG.to_meta("t", [name], "", "2")
     return rank_module.markdown(meta, ranking)
@@ -72,7 +73,7 @@ def test_runs_that_could_not_be_made_are_noted_and_the_logs_are_pointed_to():
              run("u", Variant.BASELINE, 3, True)]
     text = section(render(tests))
     assert "3 run(s) could not be made and are not counted above" in text  # t's baseline
-    assert "Logs: skill-a/logs/ in this report's folder" in text
+    assert "Logs: skill-01/logs/ in this report's folder" in text
 
 
 def test_a_complete_run_notes_nothing_missing():
