@@ -60,6 +60,13 @@ scores, scoring.md's examples hold exactly:
 | Fail, fail, fail (same bug) | 1 | 1 | 1 | 1 | 1.000 |
 | Pass, fail, fail (failures alike) | 1/3 | 1/3 | 1/3 | 1/3 | 0.333 |
 
+These are the Robustness scores in the report. In `overall`, Robustness counts scaled by
+the with-skill pass rate (evaluate.md §5.1): the "fail, fail, fail" skill above is fully
+robust but adds nothing to `overall`, so it cannot outrank a skill that works most of the
+time on consistency alone (MET-60). **[PROPOSED]** Like the terms above, the scaling is
+for team review: it makes the pass rate count in both Quality and Robustness
+(evaluate.md §5.1 and open question 5). Reports record it as `overall_version` 2.
+
 Passing every time, by different code and routes, keeps outcome and score at 1 while
 output and method fall, so the skill lands between the two (criterion 3). Failing three
 different ways keeps outcome between 0.5 and 1.
@@ -74,7 +81,8 @@ was used in `detail`.
 - **At least two runs** per task are needed. With one run per task, Robustness is `skipped`.
 - **A complete run matrix** is required (scoring.md, scoring conventions). If tasks have
   different numbers of with-skill runs, fewer than `runs_per_task` when the caller gives
-  it, or two results claim the same task and run, Robustness is `error` with no score:
+  it, run numbers other than 1 to `runs_per_task` (runs 1 and 3 of 2 hide a lost run 2),
+  or two results claim the same task and run, Robustness is `error` with no score:
   a lost run must not quietly leave the denominator.
 - **Every planned task** must be there when the caller gives the planned task ids, as
   the runner does. A task that lost every with-skill run (for example, its LLM judge was
@@ -103,8 +111,9 @@ was used in `detail`.
     baseline runs leave the score standing, with a count in `detail`.
   - `score(skill, config, llm=...)` is the call without a task file: `skipped` ("no tasks
     were given").
-- Ranking: [`rank.py`](../metaskill/evaluate/rank.py) needs nothing specific. The value
-  goes into `overall` with weight 3 (evaluate.md §5.1), and when `overall` and lift tie,
+- Ranking: [`rank.py`](../metaskill/evaluate/rank.py). The value goes into `overall`
+  with weight 3, scaled by the with-skill pass rate (`rank.robustness_credit`,
+  evaluate.md §5.1), and when `overall` and lift tie,
   Robustness is the third dimension compared, after Safety and Quality (evaluate.md
   §5.2). A skill whose Robustness is `skipped` (one run per task) or `error` (lost runs)
   has no `overall` and is listed as unranked, with the reason, never ranked on the other

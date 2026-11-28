@@ -25,7 +25,7 @@ Once `evaluate` runs test tasks, it also needs [Docker](https://docs.docker.com/
 docker pull python:3.12-slim@sha256:e70237b264442328526ff29d6b3c43bd8abcf6cbab78a949322fb69b7d91d6b6
 ```
 
-Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not need Docker. If something is missing, the plugin lists it ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
+Running tasks also needs Python 3.12.11, 3.13.4 or later, and enough memory for the sessions that run at once: about 300 MB each, outside Docker, so 8 GB of RAM at least for the default 16. With less available, fewer run at once ([docs/evaluate/runner.md](docs/evaluate/runner.md) 2.7). `generalize` does not need Docker. If something is missing, the plugin lists it ([docs/evaluate/dependencies.md](docs/evaluate/dependencies.md)).
 
 ## Usage
 
@@ -35,7 +35,10 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later. `generalize` does not 
 /metaskill evaluate <skill>
 /metaskill rank <skill>, <skill>
 /metaskill skills [text]
+/metaskill stop
 ```
+
+`/metaskill stop` stops a running `evaluate` or `rank`: Ctrl-C does not, because Hermes runs the command in its gateway, which goes on after the CLI lets go. Run it from any session of the same profile on that gateway; the stopped command then returns with no report. In the TUI that can be the same session. The classic CLI waits for the command, so press Ctrl-C first to stop waiting, then send `/metaskill stop` there or from another session. Without a gateway, the classic CLI runs the command in its own process, where no other session can reach it; there, Ctrl-C stops it.
 
 `<skill>` is an installed skill's name (`claude-code`), its category and name (`autonomous-ai-agents/claude-code`), or a path to the skill's folder, relative to your session's folder or absolute. A path that exists wins over a name. If a name matches several skills, the command lists them and runs nothing, so you can give the one you mean. `hermes skills list` shows what is installed.
 

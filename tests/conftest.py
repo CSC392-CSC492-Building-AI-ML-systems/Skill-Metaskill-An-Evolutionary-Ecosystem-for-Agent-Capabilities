@@ -31,3 +31,11 @@ def skill_fixture(request) -> SkillFixture:
 @pytest.fixture
 def skill_dir(skill_fixture, tmp_path):
     return materialize(skill_fixture, tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _no_host_memory_reading(monkeypatch):
+    """Tests see no host memory reading, so how many sessions run at once does not depend
+    on the machine running them. tests/test_host.py sets its own readings."""
+    from metaskill.evaluate import host
+    monkeypatch.setattr(host, "available_memory", lambda: None)

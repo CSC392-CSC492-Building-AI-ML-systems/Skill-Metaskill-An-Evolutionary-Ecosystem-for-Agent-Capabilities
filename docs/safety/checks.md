@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "6"
+CHECKS_VERSION = "10"
 
 class ChecksBackend:
     name = "own-checks"
@@ -45,7 +45,7 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 
 ### Nothing the agent sees is skipped
 
-Added in `CHECKS_VERSION` 6. Each of these once left a command unscanned, with Safety 1.0:
+Added in `CHECKS_VERSION` 10. Each of these once left a command unscanned, with Safety 1.0:
 
 - **Bytes that are not UTF-8** are replaced and the file is scanned (a shell runs such a script), with a note in `detail`. NUL bytes are dropped, from `SKILL.md` too: bash ignores them, and in UTF-16 text they separate the letters of every command.
 - **Frontmatter** is only `SKILL.md`'s, matched as `Skill.load` matches it. In any other file `---` is a horizontal rule and what follows is ordinary text. `SKILL.md`'s frontmatter is scanned as prose, one key or list item at a time, so a warning or confirmation in one value cannot clear a command in another, or in the text below. Every key and text value is also scanned as parsed, which undoes YAML escapes and folded lines, at its top-level key's line. A key, value or list item that is all there is on its one line is not scanned twice; an entry of a `[...]` or `{...}` is always scanned on its own. A parsed text is held to the same limit on commands per line as a file.

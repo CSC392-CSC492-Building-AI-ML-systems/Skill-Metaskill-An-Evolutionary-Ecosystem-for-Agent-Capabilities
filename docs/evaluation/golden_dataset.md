@@ -431,7 +431,7 @@ evaluation-reports/
   [timestamp]/
     ranked-evaluation.json
     ranked-evaluation.md
-    [skill]/
+    skill-01/
       logs/
         [task_id]-[variant]-r[run].txt
 ```

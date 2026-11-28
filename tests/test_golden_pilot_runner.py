@@ -41,9 +41,10 @@ def test_real_runner_judges_six_runs_and_preserves_existing_result_shape(tmp_pat
     assert len(result.tests) == 6
     assert all(t.passed and t.score == 1 for t in result.tests)
     assert [t.variant for t in result.tests] == [Variant.WITH_SKILL] * 3 + [Variant.BASELINE] * 3
-    assert [c.skill for c in agent.calls] == ["reference"] * 3 + [None] * 3
+    # Sessions may start in any order when they run in parallel; the results above may not.
+    assert sorted(c.skill or "" for c in agent.calls) == [""] * 3 + ["reference"] * 3
     assert all(w.closed for w in sandbox.opened)
-    assert len(list((tmp_path / "reports/reference/logs").glob("*.txt"))) == 6
+    assert len(list((tmp_path / "reports/skill-01/logs").glob("*.txt"))) == 6
     for record in result.tests:
         assert TestResult.from_dict(record.to_dict()).to_dict() == record.to_dict()
     staged_files = {p.relative_to(prepared.tasks_file.parent).as_posix()
