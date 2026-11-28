@@ -49,7 +49,10 @@ Added in `CHECKS_VERSION` 6. Each of these once left a command unscanned, with S
 
 - **Bytes that are not UTF-8** are replaced and the file is scanned (a shell runs such a script), with a note in `detail`. NUL bytes are dropped, from `SKILL.md` too: bash ignores them, and in UTF-16 text they separate the letters of every command.
 - **Frontmatter** is only `SKILL.md`'s, matched as `Skill.load` matches it. In any other file `---` is a horizontal rule and what follows is ordinary text. `SKILL.md`'s frontmatter is scanned as prose, one key or list item at a time, so a warning or confirmation in one value cannot clear a command in another, or in the text below. Every key and text value is also scanned as parsed, which undoes YAML escapes and folded lines, at its top-level key's line. A key, value or list item that is all there is on its one line is not scanned twice; an entry of a `[...]` or `{...}` is always scanned on its own. A parsed text is held to the same limit on commands per line as a file.
-- **A file with another suffix, or none,** that starts with `#!` is scanned as a script.
+- **A file with another suffix, or none,** that starts with `#!` is scanned as a script, also when a byte-order mark or blank space stands before the `#!`: bash runs such a file.
+- **A `SKILL.md` in a subfolder** is a bundled file like any other and is scanned as markdown. Only the skill's own `SKILL.md` has frontmatter.
+
+Still not scanned: a file with neither a script or markdown suffix nor `#!`, such as a `Makefile` (which `make` runs), and hidden files and `node_modules`, which `Skill.load` leaves out.
 - **A file over `MAX_FILE_BYTES`** (1,000,000 bytes) is scanned up to that size and gets a CRITICAL `scan-limit` finding, as the rest is unknown ([Scan limits](#scan-limits)).
 - **A file that cannot be read** gets the same finding. One that is listed but no longer there is only noted.
 
@@ -203,7 +206,7 @@ What a static check cannot see is a symlink the user created on their own machin
 - In markdown: an earlier line of the same code block or paragraph, or the paragraph or list item directly before it.
 - In scripts: the 5 lines before it.
 
-In code blocks and scripts, a phrase inside a comment or a string does not count: it asks nothing of anyone (`# TODO: dry run support`, `echo 'Are you sure?'`). The step itself still does (`read -p`, `input('Delete? [y/N] ')`). Comments include `/* ... */` in JavaScript and `<# ... #>` in PowerShell. A delete in a JavaScript backtick string counts even if nothing is seen to run it, as such a string can span lines. Comments and strings are read one line at a time, so the inside of a multi-line string is not recognised as one.
+In code blocks and scripts, a phrase inside a comment or a string does not count: it asks nothing of anyone (`# TODO: dry run support`, `echo 'Are you sure?'` with nothing reading an answer). The step itself still does (`read -p`, `input('Delete? [y/N] ')`). Comments include `/* ... */` in JavaScript and `<# ... #>` in PowerShell. A delete in a JavaScript backtick string counts even if nothing is seen to run it, as such a string can span lines. Comments and strings are read one line at a time, so the inside of a multi-line string is not recognised as one.
 
 A backup that is only described, as in "**we** make a backup of the logs weekly", does not count either; "make a backup first" does.
 
@@ -212,7 +215,8 @@ Confirmation means an actual step, not just the word. Any of:
 - Asking: "ask the user **before/to confirm/for confirmation**" (asking about the action, not "ask the user for their favourite colour"), "confirm with the user", "get the user's approval", "wait for permission", "are you sure".
 - A dry run: "dry run", `--dry-run`, `-WhatIf`, `-n` on `git clean`.
 - A backup: "make a backup", "back up first", "back up your files", "back everything up" — "back up" needs an object, so "go back up one level" does not count.
-- Flags and code: `-i` or `--interactive` on `rm`, `read -p`, `confirm(`, `Read-Host`, `-Confirm` and `-WhatIf` (not with `:$false`), `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
+- Flags and code: `-i`, `-I` or `--interactive` on `rm` unless a later `-f` or `--force` overrides it, `read -p` (also `read -r -p`), `confirm(`, `Read-Host`, `-Confirm` and `-WhatIf` (not with `:$false`), `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
+- In code and scripts, a printed question and then its answer: `echo`, `printf`, `print`, `Write-Host` or `Write-Output` showing "are you sure", `[y/N]`, or a question about proceeding or deleting, followed by `read` or `input()` on the same line or within the 5 lines after. The `read` must come before the delete, and one that reads a loop, a pipe or a file does not count.
 
 At the `deep` tier, a delete or other destructive command cleared by one of these phrases is re-checked ([review.md](review.md)), in code and scripts as well as in prose; one cleared by a flag on the command itself (`rm -i`) is not. At most `MAX_CLEARED_PER_UNIT` matches in a code block or script are cleared this way; later ones are reported.
 

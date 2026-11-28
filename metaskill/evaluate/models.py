@@ -134,7 +134,7 @@ def load_yaml(text: str) -> Any:
 
 
 def _bundled_files(root: Path) -> list[Path]:
-    """A skill's files other than SKILL.md, relative to root and sorted, without hidden
+    """A skill's files other than its own SKILL.md, relative to root and sorted, without hidden
     ones, __pycache__ and node_modules. Linked folders are not entered. os.walk and rglob
     would enter a Windows junction (links.py), and a few junctions that lead back into the
     skill make that walk take practically forever."""
@@ -146,7 +146,10 @@ def _bundled_files(root: Path) -> list[Path]:
         here = Path(folder)
         dirs[:] = [d for d in dirs if listed(d) and not is_link(here / d)]
         files += [(here / name).relative_to(root) for name in names
-                  if name != "SKILL.md" and listed(name) and (here / name).is_file()]
+                  # The skill's own SKILL.md is `body`. One in a subfolder is a bundled
+                  # file like any other, copied to the agent and so checked.
+                  if (here, name) != (root, "SKILL.md") and listed(name)
+                  and (here / name).is_file()]
     return sorted(files)
 
 
