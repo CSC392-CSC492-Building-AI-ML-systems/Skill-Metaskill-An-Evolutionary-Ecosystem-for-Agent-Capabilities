@@ -282,6 +282,61 @@ def test_a_plan_changed_after_approval_needs_approval_again(root, skills, name):
     plans.ready(plan.id, "rank")
 
 
+@pytest.mark.parametrize("edit", [
+    lambda s, other: s.append({**s[1], "name": "other", "path": other}),
+    lambda s, other: s[1].update(path=other),
+    lambda s, other: s[1].update(name="other"),
+    lambda s, other: s.pop(),
+    lambda s, other: s.reverse(),
+    lambda s, other: s[1].pop("fingerprint"),
+    lambda s, other: s[1].update(fingerprint="0"),
+], ids=["added", "path", "name", "removed", "reordered", "no-fingerprint", "fingerprint"])
+def test_a_changed_skill_list_needs_approval_again(root, skills, tmp_path, edit):
+    plan = approved(skills)
+    other = tmp_path / "skills" / "other"
+    other.mkdir()
+    (other / "SKILL.md").write_text("# other\n", encoding="utf-8")
+    path = plan.folder / "plan.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    edit(data["skills"], str(other))
+    path.write_text(json.dumps(data), encoding="utf-8")
+    for operation in ("evaluate", "rank"):
+        with pytest.raises(plans.PlanError, match="changed after it was approved"):
+            plans.ready(plan.id, operation)
+    plans.approve(plan.id, sandbox=LocalSandbox())
+    plans.ready(plan.id, "evaluate" if len(data["skills"]) == 1 else "rank")
+
+
+@pytest.mark.parametrize("through", ["tasks_path", "config"])
+@pytest.mark.parametrize("state", ["draft", "approved"])
+def test_a_plans_tasks_run_only_through_the_plan(root, skills, tmp_path, through, state):
+    plan = approved(skills) if state == "approved" else configure(skills)[0]
+    given = {"tasks_path": str(plan.folder / "tasks.json")}
+    if through == "config":
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps(given), encoding="utf-8")
+        given = {"config_path": str(config)}
+    result = tools.run("rank", [str(s) for s in skills], **given)
+    assert result["status"] == "error"
+    assert "belongs to an evaluation plan" in result["error"]
+
+
+def test_a_link_into_the_plans_folder_is_the_plans_file(root, skills, tmp_path):
+    plan, _ = configure(skills)
+    link = tmp_path / "elsewhere"
+    try:
+        link.symlink_to(plan.folder, target_is_directory=True)
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+    assert plans.holds(link / "tasks.json")
+    assert not plans.holds(tmp_path / "tasks.json")
+
+
+def test_the_summary_says_where_to_read_the_input_files(root, skills):
+    plan, _ = configure(skills)
+    assert "fixtures/" in plans.summary(plan) and "examples.json" in plans.summary(plan)
+
+
 def test_approve_validates_the_files_as_they_are_now(root, skills):
     plan, _ = configure(skills)
     tasks = plan.folder / "tasks.json"

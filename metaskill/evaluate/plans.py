@@ -229,7 +229,7 @@ def approve(plan_id: str, *, sandbox: Any = None, root: Path | None = None) -> P
         skill["fingerprint"] = fingerprint(Path(skill["path"]))
     plan.data["status"] = APPROVED
     plan.data["approved"] = _now()
-    plan.data["approved_files"] = files_fingerprint(plan.folder)
+    plan.data["approved_files"] = _approval(plan)
     try:
         _write_json(plan.folder / "plan.json", plan.data)
     except OSError as e:
@@ -245,7 +245,7 @@ def ready(plan_id: str, operation: str, *, root: Path | None = None
     if plan.status != APPROVED:
         raise PlanError(f"{plan.id} is a draft, so its tasks are not run. Review the files in "
                         f"{plan.folder}, then: /metaskill approve {plan.id}")
-    if files_fingerprint(plan.folder) != plan.data.get("approved_files"):
+    if _approval(plan) != plan.data.get("approved_files"):
         raise PlanError(f"{plan.id} was changed after it was approved. Review it, then: "
                         f"/metaskill approve {plan.id}")
     count = len(plan.data["skills"])
@@ -351,6 +351,9 @@ def summary(plan: Plan) -> str:
             first, *rest = command.rstrip("\n").split("\n")
             # Marked, so a command of several lines cannot pass for part of this summary.
             lines += [f"    $ {first}", *(f"    | {line}" for line in rest)]
+    if any(task.fixtures for task in tasks):
+        lines += ["", "The agent is given the input files: read them in fixtures/, and the "
+                      "answers the checks were tried with in examples.json."]
     lines += ["", f"A run makes {sessions} agent sessions ({len(tasks)} task(s) x {runs} "
                   f"run(s) x with and without x {len(skills)} skill(s)), plus judge calls.",
               f"Files: {plan.folder}"]
@@ -600,6 +603,24 @@ def files_fingerprint(folder: Path) -> str:
         raise PlanError(f"{Path(folder).name}: a file of the plan cannot be read: "
                         f"{type(e).__name__}") from e
     return digest.hexdigest()
+
+
+def _approval(plan: Plan) -> str:
+    """A hash of what a person approves: the plan's files, and the skills in plan.json with
+    the fingerprint each had then. A change to any of them needs approval again."""
+    skills = [[s["name"], s["path"], s.get("fingerprint")] for s in plan.data["skills"]]
+    return hashlib.sha256(json.dumps([files_fingerprint(plan.folder), skills]).encode()).hexdigest()
+
+
+def holds(path: str | Path) -> bool:
+    """Whether a file lies in the plans folder, through links or not."""
+    try:
+        root, file = plans_root(), Path(path).resolve()
+        # samefile, not a text comparison: some systems ignore a path's letter case.
+        return root.is_dir() and any(os.path.samefile(p, root) for p in (file, *file.parents)
+                                     if p.exists())
+    except (OSError, ValueError, RuntimeError):  # a path that cannot be read at all
+        return False
 
 
 def _config(folder: Path) -> EvaluationConfig:

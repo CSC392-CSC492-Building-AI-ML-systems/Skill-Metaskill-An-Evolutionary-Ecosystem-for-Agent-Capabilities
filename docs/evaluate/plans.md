@@ -29,7 +29,7 @@ to type. It is not sent to the agent, which cannot run a plan.
 
 | File | Content |
 |---|---|
-| `plan.json` | skills (name, path, fingerprint), status, name (`label`), which model drafted it, dates |
+| `plan.json` | skills (name, path, fingerprint), approval fingerprint, status, name (`label`), which model drafted it, dates |
 | `tasks.json` | an ordinary task file |
 | `fixtures/<task_id>/` | the tasks' input files |
 | `examples.json` | for each task, files that make its checks pass; used only to validate, never given to an agent |
@@ -76,7 +76,8 @@ right or fair: that is what the review is for.
 | State | `evaluate` / `rank` |
 |---|---|
 | Draft | refused, with the `approve` command |
-| A plan file changed after approval | refused until approved again |
+| A plan file, or the skill list in `plan.json`, changed after approval | refused until approved again |
+| A plan's `tasks.json` given as `--tasks`, `tasks_path` or in a config file | refused, also once approved: run the plan by its ID or name |
 | A skill changed after approval (hidden files, `__pycache__` and `node_modules` do not count) | runs the same tasks, with a warning |
 | A skill is gone | refused |
 | Options such as `--tasks` or `--config` with a plan | refused: the plan brings its own |

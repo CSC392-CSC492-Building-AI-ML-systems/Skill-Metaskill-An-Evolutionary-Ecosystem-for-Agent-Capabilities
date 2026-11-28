@@ -125,6 +125,16 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
             config.tasks_path = Path(session_cwd()) / config.tasks_path
 
     tasks = None
+    # A plan's tasks run only through the plan, which checks that they were approved
+    # (plans.ready). Checked here, as tasks_path can also come from the config file.
+    if config.tasks_path is not None and not plan_id:
+        from . import plans
+
+        if plans.holds(config.tasks_path):
+            return {"status": "error",
+                    "error": "this task file belongs to an evaluation plan, whose tasks run "
+                             "only once approved, by its ID or name: /metaskill evaluate "
+                             "<plan> or /metaskill rank <plan>; nothing was run"}
     if config.tasks_path is None:
         # Nothing runs, so only what safety needs; Docker is not asked for.
         missing = safety.missing_dependencies()
