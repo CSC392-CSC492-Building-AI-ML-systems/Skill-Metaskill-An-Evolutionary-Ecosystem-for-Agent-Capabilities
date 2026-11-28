@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shlex
 from bisect import bisect_left, bisect_right
@@ -23,12 +24,14 @@ from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "10"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
+CHECKS_VERSION = "11"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
                        # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
                        # and bounded clearing, so a hostile skill cannot stall the scan
                        # (MET-42). 9: fewer print-secret and echo-secret false positives
                        # (MET-69). 10: nothing the agent sees is skipped: undecodable bytes,
                        # SKILL.md's frontmatter, `---` blocks and oversized files (MET-62).
+                       # 11: more forms of recursive delete; a confirmation must come before
+                       # the command, outside comments and strings (MET-63).
                        # 6 to 8 were never released
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
@@ -183,7 +186,7 @@ class DeleteTarget:
 
 @dataclass
 class SkippedWarning:
-    """A prose match skipped because its sentence warns against it, for the deep
+    """A match cleared by the warning, example or confirmation check, for the deep
     review's re-check (docs/safety/review.md, "Re-checking skipped warnings")."""
 
     location: str  # e.g. "SKILL.md:12"
@@ -293,6 +296,29 @@ class _Context:
     shell_vars: dict[str, dict[str, list[str | None]]] = field(default_factory=dict)
     py_vars: dict[str, dict[str, list[str | None]]] = field(default_factory=dict)
     links: set[str] = field(default_factory=set)  # names that are or become symlinks
+
+
+# What the deep re-check is shown for a match in code: the lines just before it, bounded.
+CONTEXT_LINES = 20
+CONTEXT_CHARS = 2_000
+
+
+def _cleared_code(hit: _Hit, unit: _Unit, line_index: int, location: str, ctx: _Context,
+                  previous: _Unit | None) -> SkippedWarning:
+    """A SkippedWarning for a match in code or a script cleared by a confirmation phrase:
+    its line, with the lines before it (and the paragraph before a code block), where the
+    phrase is."""
+    lineno, line = unit.lines[line_index]
+    before = [t.strip() for _, t in unit.lines[max(0, line_index - CONTEXT_LINES):line_index]]
+    if unit.kind == "code" and previous is not None and previous.kind == "prose":
+        before = [t.strip() for _, t in previous.lines[-CONTEXT_LINES:]] + before
+    lead = " ".join(before)[-CONTEXT_CHARS:]
+    sentence = line.strip()
+    offset = max(0, hit.start - (len(line) - len(line.lstrip())))
+    return SkippedWarning(
+        location, hit.rule, hit.snippet, sentence, f"{lead} {sentence}" if lead else sentence,
+        _finding(hit, unit, lineno, line, ctx, []),
+        offset, offset + (len(lead) + 1 if lead else 0), "confirmation")
 
 
 def _skipped_warning(hit: _Hit, unit: _Unit, line_index: int, location: str,
@@ -418,6 +444,7 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
         _backticks.cache_clear()  # do not keep a long line alive after the scan
         _stripped.cache_clear()
         _content_end.cache_clear()
+        _quoted_spans.cache_clear()
 
 
 def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
@@ -428,6 +455,10 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
     value_units, value_limited = _frontmatter_value_units(skill, files)
     units += value_units
     limited += value_limited
+    aliases = {
+        path: frozenset([*(f"module:{n}" for n in _SHUTIL_ALIAS.findall(text)),
+                         *(f"function:{n}" for n in _RMTREE_ALIAS.findall(text))])
+        for path, text in files}
 
     ctx = _Context()
     for path, text in files:
@@ -460,9 +491,10 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
             previous = None
         considered = 0  # prose matches in this unit weighed for clearing (MET-42)
         unbounded = False
+        considered_code = 0  # code matches cleared by a phrase, bounded as prose ones are
         for l_index, (lineno, text) in enumerate(unit.lines):
             _parsing_at(unit.path, lineno)
-            for hit in _hits(text, unit):
+            for hit in _hits(text, unit, aliases.get(unit.path, frozenset())):
                 location = f"{unit.path}:{lineno}"
                 if unit.kind == "prose" and not _clearable(unit, l_index, hit.start, considered, budget):
                     # Over the bounds: report the match without weighing it, so flooding a
@@ -471,8 +503,9 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
                     report(_finding(hit, unit, lineno, text, ctx, targets), unit.path, lineno)
                     continue
                 considered += unit.kind == "prose"
-                confirmed = hit.category == DESTRUCTIVE and (
-                    hit.confirmed or _confirmed(unit, l_index, previous))
+                phrase = (hit.category == DESTRUCTIVE and not hit.confirmed
+                          and _confirmed(unit, l_index, hit.start, previous))
+                confirmed = hit.category == DESTRUCTIVE and (hit.confirmed or phrase)
                 if unit.kind == "prose" and (_is_warning(unit, l_index, hit.start)
                                              or _is_example(unit, l_index, hit)):
                     skipped.append(f"{location} ({hit.snippet})")
@@ -491,6 +524,14 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
                     if unit.kind == "prose":
                         rechecks.append(
                             _skipped_warning(hit, unit, l_index, location, ctx, "confirmation"))
+                    elif phrase:  # a flag on the command itself needs no second opinion
+                        if considered_code >= MAX_CLEARED_PER_UNIT:
+                            report(_finding(hit, unit, lineno, text, ctx, targets),
+                                   unit.path, lineno)  # past the bound: not cleared
+                            continue
+                        considered_code += 1
+                        rechecks.append(
+                            _cleared_code(hit, unit, l_index, location, ctx, previous))
                     continue
                 report(_finding(hit, unit, lineno, text, ctx, targets), unit.path, lineno)
         if unbounded:
@@ -861,12 +902,14 @@ def _command_end(text: str, start: int = 0) -> int:
     return len(text)
 
 
-def _args(text: str, end: int) -> list[str]:
+def _args(text: str, end: int, limit: int | None = None) -> list[str]:
     """Shell-like arguments after position end, up to the end of the command. Charged
     to the scan's parse budget; nothing once it has run out (MET-42)."""
     if _parsing_stopped():
         return []
     stop = _command_end(text, end)
+    if limit is not None:
+        stop = min(stop, limit)
     if not _parse(stop - end):
         return []
     segment = text[end:stop]
@@ -908,10 +951,10 @@ def _in_inline_code(text: str, col: int) -> bool:
     return bisect_left(_backticks(text), col) % 2 == 1
 
 
-def _hits(text: str, unit: _Unit) -> list[_Hit]:
+def _hits(text: str, unit: _Unit, aliases: frozenset[str] = frozenset()) -> list[_Hit]:
     hits: list[_Hit] = []
     prose = unit.kind == "prose"
-    hits += _deletes(text, prose)
+    hits += _deletes(text, prose, unit.path, aliases)
     hits += _other_destructive(text)
     hits += _credential_hits(text, prose)
     hits += _untrusted_hits(text)
@@ -919,7 +962,19 @@ def _hits(text: str, unit: _Unit) -> list[_Hit]:
 
 
 _RM = re.compile(r"(?<![\w.-])rm\s+")
-_RMTREE = re.compile(r"shutil\.rmtree\(")
+_ASKS_FLAG = re.compile(r"-[A-Za-z]*[iI][A-Za-z]*")  # rm -i, -rI
+_RM_LETTERS = re.compile(r"-[dfirIRv]+")  # a group of GNU rm's own one-letter flags
+# rmtree(...) bare, as `from shutil import rmtree` leaves it, or on a module: `shutil` or a
+# name the file imports it as. Another object's rmtree (sftp.rmtree) is not this one.
+_RMTREE = re.compile(r"(?<![\w.])(?<!def )(?:(?P<module>[A-Za-z_]\w*)\s*\.\s*)?(?P<name>[A-Za-z_]\w*)\s*\(")
+_RMTREE_QUICK = re.compile(r"\brmtree\b")
+_SHUTIL_RMTREE = re.compile(r"shutil\s*\.\s*rmtree\s*\(")  # also self.shutil.rmtree
+# Bounded, so many imports on one long line stay linear (MET-42).
+_SHUTIL_ALIAS = re.compile(
+    r"\bimport\s+(?:[\w.]+\s*,\s*){0,50}shutil\s+as\s+([A-Za-z_]\w*)")
+_RMTREE_ALIAS = re.compile(  # on one line, or in the parentheses of one import
+    r"\bfrom\s+shutil\s+import\s+(?:\([^)#]{0,500}?|[^\n#(]{0,500}?)"
+    r"\brmtree\s+as\s+([A-Za-z_]\w*)")
 _PY_STR = r"""(?:[rRbBuU]?(?P<q>['"])(?P<s>[^'"]*)(?P=q))"""
 # Python expressions for the home folder: os.environ["HOME"], os.getenv("HOME"),
 # os.path.expanduser("~"), Path.home() and pathlib.Path.home().
@@ -928,9 +983,16 @@ _PY_HOME = (r"(?:os\.environ\s*\[\s*['\"](?:HOME|USERPROFILE)['\"]\s*\]"
             r"|os\.getenv\(\s*['\"](?:HOME|USERPROFILE)['\"]\s*\)"
             r"|os\.path\.expanduser\(\s*['\"]~['\"]\s*\)"
             r"|(?:pathlib\.)?Path\.home\(\s*\))")
-_REMOVE_ITEM = re.compile(r"(?<![\w-])Remove-Item\b", re.I)
 _FIND = re.compile(r"(?<![\w.-])find\s+")
-_CMD_DELETE = re.compile(r"(?<![\w.%$-])(?:rmdir|rd|del|erase)(?=\s)", re.I)
+_CMD_DELETE = re.compile(r"(?<![\w.%$-])(?:rmdir|rd|del|erase)(?=\s|/[a-z?](?![\w.]))", re.I)
+# One or more cmd.exe switches written together: /s, /S/Q, /a:h. A path such as /home is not.
+_CMD_SWITCHES = re.compile(r"(?:/[A-Za-z?](?::[-\w]*)?)+")
+# PowerShell's Remove-Item and its aliases. `rm` is an alias too, and is read as rm above.
+_PS_DELETE = re.compile(r"(?<![\w.%$-])(?:Remove-Item|ri|rd|rmdir|del|erase)(?![\w-])", re.I)
+# A path written onto its parameter: -Path:$HOME, -LiteralPath:C:\x.
+_PS_PATH = re.compile(r"-(?:literalpath|path|lp):(.+)", re.I)
+# -Recurse, and any shorter form of it, unless it is switched off with :$false.
+_PS_RECURSE = re.compile(r"-r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?(?::(?!\$?(?:false|0)\b).*)?", re.I)
 
 
 def _first_argument(text: str, start: int) -> str:
@@ -1007,10 +1069,99 @@ def _follows(target: str) -> bool:
     return target.endswith("/") or bool(re.search(r"/[^/]*[*?\[]", target))
 
 
-def _deletes(text: str, prose: bool) -> list[_Hit]:
+# Just before a quote: what runs the string that follows, as a command.
+_RUNS_STRING = re.compile(
+    r"(?:\b(?:ba|z|da|k)?sh[\"']?[\s,]+(?:[\"']?-[A-Za-z]+[\"']?[\s,]+){0,5}[\"']?-[A-Za-z]*c[\"']?[\s,]+"
+    r"|\beval\s+|\bssh\s+[^;&|]{0,80}\s"
+    r"|\b(?:os\.system|os\.popen|subprocess\.\w+|execSync|exec|system|popen)\s*\(\s*"
+    r"|(?i:\b(?:iex|Invoke-Expression)\s+(?:-Command\s+)?"
+    r"|\bcmd(?:\.exe)?\s+/[ck]\s+"
+    r"|\b(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+\s+){0,5}-(?:c|Command)\s+))"
+    r"[rRbBfF]{0,2}\Z")
+_RUNS_STRING_REACH = 120  # characters before the quote the pattern is searched in
+
+
+def _is_run(text: str, opened: int) -> bool:
+    """Whether the string whose quote is at opened is handed to something that runs it."""
+    return _RUNS_STRING.search(text, max(0, opened - _RUNS_STRING_REACH), opened) is not None
+
+
+def _no_target(text: str, start: int, prose: bool, path: str) -> bool:
+    """Whether a recursive delete with nothing written to delete still counts: in code it
+    does, as it deletes what is piped to it, unless it only stands in a comment, or in a
+    string nothing runs (a pattern such as `grep 'rm -rf|...'` names the command without
+    running it)."""
+    if prose:
+        return False
+    span = _span_at(path, text, start)
+    if span is None:
+        return True
+    opened, _, kind = span
+    if kind == "comment":
+        # An unclosed /* on a line with a backtick may well be inside a template literal.
+        return ("`" in text and text.startswith("/*", opened)
+                and text.find("*/", opened + 2) < 0)
+    if kind == "template":
+        return True
+    # A JavaScript string ends on its line, so one that does not was misread.
+    if (Path(path).suffix.lower() in _SLASH_COMMENTS
+            and (span[1] - opened < 2 or text[span[1] - 1] != text[opened])):
+        return True
+    if _is_run(text, opened):
+        return True
+    # "$(...)" and "`...`" run inside a double-quoted shell string.
+    return text[opened] == '"' and (text.find("$(", opened, start) >= 0
+                                    or text.find("`", opened, start) >= 0)
+
+
+# After a string's closing quote: text that goes on with the command, so that the string is
+# only part of it: `"rm -rf " + x`, `"rm -rf /tmp/%s" % x`, `"...".format(x)`, `"build/"*`.
+_GOES_ON = re.compile(r"\s*(?:\+|%|\.\s*(?:format|concat|join)\b)|[^\s),;\]}|&#<>]")
+
+
+def _delete_args(text: str, start: int, end: int, prose: bool, path: str,
+                 cmd: bool = False) -> list[str]:
+    """The arguments of a delete command found at start. One written inside a string ends
+    where the string does, so that in `os.system("rm -rf /")` the target is `/`, and the
+    code after `os.system("ls | xargs rm -rf")` gives it no flags or targets. Not when
+    something is joined to the string, as in `"rm -rf /tmp/" + folder`, or when a string
+    with no target is not run there and then, as in `command = "rm -rf"`, or is followed
+    by another argument: what follows may then be part of the command."""
+    span = None if prose else _span_at(path, text, start)
+    if (span and span[2] == "string" and span[0] < start and text[span[1] - 1] == text[span[0]]
+            and not _GOES_ON.match(text, span[1])):
+        inside = _args(text, end, span[1] - 1)
+        if (any(not a.startswith("-") and not (cmd and _CMD_SWITCHES.fullmatch(a))
+                for a in inside)
+                or _is_run(text, span[0]) and not text.startswith(",", span[1])):
+            return inside
+    return _args(text, end)
+
+
+def _rm_asks(flags: list[str]) -> bool:
+    """Whether rm with these flags asks before deleting. As GNU rm reads them, the last
+    of -i, -I, -f, --interactive and --force wins: `rm -ri -f` does not ask."""
+    asks = False
+    for flag in flags:
+        # Only a word of letters is a flag that asks: not text a quote joined to it.
+        flag = flag.rstrip("'\");,}")
+        if _RM_LETTERS.fullmatch(flag):
+            for letter in flag:
+                if letter in "iIf":
+                    asks = letter != "f"
+        elif flag in ("--force", "--interactive=never", "--interactive=no",
+                      "--interactive=none"):
+            asks = False
+        elif flag.startswith("--interactive") or _ASKS_FLAG.fullmatch(flag):
+            asks = True  # also PowerShell's -Confirm and -WhatIf
+    return asks
+
+
+def _deletes(text: str, prose: bool, path: str = "",
+             aliases: frozenset[str] = frozenset()) -> list[_Hit]:
     hits = []
     for m in _RM.finditer(text):
-        args = _args(text, m.end())
+        args = _delete_args(text, m.start(), m.end(), prose, path)
         flags, targets, ended = [], [], False
         for a in args:
             if not ended and a == "--":
@@ -1024,46 +1175,75 @@ def _deletes(text: str, prose: bool) -> list[_Hit]:
         if not recursive:
             continue
         if not targets:
-            if not prose:
+            if not prose and not _no_target(text, m.start(), prose, path):
                 continue
-            targets = ["(unspecified)"]  # "run `rm -rf` on the build folder": target not parseable
+            targets = ["(unspecified)"]  # "run `rm -rf` on the build folder", or piped to it
         if prose and not _in_inline_code(text, m.start()):
             targets = targets[:1]  # in plain prose only the next word can be the target
-        interactive = any(f == "--interactive" or (not f.startswith("--") and re.search("[iI]", f))
-                          for f in flags)
         hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
-                         f"rm {' '.join(flags)} {targets[0]}", interactive,
+                         f"rm {' '.join(flags)} {targets[0]}", _rm_asks(flags),
                          [(t, _follows(t)) for t in targets]))
 
-    for m in _RMTREE.finditer(text):
-        argument = _first_argument(text, m.end())
-        path = _python_path(argument)
-        is_name = path is None and re.fullmatch(r"[A-Za-z_]\w*", argument) is not None
-        hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
-                         f"shutil.rmtree({argument})",
-                         targets=[(path if path is not None else argument, False)],
-                         py_var=is_name))
+    # A file's aliases are looked up per call, not searched for one by one in every line.
+    if _RMTREE_QUICK.search(text) or aliases and "(" in text:
+        calls = {m.end(): m.start() for m in _SHUTIL_RMTREE.finditer(text)}
+        for m in _RMTREE.finditer(text):
+            module, name = m.group("module"), m.group("name")
+            if not (name == "rmtree" and (module is None or module == "shutil"
+                                          or f"module:{module}" in aliases)
+                    or module is None and f"function:{name}" in aliases):
+                continue
+            if (prose and module is None and text[m.end("name"):m.end() - 1]
+                    and not _in_inline_code(text, m.start())):
+                continue  # "use rmtree (see the docs)" is a sentence, not a call
+            calls.setdefault(m.end(), m.start())
+        for end, start in sorted(calls.items()):
+            argument = _first_argument(text, end)
+            path_ = _python_path(argument)
+            is_name = path_ is None and re.fullmatch(r"[A-Za-z_]\w*", argument) is not None
+            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, start,
+                             f"shutil.rmtree({argument})",
+                             targets=[(path_ if path_ is not None else argument
+                                       or "(unspecified)", False)],
+                             py_var=is_name))
 
-    for m in _REMOVE_ITEM.finditer(text):
-        args = _args(text, m.end())
-        if not any(a.lower() == "-recurse" for a in args):
+    powershell: set[int] = set()  # where a delete was read as PowerShell, not as cmd.exe
+    for m in _PS_DELETE.finditer(text):
+        args = _delete_args(text, m.start(), m.end(), prose, path, cmd=True)
+        # A quote left on the last word closes the string the command is in.
+        if not any(_PS_RECURSE.fullmatch(a.rstrip("'\"")) for a in args):
             continue
-        targets = [a for a in args if not a.startswith("-")]
-        if targets:
-            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
-                             f"Remove-Item {targets[0]} -Recurse",
-                             any(a.lower() in ("-confirm", "-whatif") for a in args),
-                             [(t, True) for t in targets]))
+        # rd, del and the rest are cmd.exe's too, whose switches are not targets. To
+        # Remove-Item and ri, `/a/b` is a path.
+        cmd_too = m.group(0).lower() not in ("remove-item", "ri")
+        targets = [p[1] if (p := _PS_PATH.fullmatch(a)) else a for a in args
+                   if _PS_PATH.fullmatch(a) or not a.startswith("-")
+                   and not (cmd_too and _CMD_SWITCHES.fullmatch(a))]
+        if not targets:
+            if not _no_target(text, m.start(), prose, path):
+                continue
+            targets = ["(unspecified)"]
+        powershell.add(m.start())
+        hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
+                         f"{m.group(0)} {targets[0]} -Recurse",
+                         any(a.lower() in ("-confirm", "-whatif") for a in args),
+                         [(t, True) for t in targets]))
 
     for m in _CMD_DELETE.finditer(text):
-        args = _args(text, m.end())
-        if not any(a.lower() == "/s" for a in args):
+        if m.start() in powershell:
+            continue
+        args = _delete_args(text, m.start(), m.end(), prose, path, cmd=True)
+        switches = [a for a in args if _CMD_SWITCHES.fullmatch(a.rstrip("'\""))]
+        if not any(part.lower() == "s" for a in switches for part in a.split("/")):
             continue  # not recursive
         targets = [a for a in args if not a.startswith("/")]
-        if targets:
-            hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
-                             f"{m.group(0)} /s {targets[0]}",
-                             targets=[(t, False) for t in targets]))
+        if not targets:
+            if not _no_target(text, m.start(), prose, path):
+                continue
+            targets = ["(unspecified)"]
+        hits.append(_Hit("recursive-delete", DESTRUCTIVE, None, m.start(),
+                         f"{m.group(0)} /s {targets[0]}",
+                         targets=[(t, False) for t in targets]))
 
     for m in _FIND.finditer(text):
         args = _args(text, m.end())
@@ -1176,13 +1356,13 @@ def _is_secret_variable(m: re.Match[str]) -> bool:
 _TEMPLATE_MARKS = re.compile(r"""\$\{|[`'"{}\\/]""")
 _QUOTES = re.compile(r"""['"`]""")
 # A JavaScript pattern, /.../, and what a `/` must follow to open one rather than divide.
-_PATTERN = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\[])+/")
-_BEFORE_PATTERN = re.compile(
+_JS_PATTERN = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\[])+/")
+_BEFORE_JS_PATTERN = re.compile(
     r"(?:\A|[(,=:\[!&|?{};*%<>~^]|(?<!\+)\+|(?<!-)-|\b(?:return|typeof|case))\s*\Z")
 # What can follow a pattern: its flags, then an operator or the end. After a `)` it also
 # has to be used at once, as in `if (x) /'/.test(s)`, or it is a division.
-_AFTER_PATTERN = re.compile(r"[dgimsuvy]{0,8}\s*(?:[.,;:)\]}?|&=!+\-*%<>^]|\Z)")
-_USED_PATTERN = re.compile(r"[dgimsuvy]{0,8}\.(?:test|exec)\b")
+_AFTER_JS_PATTERN = re.compile(r"[dgimsuvy]{0,8}\s*(?:[.,;:)\]}?|&=!+\-*%<>^]|\Z)")
+_USED_JS_PATTERN = re.compile(r"[dgimsuvy]{0,8}\.(?:test|exec)\b")
 
 
 def _quotes_in(text: str, start: int, stop: int) -> list[int]:
@@ -1239,14 +1419,14 @@ def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
                         spans.append((i, skip))
                         idle += _quotes_in(text, i, skip)
             elif "/" not in unmatched and i >= tried:
-                before = _BEFORE_PATTERN.search(text, max(0, i - 20), i)
+                before = _BEFORE_JS_PATTERN.search(text, max(0, i - 20), i)
                 if before or text[max(0, i - 20):i].rstrip().endswith(")"):
-                    pattern = _PATTERN.match(text, i)
+                    pattern = _JS_PATTERN.match(text, i)
                     if not pattern:
                         unmatched.add("/")
                     else:
                         tried = pattern.end() - 1  # its closing slash may open the next
-                        follows = _AFTER_PATTERN if before else _USED_PATTERN
+                        follows = _AFTER_JS_PATTERN if before else _USED_JS_PATTERN
                         if follows.match(text, pattern.end()):
                             skip = pattern.end()
                             spans.append((i, skip))
@@ -1393,7 +1573,15 @@ def _shell_trace(unit: _Unit) -> list[Finding]:
 # An interpreter runs what it is piped only when given no script of its own:
 # "| bash" runs the download, "| python3 -c '...'" only parses it as data.
 _CURL_PIPE = re.compile(
-    r"(?<![\w-])(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
+    # sudo and env, with their flags (some taking a separate argument) and variables. The
+    # argument cannot start with "-" or hold "=", so a run of words is read one way only,
+    # not in exponentially many.
+    r"(?<![\w-])(?:curl|wget)\b[^\n|]*\|\s*"
+    r"(?:(?:(?:/usr)?/bin/)?(?:sudo|env)"
+    r"(?:\s+(?:(?:-[ugp]|--user|--group|--prompt)\s+(?!-)[^\s|;&=<>]+(?=\s)"
+    r"|-[\w=.-]+|[A-Za-z_]\w*=[^\s|;&]*))*\s+){0,3}"
+    r"(?:(?:/usr)?(?:/local)?/bin/)?"
+    r"(?:sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)\b"
     r"(?!\s+(?:-[a-zA-Z]*c\b|-m\b|[^\s-]))"
     r"|(?<![\w-])(?:sh|bash|zsh)\b[^\n]*<\(\s*(?:curl|wget)\b"
     r"|(?:eval|sh\s+-c|bash\s+-c)\s+[\"']?\$\(\s*(?:curl|wget)\b")
@@ -1615,41 +1803,214 @@ _CONFIRM = re.compile(
     r"|\b(?:confirm|check)\s+with\s+(?:the\s+)?(?:user|human)\b"
     r"|\b(?:get|obtain|request|wait\s+for)\s+(?:the\s+user['’]s\s+|explicit\s+|their\s+)?"
     r"(?:confirmation|approval|permission)\b"
-    r"|\bare\s+you\s+sure\b|\bdry[- ]?run\b|--dry-run\b|-WhatIf\b"
+    r"|\bare\s+you\s+sure\b|\bdry[- ]?run\b|--dry-run\b"
+    r"|-WhatIf\b(?!:\$?(?:false|0)\b)"  # -WhatIf:$false and -Confirm:$false switch it off
     r"|\b(?:make|take|create|keep)\s+(?:a\s+)?back[\s-]?up\b"
     r"|\bback\s+(?:it|them|everything)\s+up\b"
     r"|\bback\s+up\s+(?:your|the|all|everything|it|them|files|data|my|our|first|before)\b"
-    r"|\bread\s+-[a-zA-Z]*p\b"
+    # `read -p`, `read -r -p` and `read -t 10 -p`: flags, some with a value, before the p.
+    r"|\bread\s+(?:-[a-zA-Z]+\s+(?:(?:'[^']{0,20}'|\"[^\"]{0,20}\"|[^\s;&|<>'\"-][^\s;&|]{0,40})\s+)?){0,6}"
+    r"-[a-zA-Z]*p\b"
     r"|\binput\s*\([^)]*(?:y/n|\byes\b|\bsure\b|\bconfirm\b|\bproceed\b|\bcontinue\b|\[y)"
-    r"|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b|\bset\s+/p\b|\bchoice\s+/[a-z]",
+    r"|\bconfirm\s*\(|\bRead-Host\b|-Confirm\b(?!:\$?(?:false|0)\b)|\bset\s+/p\b"
+    r"|\bchoice\s+/[a-z]",
     re.I)
+# A question put to whoever runs the code, which a `read` or an `input()` then answers:
+# `echo "Delete? [y/N]"` followed by `read answer`. Neither is a confirmation alone.
+# The lookahead leaves each later `echo` to be tried too; _question_end then checks that
+# no `;`, `&` or `|` outside a string ends the command before the question.
+_PRINTS_QUESTION = re.compile(
+    r"\b(?:echo|printf|print|Write-Host|Write-Output)\b(?=([^\n]{0,80}?"
+    r"(?:are\s+you\s+sure|[\[(]\s*y(?:es)?\s*/\s*n"
+    r"|\b(?:sure|confirm|proceed|continue|delete|remove|wipe|overwrite|erase)\b[^\"'\n]{0,60}\?)))",
+    re.I)
+_ENDS_COMMAND = re.compile(r"(?<!>)[;&|]")  # not the `&` of a redirect such as `>&2`
+# `read` as a command that waits for the user: not `while read`, not after a pipe, and
+# not from a file. It may stand after `!`, `builtin` or an assignment such as `IFS=`.
+# `input()` with no prompt of its own.
+_READS_ANSWER = re.compile(
+    r"(?:\A|;|&&|\|\||\{|(?<![\w.$-])(?:then|do|if|elif)(?=\s))\s*(?:!\s+)?"
+    r"(?:(?:[A-Za-z_]\w{0,30}=(?:\$?'[^']{0,20}'|\"[^\"]{0,20}\"|[^\s;&|'\"<>]{0,40})"
+    r"|builtin|command)\s+){0,3}"
+    r"(?P<read>read)\b(?![^;&|\n]{0,200}<(?!\s*/dev/tty))"
+    r"|(?<![\w.])(?P<input>input)\s*\(\s*\)")
 # A confirmation phrase is ignored when the words just before it negate it.
 _NEGATION_REACH = 64  # > longest negation word (8) + the 30 characters after it
 _NEGATED_BEFORE = re.compile(
     r"\b(?:no|not|without|skip(?:ping)?|don['’]?t|never|needn['’]?t)\b[^.\n]{0,30}$", re.I)
 
 
-def _confirmed(unit: _Unit, line_index: int, previous: _Unit | None) -> bool:
-    """A confirmation step near a destructive command (checks.md, confirmation check).
+# "We make a backup of the logs weekly" describes what happens elsewhere; it asks nothing
+# of whoever runs the command.
+_BACKUP = re.compile(r"(?:make|take|create|keep|back)\b", re.I)
+_DESCRIBED_BEFORE = re.compile(r"\b(?:we|they|i)\s+(?:\w+ly\s+)?$", re.I)
+_BATCH_COMMENT = re.compile(r"\s*(?:rem\b|::)", re.I)
+_SLASH_COMMENTS = {".js", ".mjs", ".cjs", ".ts"}
+# Languages in which a backslash escapes inside single quotes too, which a shell's do not.
+_SINGLE_QUOTE_ESCAPES = _SLASH_COMMENTS | {".py"}
 
-    Cached per unit, and per line in a script: outside scripts the window is the whole
-    unit, so the answer is the same for every match in it (MET-42). `previous` is always
-    the unit before this one in the same file, so it does not change the key."""
-    key = ("confirmed", line_index if unit.kind == "script" else None)
+
+@lru_cache(maxsize=4)
+def _quoted_spans(path: str, line: str) -> tuple[tuple[int, int, str], ...]:
+    """(start, end, kind) parts of a line of code, read on its own: kind is "string",
+    "comment" or "template", a JavaScript backtick string. A template literal can run over
+    lines, so a backtick may as well close one as open it: what is in a "template" is not
+    taken to be text that never runs."""
+    suffix = Path(path).suffix.lower()
+    if suffix in (".bat", ".cmd") and _BATCH_COMMENT.match(line):
+        return ((0, len(line), "comment"),)
+    # PowerShell and cmd.exe do not escape with a backslash: "C:\dir\" ends at the quote.
+    escapes = suffix not in (".ps1", ".psm1", ".bat", ".cmd")
+    # A block comment opened and, if it is, closed on this line.
+    block = (("<#", "#>") if suffix in (".ps1", ".psm1")
+             else ("/*", "*/") if suffix in _SLASH_COMMENTS else None)
+    spans, quote, opened, i, ansi = [], "", 0, 0, False
+    patterns = suffix in _SLASH_COMMENTS
+    tried = 0  # no pattern is looked for inside the last candidate (MET-42)
+    while i < len(line):
+        c = line[i]
+        if quote:
+            if c == "\\" and escapes and (quote != "'" or ansi
+                                           or suffix in _SINGLE_QUOTE_ESCAPES):
+                i += 1
+            elif c == quote:
+                spans.append((opened, i + 1, "template" if quote == "`" else "string"))
+                quote = ""
+        elif c == "\\" and escapes:
+            i += 1  # `don\'t` opens no string
+        elif c in "'\"" or (c == "`" and suffix in _SLASH_COMMENTS
+                           and line.find("`", i + 1) >= 0):  # alone, it opens nothing here
+            quote, opened = c, i
+            ansi = c == "'" and line[i - 1:i] == "$"  # bash's $'it\\'s'
+        elif (block and line.startswith(block[0], i)
+                and (i == 0 or line[i - 1] in " \t;,(){=")):  # not in `~/*`, `${a}/*`
+            end = line.find(block[1], i + 2)
+            end = len(line) if end < 0 else end + 2
+            spans.append((i, end, "comment"))
+            i = end
+            continue
+        elif (i == 0 or line[i - 1].isspace()) and (
+                c == "#" or (line.startswith("//", i) and (suffix in _SLASH_COMMENTS
+                                                          or suffix in MARKDOWN_SUFFIXES))):
+            spans.append((i, len(line), "comment"))
+            break
+        elif c == "/" and patterns and i >= tried and not line.startswith(("//", "/*"), i):
+            # A quote in a pattern such as /`/g or /["']/ opens no string.
+            before = _BEFORE_JS_PATTERN.search(line, max(0, i - 20), i)
+            if before or line[max(0, i - 20):i].rstrip().endswith(")"):
+                found = _JS_PATTERN.match(line, i)
+                if not found:
+                    patterns = False  # none closes further on: do not look again (MET-42)
+                else:
+                    tried = found.end() - 1  # its closing slash may open the next
+                    follows = _AFTER_JS_PATTERN if before else _USED_JS_PATTERN
+                    if follows.match(line, found.end()):
+                        i = found.end()
+                        continue
+        i += 1
+    if quote:
+        spans.append((opened, len(line), "string"))
+    return tuple(spans)
+
+
+def _span_at(path: str, line: str, col: int) -> tuple[int, int, str] | None:
+    """The string or comment column col of a line of code is in, if one."""
+    spans = _quoted_spans(path, line)
+    # Spans do not overlap and are in order: bisect, as a line can hold thousands.
+    i = bisect_right(spans, col, key=lambda span: span[0]) - 1
+    if i < 0:
+        return None
+    start, end, kind = spans[i]
+    # Strictly inside: a match that begins at a quote or a # is the command itself.
+    if start < col < end or (kind == "comment" and col == start):
+        return spans[i]
+    return None
+
+
+def _confirmations(unit: _Unit, line_index: int) -> int | None:
+    """The column of the first confirmation step on a line, or None. Cached per line.
+
+    Not counted: a negated phrase, a backup that is only described, and in code a phrase
+    inside a comment or a string, which asks nothing of anyone."""
+    key = ("confirmations", line_index)
     if key not in unit.cache:
-        if unit.kind == "script":
-            window = unit.lines[max(0, line_index - CONFIRM_LOOKBACK):line_index + 1]
-        else:
-            window = list(unit.lines)
-            if previous is not None and previous.kind == "prose":
-                window += previous.lines
-        # The negation pattern spans at most about 40 characters, so it is searched only
-        # just before the phrase, not on the whole line up to it (MET-42). The search
-        # starts mid-line with pos, so \b still sees the character before the window.
-        unit.cache[key] = any(
-            not _NEGATED_BEFORE.search(text, max(0, m.start() - _NEGATION_REACH), m.start())
-            for _, text in window for m in _CONFIRM.finditer(text))
+        line = unit.lines[line_index][1]
+        found = None
+        spans = None if unit.kind == "prose" else _quoted_spans(unit.path, line)
+        at = 0
+        for m in _CONFIRM.finditer(line):
+            # The patterns before a phrase span at most about 40 characters, so they are
+            # searched only just before it, not on the whole line up to it (MET-42). The
+            # search starts mid-line with pos, so \b still sees the character before it.
+            since = max(0, m.start() - _NEGATION_REACH)
+            if _NEGATED_BEFORE.search(line, since, m.start()):
+                continue
+            if _BACKUP.match(m.group(0)) and _DESCRIBED_BEFORE.search(line, since, m.start()):
+                continue
+            if spans:
+                while at < len(spans) and spans[at][1] <= m.start():
+                    at += 1
+                if at < len(spans) and spans[at][0] <= m.start():
+                    continue
+            found = m.start()
+            break
+        if unit.kind != "prose" and (answer := _answer(unit, line_index)) is not None:
+            found = answer if found is None else min(found, answer)
+        unit.cache[key] = found
     return unit.cache[key]
+
+
+def _question_end(unit: _Unit, line_index: int) -> int | None:
+    """Where the first printed question on a line of code ends, if it prints one. Cached."""
+    key = ("question", line_index)
+    if key not in unit.cache:
+        line = unit.lines[line_index][1]
+        unit.cache[key] = next(
+            (m.end(1) for m in _PRINTS_QUESTION.finditer(line)
+             if _span_at(unit.path, line, m.start()) is None
+             and all(_span_at(unit.path, line, end.start()) is not None
+                     for end in _ENDS_COMMAND.finditer(line, m.end(), m.end(1)))), None)
+    return unit.cache[key]
+
+
+def _answer(unit: _Unit, line_index: int) -> int | None:
+    """The column of the first `read` or `input()` on a line of code that answers a
+    question printed before it: earlier on the line, or in the lines just before."""
+    line = unit.lines[line_index][1]
+    asked = any(_question_end(unit, i) is not None
+                for i in range(max(0, line_index - CONFIRM_LOOKBACK), line_index))
+    here = _question_end(unit, line_index)
+    for m in _READS_ANSWER.finditer(line):
+        col = m.start("read" if m["read"] else "input")
+        if (asked or here is not None and here <= col) and _span_at(unit.path, line, col) is None:
+            return col
+    return None
+
+
+def _confirmed(unit: _Unit, line_index: int, col: int, previous: _Unit | None) -> bool:
+    """A confirmation step before a destructive command (checks.md, confirmation check):
+    earlier on its line, on a line before it (the five before it in a script, the whole
+    unit elsewhere), or in the paragraph before. One that comes after does not count.
+
+    What each line and each unit holds is found once, so many matches stay linear (MET-42)."""
+    own = _confirmations(unit, line_index)
+    if own is not None and own < col:
+        return True
+    if unit.kind == "script":
+        return any(_confirmations(unit, i) is not None
+                   for i in range(max(0, line_index - CONFIRM_LOOKBACK), line_index))
+    if "first_confirmation" not in unit.cache:
+        unit.cache["first_confirmation"] = next(
+            (i for i in range(len(unit.lines)) if _confirmations(unit, i) is not None),
+            len(unit.lines))
+    if unit.cache["first_confirmation"] < line_index:
+        return True
+    if previous is None or previous.kind != "prose":
+        return False
+    if "confirms" not in previous.cache:
+        previous.cache["confirms"] = any(
+            _confirmations(previous, i) is not None for i in range(len(previous.lines)))
+    return previous.cache["confirms"]
 
 
 # --- Delete targets --------------------------------------------------------------
@@ -1748,8 +2109,30 @@ def link_text(path: Path | str) -> str:
     return without_extended_prefix(target) if os.name == "nt" else target
 
 
+def _climbs_out(relative: str) -> bool:
+    """Whether the `..` in a relative path lead above where it starts."""
+    depth = 0
+    for part in relative.split("/"):
+        depth += -1 if part == ".." else part not in ("", ".")
+        if depth < 0:
+            return True
+    return False
+
+
 def _normalize(target: str) -> str:
     t = target.strip().strip("'\"").replace("\\", "/")
+    # `~/./Documents` and `~//Documents` name the same folder as `~/Documents`.
+    t = re.sub(r"/(?:\.(?=/|$))+", "", re.sub(r"/{2,}", "/", t)) or ("/" if t else "")
+    # A path from a fixed start also has its `..` resolved. A trailing `..` is kept (it is
+    # judged as written, CRITICAL), and so is any path whose start is not known.
+    if t.startswith(("/", "~/", "$HOME/", "${HOME}/")) and "/../" in t and not t.endswith("/.."):
+        head, rest = (t.split("/", 1) if not t.startswith("/") else ("", t[1:]))
+        if "$" not in rest:
+            if head and _climbs_out(rest):
+                t = head + "/.."  # above the home folder: no safer than naming its parent
+            else:
+                resolved = posixpath.normpath("/" + rest)
+                t = head + resolved if head else resolved
     while t.endswith(("/*", "/.")) and len(t) > 2:
         t = t[:-2]
     while t.endswith("/") and len(t) > 1:

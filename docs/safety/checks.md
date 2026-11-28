@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "10"
+CHECKS_VERSION = "11"
 
 class ChecksBackend:
     name = "own-checks"
@@ -115,7 +115,7 @@ The numbers come from the CVSS band ceilings, not hand-picked; see [severity-sca
 
 | Rule | Matches | Severity |
 |---|---|---|
-| `recursive-delete` | `rm -r`, `rm -rf`, `rm -fr`, `shutil.rmtree`, `Remove-Item -Recurse`, `find ... -delete`; on Windows `rmdir /s`, `rd /s`, `del /s` | Set by the target, below |
+| `recursive-delete` | The forms listed below | Set by the target, below |
 | `force-push` | `git push --force`, `git push -f` | HIGH: can destroy other people's work on a shared branch |
 | `history-rewrite` | `git reset --hard`, `git clean -fd` | HIGH: permanently discards uncommitted work or untracked files |
 | `db-drop-database` | `DROP DATABASE` | CRITICAL: everything at once, like wiping a disk |
@@ -123,6 +123,21 @@ The numbers come from the CVSS band ceilings, not hand-picked; see [severity-sca
 | `disk-write` | `dd ... of=/dev/`, `mkfs`, redirect to `/dev/sd*` | CRITICAL |
 
 `git push --force-with-lease` is not matched: it refuses to overwrite work it has not seen.
+
+#### Recursive-delete forms
+
+| Where | Matched |
+|---|---|
+| Shell | `rm` with `-r`, `-R` or `--recursive`; `find ... -delete` |
+| Python | `shutil.rmtree(...)`, `rmtree(...)`, with or without a space before `(`; through `import shutil as s` or `from shutil import rmtree as nuke` in the same file. Another object's `rmtree` (`sftp.rmtree`) and `def rmtree(` are not matched |
+| cmd.exe | `rmdir`, `rd`, `del`, `erase` with `/s`, also written together (`rd/s/q`, `/S/Q`) |
+| PowerShell | `Remove-Item` and its aliases `ri`, `rd`, `rmdir`, `del`, `erase` with `-Recurse` or any shorter form (`-r`, `-Rec`), also `-Recurse:$true`; not `-Recurse:$false`. (`rm` is read as the shell's) |
+
+**Inside a string** (version 11). In a code block or a script, a delete written in a string ends where the string does: the target of `os.system("rm -rf /")` is `/`. What follows the string is read too when something is joined to it (`"rm -rf " + folder`, `"rm -rf /tmp/%s" % name`), or when it holds no target and is not run there and then. Only a word of letters is a flag that asks first (`-i`).
+
+**No written target** (version 11). In a code block or a script, a recursive delete with nothing to delete written after it, as in `find ~ | xargs rm -rf` or `Get-ChildItem $HOME | Remove-Item -Recurse`, deletes what is piped to it: it is a finding with an unknown target (HIGH). Not when it only stands in a comment, or in a string that nothing runs, as in `grep -qE 'rm -rf|...'`. A string given to `sh -c`, `eval`, `ssh`, `Invoke-Expression`, `cmd /c`, `powershell -Command`, `os.system`, `subprocess` or `exec`, and `$(...)` in a double-quoted string, does count.
+
+**Paths** are compared with `/./` and repeated slashes removed, so `~/./Documents` and `~//Documents` are `~/Documents`. A `..` in the middle of a path that starts at `/` or the home folder is resolved; a trailing `..`, and a path whose parts are not all known, are judged as written. A path that climbs above the home folder (`~/../x`) is judged as the home folder's parent (`~/..`).
 
 #### Delete targets
 
@@ -183,17 +198,25 @@ When either applies and the delete follows links, the target is CRITICAL. A dele
 
 What a static check cannot see is a symlink the user created on their own machine. That is covered by the local warnings ([local.md](local.md)) for paths that can be looked up, and later by the runner: task runs happen in a sandbox that only exposes the task's workspace, and comparing its files before and after a run shows what a delete actually removed.
 
-**Confirmation check.** A match is only a finding if no confirmation step is found nearby. Nearby means:
+**Confirmation check.** A match is only a finding if no confirmation step comes **before** it, nearby (version 11: one that comes after no longer counts). Nearby means:
 
-- In markdown: the same code block, or the paragraph or list item directly before it.
-- In scripts: the same line, or the 5 lines before it.
+- Earlier on the same line.
+- In markdown: an earlier line of the same code block or paragraph, or the paragraph or list item directly before it.
+- In scripts: the 5 lines before it.
+
+In code blocks and scripts, a phrase inside a comment or a string does not count: it asks nothing of anyone (`# TODO: dry run support`, `echo 'Are you sure?'` with nothing reading an answer). The step itself still does (`read -p`, `input('Delete? [y/N] ')`). Comments include `/* ... */` in JavaScript and `<# ... #>` in PowerShell. A delete in a JavaScript backtick string counts even if nothing is seen to run it, as such a string can span lines. Comments and strings are read one line at a time, so the inside of a multi-line string is not recognised as one.
+
+A backup that is only described, as in "**we** make a backup of the logs weekly", does not count either; "make a backup first" does.
 
 Confirmation means an actual step, not just the word. Any of:
 
 - Asking: "ask the user **before/to confirm/for confirmation**" (asking about the action, not "ask the user for their favourite colour"), "confirm with the user", "get the user's approval", "wait for permission", "are you sure".
 - A dry run: "dry run", `--dry-run`, `-WhatIf`, `-n` on `git clean`.
 - A backup: "make a backup", "back up first", "back up your files", "back everything up" — "back up" needs an object, so "go back up one level" does not count.
-- Flags and code: `-i` or `--interactive` on `rm`, `read -p`, `confirm(`, `Read-Host`, `-Confirm`, `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
+- Flags and code: `-i`, `-I` or `--interactive` on `rm` unless a later `-f` or `--force` overrides it, `read -p` (also `read -r -p`), `confirm(`, `Read-Host`, `-Confirm` and `-WhatIf` (not with `:$false`), `set /p`, the `choice /…` command, and `input(` **only when its prompt reads like a yes/no question** (`input('Delete? [y/N] ')`, not `input('project name: ')`).
+- In code and scripts, a printed question and then its answer: `echo`, `printf`, `print`, `Write-Host` or `Write-Output` showing "are you sure", `[y/N]`, or a question about proceeding or deleting, followed by `read` (also `IFS= read`, `! read` or `builtin read`) or `input()` on the same line or within the 5 lines after. The `read` must come before the delete, and one that reads a loop, a pipe or a file does not count.
+
+At the `deep` tier, a delete or other destructive command cleared by one of these phrases is re-checked ([review.md](review.md)), in code and scripts as well as in prose; one cleared by a flag on the command itself (`rm -i`) is not. At most `MAX_CLEARED_PER_UNIT` matches in a code block or script are cleared this way; later ones are reported.
 
 A phrase negated just before it does not count: "no need to confirm", "skip the backup", "do not ask the user". Neither does the bare word: "Confirm the export finished" is not a confirmation step. Version 1 accepted any occurrence of "ask", "confirm" or "backup", which a malicious author could simply include; version 4 further requires the asking, backup and `input(` forms to be about the action (review feedback).
 
@@ -217,7 +240,7 @@ Not covered here: secrets written into the skill itself (that is Configuration C
 
 | Rule | Matches | Severity |
 |---|---|---|
-| `curl-pipe-shell` | `curl` or `wget` piped into `sh`, `bash`, `zsh`, `python`, also `bash <(curl ...)` and `sh -c "$(curl ...)"`. Not when the interpreter gets its own script (`python3 -c '...'`, `python3 parse.py`, `-m`): then the download is only parsed as data | HIGH |
+| `curl-pipe-shell` | `curl` or `wget` piped into `sh`, `bash`, `zsh`, `python`, also through `sudo` or `env` with flags and variables (`sudo -E bash`, `sudo -u "$USER" bash`) and by path (`/bin/bash`), also `bash <(curl ...)` and `sh -c "$(curl ...)"`. Not when the interpreter gets its own script (`python3 -c '...'`, `python3 parse.py`, `-m`): then the download is only parsed as data | HIGH |
 | `insecure-download` | `curl -k`, `--insecure`, `wget --no-check-certificate`, `pip --trusted-host`, downloads over `http://` | MEDIUM |
 | `unpinned-git-install` | `pip install git+...` or `npm install` from a git URL with no commit or tag | MEDIUM |
 | `unpinned-install` | `pip install name` with no version, `npm install -g name` with no version | LOW |

@@ -320,7 +320,7 @@ def test_warning_that_mentions_a_dry_run_stays_cleared(tmp_path):
     # A plain warning that also mentions a dry run matches the confirmation heuristic, so it
     # takes the confirmation question. The model answers `not_instructed` (the sentence says
     # not to run it), so it stays cleared instead of being restored as CRITICAL (review feedback).
-    body = "Never run `rm -rf ~/`; to preview a sync, use `rsync --dry-run` instead.\n"
+    body = "To preview a sync use `rsync --dry-run`; never run `rm -rf ~/`.\n"
     judge = FakeJudge(answer=lambda items: answer_confirmations(items, real="not_instructed"))
     result = ReviewBackend(judge).scan(skill_with(tmp_path, body), SafetyTier.DEEP)
     assert result.status is BackendStatus.OK
