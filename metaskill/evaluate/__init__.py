@@ -681,7 +681,9 @@ def _write(report: Report, ranking: Ranking, run_dir: Path) -> list[str]:
     data = run_dir / "ranked-evaluation.json"
     data.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
     readable = run_dir / "ranked-evaluation.md"
-    readable.write_text(markdown(report.meta, ranking), encoding="utf-8")
+    # backslashreplace: text from a run can hold a lone surrogate, which UTF-8 cannot.
+    readable.write_text(markdown(report.meta, ranking), encoding="utf-8",
+                        errors="backslashreplace")
     return [str(data), str(readable)]
 
 

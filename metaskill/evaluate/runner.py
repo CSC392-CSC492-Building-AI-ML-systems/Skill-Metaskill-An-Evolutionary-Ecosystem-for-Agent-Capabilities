@@ -33,6 +33,8 @@ from .judge import (
     DeterministicJudge,
     Judge,
     JudgeError,
+    JudgeNoVerdict,
+    JudgeRefused,
     JudgeUnavailable,
     RunOutput,
     TaskJudge,
@@ -285,10 +287,19 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
         if watcher is not None:
             watcher.close()
 
+    # A with_skill run the judge's provider refused counts as a failed run only if it judged
+    # a baseline run of the task, so the check itself gets through; that is known here, once
+    # all the runs are made.
+    judged = {planned.task.task_id for planned, outcome in zip(plan, outcomes)
+              if outcome is not None and outcome.judged and planned.variant is Variant.BASELINE}
     for planned, outcome in zip(plan, outcomes):
         assert outcome is not None  # every planned run was decided above
         if outcome.error:
             result.errors.append(outcome.error)
+            continue
+        if outcome.refusal and (planned.variant is Variant.BASELINE  # not the skill's doing
+                                or planned.task.task_id not in judged):
+            result.errors.append(_error(planned.label, outcome.refusal))
             continue
         result.tests.append(outcome.test)
         if outcome.transcript and planned.variant is Variant.WITH_SKILL:
@@ -298,6 +309,11 @@ def run_tasks(skill: Skill, tasks: list[Task], agent: Agent, *,
         result.judge_model = pool.llm.judge_model
         result.judge_usage = pool.llm.total_usage
     return result
+
+
+def _error(label: str, error: Exception) -> str:
+    """A line of RunnerResult.errors."""
+    return clean(f"{label}: {type(error).__name__}: {error}", MAX_REASON_CHARS)
 
 
 def _free_folder(run_dir: Path) -> str:
@@ -328,11 +344,14 @@ class _Planned:
 
 @dataclass
 class _Outcome:
-    """What one planned run gave: a result and its transcript, or an error."""
+    """What one planned run gave: a result and its transcript, or an error. `judged` and
+    `refusal` are _run_once's."""
 
     test: TestResult | None = None
     transcript: str = ""
     error: str = ""
+    judged: bool = False
+    refusal: JudgeRefused | None = None
 
 
 def _attempt(planned: _Planned, skill: Skill, agent: Agent, pool: _Judges,
@@ -347,8 +366,9 @@ def _attempt(planned: _Planned, skill: Skill, agent: Agent, pool: _Judges,
         if pool.stopping:  # stopped during the pause, which stop() ended early
             return _Outcome(error=f"{label}: the evaluation was stopped before this run")
         try:
-            test, transcript = _run_once(skill, planned.task, planned.variant, planned.n,
-                                         agent, pool, config, run_dir, folder)
+            test, transcript, judged, refusal = _run_once(
+                skill, planned.task, planned.variant, planned.n, agent, pool, config,
+                run_dir, folder)
         # JudgeError also covers a workspace that could not be made, or Docker failing.
         # OSError: writing the log failed. Either costs this run, not the runs already made.
         except (JudgeError, JudgeUnavailable, OSError) as e:
@@ -360,7 +380,7 @@ def _attempt(planned: _Planned, skill: Skill, agent: Agent, pool: _Judges,
                 _log.info("metaskill: run %s was rate-limited; trying again in %.0f s",
                           label, delay)
                 continue
-            return _Outcome(error=clean(f"{label}: {type(e).__name__}: {e}", MAX_REASON_CHARS))
+            return _Outcome(error=_error(label, e))
         except Exception as e:
             # Unexpected, so likely a bug of ours: it costs this run (an error, not a
             # score), never the skill's other runs or its other dimensions.
@@ -368,7 +388,7 @@ def _attempt(planned: _Planned, skill: Skill, agent: Agent, pool: _Judges,
                          clean(skill.name, MAX_REASON_CHARS), exc_info=True)
             return _Outcome(error=clean(f"{label}: {type(e).__name__}", MAX_REASON_CHARS))
         backoff.succeeded()
-        return _Outcome(test=test, transcript=transcript)
+        return _Outcome(test=test, transcript=transcript, judged=judged, refusal=refusal)
     raise AssertionError("unreachable")  # the last attempt returns
 
 
@@ -397,18 +417,21 @@ def _run_parallel(todo: list[int], workers: int, attempt: Callable[[int], _Outco
 
 def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
               pool: _Judges, config: EvaluationConfig,
-              run_dir: Path, folder: str) -> tuple[TestResult, str]:
+              run_dir: Path, folder: str,
+              ) -> tuple[TestResult, str, bool, JudgeRefused | None]:
     """One session in a fresh workspace, judged against every check of the task. Returns
-    the result and the agent's transcript ("" if it gave none)."""
+    the result, the agent's transcript ("" if it gave none), whether the judges gave the
+    result's verdict, and the provider's refusal if the LLM judge met one."""
     workspace = pool.open(task.fixtures)
     left_out: list[str] = []
     run, failure = AgentRun(output=""), ""
+    judged, refusal = False, None
     try:
         if variant is Variant.WITH_SKILL:
             # Before the clock: copying is not the agent's time.
             try:
                 left_out = _put_skill(skill, workspace)
-            except RunFailed as e:  # too large: it fails, rather than go unscored
+            except RunFailed as e:  # cannot be copied: it fails, rather than go unscored
                 failure = str(e)
         start = time.monotonic()
         if not failure:
@@ -425,7 +448,15 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         if failure:
             verdict = _failed(failure)
         else:
-            verdict = _judge(task, run, workspace, pool)
+            try:
+                verdict, judged = _judge(task, run, workspace, pool)
+            # The judge reads what the run wrote, so a run must not be able to leave
+            # itself unscored through it.
+            except JudgeNoVerdict as e:
+                verdict = _failed(f"the run could not be judged: {e}")
+            except JudgeRefused as e:
+                refusal = e
+                verdict = _failed(f"the judge's provider refused to judge this run: {e}")
     finally:
         pool.close(workspace)
 
@@ -452,7 +483,7 @@ def _run_once(skill: Skill, task: Task, variant: Variant, n: int, agent: Agent,
         output=_truncate(run.output, config.output_max_chars, log),
         evidence=verdict.evidence,
     )
-    return test, run.transcript
+    return test, run.transcript, judged, refusal
 
 
 def _own_seconds(run: AgentRun) -> float | None:
@@ -502,19 +533,21 @@ def _put_skill(skill: Skill, workspace: Workspace) -> list[str]:
     return left_out
 
 
-def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Verdict:
+def _judge(task: Task, run: AgentRun, workspace: Workspace,
+           pool: _Judges) -> tuple[Verdict, bool]:
     """Every check of the task on the run. The judges read a copy of the workspace's
     folder, made once, before any check runs; `exit_code` commands run in the workspace
     itself, where the agent ran. A run that broke its workspace fails: it is not left
-    out, or a skill could leave itself unscored."""
+    out, or a skill could leave itself unscored. Also returns whether the verdict is the
+    judges' own, rather than such a failure."""
     workdir = Path(tempfile.mkdtemp(prefix=f"metaskill-{task.task_id}-"))
     try:
         workspace.export(workdir)
         output = RunOutput(text=run.output, workdir=workdir)
         pool.workspace = workspace
-        return _combine(_verdicts(task, output, pool))
+        return _combine(_verdicts(task, output, pool)), True
     except RunFailed as e:
-        return _failed(str(e))
+        return _failed(str(e)), False
     except (JudgeError, JudgeUnavailable):
         raise  # the judge or Docker, not the run: an error, as before
     except Exception as e:
@@ -523,7 +556,7 @@ def _judge(task: Task, run: AgentRun, workspace: Workspace, pool: _Judges) -> Ve
         # drop the whole skill from the evaluation. Logged in full, as it may be our bug.
         _log.warning("metaskill: a check of task %s raised while judging a run", task.task_id,
                      exc_info=True)
-        return _failed(f"the run's result could not be judged ({type(e).__name__})")
+        return _failed(f"the run's result could not be judged ({type(e).__name__})"), False
     finally:
         pool.workspace = None
         shutil.rmtree(workdir, ignore_errors=True)

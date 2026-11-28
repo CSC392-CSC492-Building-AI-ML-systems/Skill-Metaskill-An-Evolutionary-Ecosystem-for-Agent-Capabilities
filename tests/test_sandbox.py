@@ -1,3 +1,4 @@
+import errno
 import io
 import subprocess
 import sys
@@ -207,13 +208,80 @@ def test_a_skill_that_only_fills_up_in_the_container_is_too_large_too(tmp_path, 
         workspace.put([tmp_path / "a.bin"], SKILL_DIR)
 
 
-def test_a_skill_failing_to_copy_for_another_reason_is_an_error(tmp_path):
+@pytest.mark.parametrize("message", [
+    b"tar: secret.bin: Cannot open: File name too long\ntar: Exiting with failure status",
+    b"mkdir: cannot create directory 'secret': File name too long",
+])
+def test_a_skill_the_container_cannot_write_is_the_runs_failure(tmp_path, message):
+    (tmp_path / "secret.bin").write_bytes(b"x")
+    workspace = FakeDocker().open([])
+    workspace.sandbox.streamed = lambda args, input: Streamed(2, b"", message)
+    with pytest.raises(RunFailed, match="could not be written") as caught:
+        workspace.put([tmp_path / "secret.bin"], SKILL_DIR)
+    assert "secret" not in str(caught.value)  # the skill's to choose, and it is reported
+
+
+@pytest.mark.parametrize("streamed", [
+    Streamed(1, b"", b"Error response from daemon: broken"),
+    Streamed(126, b"", b"sh: tar: Permission denied"),
+    Streamed(127, b"", b"sh: tar: not found"),
+    Streamed(None, b"", b"tar: still going"),  # timed out
+])
+def test_a_skill_failing_to_copy_for_another_reason_is_an_error(tmp_path, streamed):
     (tmp_path / "a.bin").write_bytes(b"x")
     workspace = FakeDocker().open([])
-    workspace.sandbox.streamed = lambda args, input: Streamed(2, b"", b"tar: broken")
-    with pytest.raises(JudgeError, match="tar: broken") as caught:
+    workspace.sandbox.streamed = lambda args, input: streamed
+    with pytest.raises(JudgeError) as caught:
         workspace.put([tmp_path / "a.bin"], SKILL_DIR)
     assert not isinstance(caught.value, RunFailed)
+
+
+def test_fixtures_the_container_cannot_write_are_an_error(tmp_path):
+    (tmp_path / "a.bin").write_bytes(b"x")
+    sandbox = FakeDocker()
+    sandbox.streamed = lambda args, input: Streamed(2, b"", b"tar: a.bin: Cannot open")
+    with pytest.raises(JudgeError) as caught:
+        sandbox.open([tmp_path / "a.bin"])
+    assert not isinstance(caught.value, RunFailed)
+
+
+UNREADABLE = [
+    PermissionError(errno.EACCES, "Permission denied", "secret.bin"),
+    OSError(errno.ENAMETOOLONG, "File name too long", "secret.bin"),
+    UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed"),
+]
+
+
+def archive_raises(monkeypatch, error):
+    def fail(paths, file):
+        raise error
+    monkeypatch.setattr(sandbox_module, "_archive", fail)
+
+
+@pytest.mark.parametrize("error", UNREADABLE)
+def test_a_skill_file_that_cannot_be_read_is_the_runs_failure(tmp_path, monkeypatch, error):
+    (tmp_path / "secret.bin").write_bytes(b"x")
+    workspace = FakeDocker().open([])
+    archive_raises(monkeypatch, error)
+    with pytest.raises(RunFailed, match="could not be read") as caught:
+        workspace.put([tmp_path / "secret.bin"], SKILL_DIR)
+    assert "secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize("error", UNREADABLE)
+def test_a_fixture_that_cannot_be_read_is_left_as_it_is(tmp_path, monkeypatch, error):
+    (tmp_path / "a.bin").write_bytes(b"x")
+    archive_raises(monkeypatch, error)
+    with pytest.raises(type(error)):
+        FakeDocker().open([tmp_path / "a.bin"])
+
+
+def test_a_full_disk_here_is_not_the_skills_failure(tmp_path, monkeypatch):
+    (tmp_path / "a.bin").write_bytes(b"x")
+    workspace = FakeDocker().open([])
+    archive_raises(monkeypatch, OSError(errno.ENOSPC, "No space left on device"))
+    with pytest.raises(OSError):
+        workspace.put([tmp_path / "a.bin"], SKILL_DIR)
 
 
 def test_fixtures_too_large_are_an_error_not_a_failed_run(tmp_path):

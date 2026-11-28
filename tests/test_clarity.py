@@ -227,5 +227,5 @@ def test_a_bad_reply_is_not_called_a_provider_failure(tmp_path):
     result = evaluate_skill(folder, output_path=tmp_path / "reports", ctx=ctx)
     report = Report.from_dict(json.loads(Path(result["artifacts"][0]).read_text(encoding="utf-8")))
     status = report.skills[0].dimensions[Dimension.CLARITY]
-    assert status.status is Status.ERROR and status.detail == "failed: JudgeError"
+    assert status.status is Status.ERROR and status.detail == "failed: JudgeNoVerdict"
     assert result["warnings"] == []
