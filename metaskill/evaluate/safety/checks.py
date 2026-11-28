@@ -1683,15 +1683,22 @@ _CONFIRM = re.compile(
     re.I)
 # A question put to whoever runs the code, which a `read` or an `input()` then answers:
 # `echo "Delete? [y/N]"` followed by `read answer`. Neither is a confirmation alone.
+# The lookahead leaves each later `echo` to be tried too; _question_end then checks that
+# no `;`, `&` or `|` outside a string ends the command before the question.
 _PRINTS_QUESTION = re.compile(
-    r"\b(?:echo|printf|print|Write-Host|Write-Output)\b[^;&|\n]{0,80}?"
+    r"\b(?:echo|printf|print|Write-Host|Write-Output)\b(?=([^\n]{0,80}?"
     r"(?:are\s+you\s+sure|[\[(]\s*y(?:es)?\s*/\s*n"
-    r"|\b(?:sure|confirm|proceed|continue|delete|remove|wipe|overwrite|erase)\b[^\"'\n]{0,60}\?)",
+    r"|\b(?:sure|confirm|proceed|continue|delete|remove|wipe|overwrite|erase)\b[^\"'\n]{0,60}\?)))",
     re.I)
+_ENDS_COMMAND = re.compile(r"(?<!>)[;&|]")  # not the `&` of a redirect such as `>&2`
 # `read` as a command that waits for the user: not `while read`, not after a pipe, and
-# not from a file. `input()` with no prompt of its own.
+# not from a file. It may stand after `!`, `builtin` or an assignment such as `IFS=`.
+# `input()` with no prompt of its own.
 _READS_ANSWER = re.compile(
-    r"(?:\A|;|&&|(?<=\s)(?:then|do|if))\s*(?P<read>read)\b(?![^;&|\n]{0,200}<(?!\s*/dev/tty))"
+    r"(?:\A|;|&&|\|\||\{|(?<![\w.$-])(?:then|do|if|elif)(?=\s))\s*(?:!\s+)?"
+    r"(?:(?:[A-Za-z_]\w{0,30}=(?:\$?'[^']{0,20}'|\"[^\"]{0,20}\"|[^\s;&|'\"<>]{0,40})"
+    r"|builtin|command)\s+){0,3}"
+    r"(?P<read>read)\b(?![^;&|\n]{0,200}<(?!\s*/dev/tty))"
     r"|(?<![\w.])(?P<input>input)\s*\(\s*\)")
 # A confirmation phrase is ignored when the words just before it negate it.
 _NEGATION_REACH = 64  # > longest negation word (8) + the 30 characters after it
@@ -1833,8 +1840,10 @@ def _question_end(unit: _Unit, line_index: int) -> int | None:
     if key not in unit.cache:
         line = unit.lines[line_index][1]
         unit.cache[key] = next(
-            (m.end() for m in _PRINTS_QUESTION.finditer(line)
-             if _span_at(unit.path, line, m.start()) is None), None)
+            (m.end(1) for m in _PRINTS_QUESTION.finditer(line)
+             if _span_at(unit.path, line, m.start()) is None
+             and all(_span_at(unit.path, line, end.start()) is not None
+                     for end in _ENDS_COMMAND.finditer(line, m.end(), m.end(1)))), None)
     return unit.cache[key]
 
 

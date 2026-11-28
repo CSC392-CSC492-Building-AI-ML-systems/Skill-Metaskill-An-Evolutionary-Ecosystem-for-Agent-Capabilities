@@ -633,6 +633,10 @@ def test_curl_piped_through_sudo_with_arguments(tmp_path, sudo):
     ("a.sh", "if read x " * 40_000 + "\nrm -rf ~\n"),
     ("a.sh", "echo " * 190 + "\n" + "; read x " * 40_000 + "\nrm -rf ~\n"),
     ("a.sh", "read " + "-a " * 100_000 + "\nrm -rf ~\n"),
+    ("a.sh", "if ! IFS= read x " * 40_000 + "\nrm -rf ~\n"),
+    ("a.sh", "; A= B= C= " * 40_000 + "\nrm -rf ~\n"),
+    ("a.sh", "print 'delete " * 40_000 + "\nrm -rf ~\n"),
+    ("a.sh", "Write-Host ;" * 40_000 + " sure?\nread a\nrm -rf ~\n"),
 ], ids=_short_id)
 def test_review_inputs_cannot_stall_the_scan(tmp_path, name, text):
     skill = make(tmp_path, {name: text})
@@ -1655,6 +1659,14 @@ ANSWERED_DELETE = "[[ $ans == y ]] || exit 1\nrm -rf ~/Documents"
     'printf "Delete these files? "\nread -r ans',
     'echo -n "Continue [y/N] " && read ans',
     'echo "Proceed?"; read ans </dev/tty',
+    'echo "Are you sure? [y/N]"\nIFS= read -r ans',
+    'echo "Delete? [y/N]"\nif ! read -r ans; then exit 1; fi',
+    'echo "Delete? [y/N]"\nbuiltin read ans',
+    'echo "Delete? [y/N]"\nLC_ALL=C IFS=\',\' read -r ans || exit 1',
+    'echo "Delete? [y/N]"\nif read -r ans; then :; fi',
+    'echo >&2 "Are you sure? [y/N]"\nread ans',
+    'echo "Warning; are you sure? [y/N]"\nread ans',
+    'printf \'%s & %s: delete? \' a b\nread ans',
 ])
 def test_a_question_and_its_answer_confirm_a_delete(tmp_path, asking):
     assert prose(tmp_path, f"```bash\n{asking}\n{ANSWERED_DELETE}\n```").findings == []
@@ -1671,6 +1683,11 @@ def test_a_question_and_its_answer_confirm_a_delete(tmp_path, asking):
     'echo "Are you sure?"\nwhile read f; do :; done',
     'echo "Are you sure?"\nread ans < answers.txt',
     'read ans\necho "Are you sure?"',
+    'echo done; log "Are you sure?"\nread ans',
+    'echo hi | grep "sure?"\nread ans',
+    'echo "Are you sure?"\nwhile IFS= read -r f; do :; done',
+    'echo "Are you sure?"\nIFS= read -r ans < answers.txt',
+    'echo "Are you sure?"\nls | IFS= read ans',
 ])
 def test_a_question_or_a_read_alone_does_not_confirm(tmp_path, not_asking):
     result = prose(tmp_path, f"```bash\n{not_asking}\n{ANSWERED_DELETE}\n```")
