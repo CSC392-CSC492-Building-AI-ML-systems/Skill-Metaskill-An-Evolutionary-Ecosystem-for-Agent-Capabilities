@@ -123,7 +123,7 @@ def test_run_logs_go_into_this_calls_report_folder(tmp_path, harness):
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
                             output_path=tmp_path / "out", tasks_path=harness.tasks)
     run_dir = Path(result["artifacts"][0]).parent
-    logs = sorted(p.name for p in (run_dir / "s" / "logs").iterdir())
+    logs = sorted(p.name for p in (run_dir / "skill-01" / "logs").iterdir())
     assert len(logs) == 2 * RUNS * 2 and "t1-with_skill-r1.txt" in logs
 
 
@@ -135,7 +135,7 @@ def test_the_markdown_report_shows_the_task_table_for_a_run_with_tasks(tmp_path,
     result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
                             output_path=tmp_path / "out", tasks_path=harness.tasks)
     text = readable(result)
-    assert "### Task results" in text and "Logs: s/logs/ in this report's folder" in text
+    assert "### Task results" in text and "Logs: skill-01/logs/ in this report's folder" in text
     assert f"| t1 | with_skill | {RUNS}/{RUNS} (100%) | 110 | 2.0 | 1.0 | unchanged |" in text
     assert f"| t2 | baseline | {RUNS}/{RUNS} (100%) | 440 | 6.0 | 4.0 | - |" in text
     assert "could not be made" not in text.split("### Task results", 1)[1].split("### ", 2)[1]
@@ -177,8 +177,8 @@ def test_skills_with_the_same_name_keep_their_own_logs(tmp_path, harness, monkey
                          tasks_path=harness.tasks)
     run_dir = Path(result["artifacts"][0]).parent
     logs = {folder: (run_dir / folder / "logs" / "t1-with_skill-r1.txt").read_text(encoding="utf-8")
-            for folder in ("same", "same-2")}
-    assert "from original" in logs["same"] and "from copy" in logs["same-2"]
+            for folder in ("skill-01", "skill-02")}
+    assert "from original" in logs["skill-01"] and "from copy" in logs["skill-02"]
     # Each result names the log of its own session.
     for skill in report(result).skills:
         [test] = [t for t in skill.tests if (t.task_id, t.variant, t.run) == ("t1", Variant.WITH_SKILL, 1)]
@@ -188,18 +188,13 @@ def test_skills_with_the_same_name_keep_their_own_logs(tmp_path, harness, monkey
     # The Markdown points each skill at the folder its runs went to, not at "same" twice.
     [markdown] = [a for a in result["artifacts"] if str(a).endswith(".md")]
     text = Path(markdown).read_text(encoding="utf-8")
-    assert text.count("Logs: same/logs/") == 1 and text.count("Logs: same-2/logs/") == 1
+    assert text.count("Logs: skill-01/logs/") == 1 and text.count("Logs: skill-02/logs/") == 1
+    assert {s.log_folder for s in report(result).skills} == {"skill-01", "skill-02"}
 
 
-@pytest.mark.parametrize("names, folders", [
-    (["a", "b"], ["a", "b"]),
-    (["x", "x", "x"], ["x", "x-2", "x-3"]),
-    (["x", "x-2", "x"], ["x", "x-2", "x-3"]),  # a skill really named x-2 keeps its folder
-    (["Skill", "skill"], ["Skill", "skill-2"]),  # one folder on Windows and macOS
-])
-def test_each_skill_of_a_call_gets_its_own_log_folder(names, folders):
-    taken = set()
-    assert [evaluate._log_folder(name, taken) for name in names] == folders
+def test_log_folders_are_numbered_in_the_order_given():
+    assert [evaluate._log_folder(n) for n in (1, 2, 10, 100)] \
+        == ["skill-01", "skill-02", "skill-10", "skill-100"]
 
 
 def test_a_relative_tasks_path_is_the_users_session_folder(tmp_path, harness):
@@ -288,18 +283,78 @@ def test_a_lone_surrogate_in_an_agents_output_does_not_stop_the_report(
     assert len(report(result).skills[0].tests) == 2 * RUNS
 
 
-def test_a_skill_name_that_cannot_be_a_log_folder_still_gets_safety(tmp_path, harness, monkeypatch):
-    # The name comes from the skill's frontmatter; set a hostile one directly, since
-    # frontmatter needs Hermes' YAML loader.
-    hostile = evaluate.Skill(path=make_skill(tmp_path, "s"), name="../escape", body="# Skill\n")
-    monkeypatch.setattr(evaluate.Skill, "load", staticmethod(lambda path: hostile))
-    result = evaluate_skill(hostile.path, config_path=harness.config, output_path=tmp_path / "out",
-                            tasks_path=harness.tasks)
-    assert result["task_runs"]["errors"] == 1 and result["task_runs"]["sessions"] == 0
-    skill = report(result).skills[0]
-    assert skill.dimensions[Dimension.EFFICIENCY].status is Status.ERROR
-    assert skill.dimensions[Dimension.SAFETY].status is not Status.SKIPPED
-    assert harness.agents[0].calls == [] and not (tmp_path / "escape").exists()
+# Names that broke the report or a folder when the name was the folder (and the pairs that
+# shared one on Windows or macOS). Set through Skill.load: frontmatter needs Hermes.
+HOSTILE_NAMES = [
+    "ranked-evaluation.json", "ranked-evaluation.md", "Ranked-Evaluation.JSON",
+    "NUL", "CON", "PRN", "AUX", "COM1", "LPT9", "nul.txt", "foo", "foo.", "foo ", "Foo",
+    "../escape", "/etc", "a\\b", "x" * 300, "skill-01", ".", "..",
+]
+
+
+def name_skills(monkeypatch, tmp_path, names):
+    """A skill folder for each name, which Skill.load gives that name."""
+    paths = [make_skill(tmp_path, f"folder{i}") for i in range(len(names))]
+    given = dict(zip(map(str, paths), names))
+    real_load = evaluate.Skill.load
+
+    def load(path):
+        skill = real_load(path)
+        skill.name = given[str(path)]
+        return skill
+    monkeypatch.setattr(evaluate.Skill, "load", staticmethod(load))
+    return paths
+
+
+def test_no_skill_name_breaks_the_report_or_shares_a_log_folder(tmp_path, harness, monkeypatch):
+    paths = name_skills(monkeypatch, tmp_path, HOSTILE_NAMES)
+    harness.agent_act = lambda prompt, skill, workdir: AgentRun(
+        output=f"from {Path(skill.path).name if skill else 'baseline'}", input_tokens=1,
+        llm_calls=1)
+    result = rank_skills(paths, config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    run_dir = Path(result["artifacts"][0]).parent
+    folders = [evaluate._log_folder(n) for n in range(1, len(paths) + 1)]
+    # Only the report's two files and the numbered folders, and nothing outside.
+    assert sorted(p.name for p in run_dir.iterdir()) \
+        == sorted([*folders, "ranked-evaluation.json", "ranked-evaluation.md"])
+    assert [p.name for p in (tmp_path / "out").iterdir()] == [run_dir.name]
+    skills = report(result).skills
+    assert len(skills) == len(paths) and result["task_runs"]["errors"] == 0
+    assert sorted(s.log_folder for s in skills) == sorted(folders)
+    given = dict(zip(folders, paths))
+    for skill in skills:  # each skill's runs, and only they, are in its folder
+        log = (run_dir / skill.log_folder / "logs" / "t1-with_skill-r1.txt").read_text("utf-8")
+        assert f"from {given[skill.log_folder].name}" in log
+        assert all(f"(full log: {skill.log_folder}/logs/" in t.output for t in skill.tests)
+
+
+def test_without_tasks_no_log_folder_is_named(tmp_path, harness):
+    result = rank_skills([make_skill(tmp_path / "x", "same"), make_skill(tmp_path / "y", "same")],
+                         output_path=tmp_path / "out")
+    assert [s.log_folder for s in report(result).skills] == [None, None]
+    assert not any("Logs" in w for w in result["warnings"])
+
+
+def test_a_skill_whose_logs_cannot_be_written_keeps_its_row(tmp_path, harness, monkeypatch):
+    real_mkdir = Path.mkdir
+
+    def mkdir(self, *args, **kwargs):
+        if self.parts[-2:] == ("skill-01", "logs"):
+            raise PermissionError("no")
+        return real_mkdir(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    first, second = sorted(report(result).skills, key=lambda s: len(s.tests))
+    assert first.tests == [] and second.tests
+    # No folder is named for runs that were never made.
+    assert (first.log_folder, second.log_folder) == (None, "skill-02")
+    assert first.dimensions[Dimension.EFFICIENCY].status is Status.ERROR
+    assert first.dimensions[Dimension.SAFETY].status is not Status.SKIPPED
+    assert result["task_runs"]["errors"] == 1
+    assert any("PermissionError" in w for w in result["warnings"])
 
 
 # --- Config ------------------------------------------------------------------------------------
@@ -619,3 +674,177 @@ def test_an_invalid_limit_in_the_config_file_is_an_error_before_anything_runs(tm
                             tasks_path=harness.tasks)
     assert result["status"] == "error" and "not a valid evaluation config" in result["error"]
     assert harness.agents == []
+
+
+# --- Dimensions that do not read the runs are scored while they run ---------------------
+
+
+def test_dimensions_without_runs_are_scored_on_a_background_thread_in_order(tmp_path, harness,
+                                                                            monkeypatch):
+    import threading
+    real, threads, order = evaluate._static_scores, set(), []
+
+    def recording(skill, *args):
+        threads.add(threading.current_thread().name)
+        order.append(skill.name)
+        return real(skill, *args)
+
+    monkeypatch.setattr(evaluate, "_static_scores", recording)
+    result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    assert order == ["a", "b"] and all(t.startswith("metaskill-static") for t in threads)
+    skills = report(result).skills
+    assert {s.name for s in skills} == {"a", "b"}
+    for skill in skills:  # every dimension is there, the static ones too
+        assert skill.dimensions[Dimension.SAFETY].status is not Status.SKIPPED
+        assert skill.dimensions[Dimension.EFFICIENCY].status is not Status.SKIPPED
+
+
+def test_without_tasks_the_dimensions_are_scored_in_the_calling_thread(tmp_path, harness,
+                                                                       monkeypatch):
+    import threading
+    real, threads = evaluate._static_scores, set()
+
+    def recording(*args):
+        threads.add(threading.current_thread().name)
+        return real(*args)
+
+    monkeypatch.setattr(evaluate, "_static_scores", recording)
+    evaluate_skill(make_skill(tmp_path, "s"), output_path=tmp_path / "out")
+    assert threads == {threading.current_thread().name}
+
+
+def test_the_background_thread_keeps_the_callers_context(tmp_path, harness, monkeypatch):
+    # Hermes scopes a profile's credentials in a contextvar: Clarity's judge calls on the
+    # background thread failed with "could not read this profile's ANTHROPIC_TOKEN".
+    import contextvars
+    scope = contextvars.ContextVar("scope", default=None)
+    real, seen = evaluate._static_scores, []
+
+    def recording(*args):
+        seen.append(scope.get())
+        return real(*args)
+
+    monkeypatch.setattr(evaluate, "_static_scores", recording)
+    token = scope.set("profile")
+    try:
+        rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                    config_path=harness.config, output_path=tmp_path / "out",
+                    tasks_path=harness.tasks)
+    finally:
+        scope.reset(token)
+    assert seen == ["profile", "profile"]
+
+
+# --- The dimensions scored in the background share the runs' rate-limit pause -------------
+
+
+class RateLimitError(Exception):
+    """Named like the provider SDKs' error."""
+
+
+def test_a_rate_limit_on_a_background_judge_call_is_waited_out_not_an_error(
+        tmp_path, harness, monkeypatch):
+    # Review of #53: Clarity's one judge call, made while the sessions ran, got a 429 and
+    # was not retried, so the skill had no Clarity score, no overall and no rank.
+    import functools
+    from metaskill.evaluate.backoff import Backoff
+    monkeypatch.setattr(evaluate, "Backoff",
+                        functools.partial(Backoff, sleep=lambda s: None, jitter=0))
+
+    class LimitedOnce(FakeLlm):
+        calls = 0
+
+        def complete_structured(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RateLimitError("429 Too Many Requests")
+            return super().complete_structured(**kwargs)
+
+    llm = LimitedOnce(*[{"ratings": []}] * 8)
+    harness.config.write_text(json.dumps({"runs_per_task": RUNS, "judge_retries": 0,
+                                          "max_parallel_runs": 4}))
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks,
+                            ctx=SimpleNamespace(llm=llm))
+    clarity = report(result).skills[0].dimensions[Dimension.CLARITY]
+    assert llm.calls == 2  # the limited call, and the same call made again
+    assert clarity.detail != evaluate.PROVIDER_FAILED
+
+
+def test_a_failed_skills_background_judge_use_is_still_counted(tmp_path, harness, placeholder,
+                                                                 monkeypatch):
+    # Review of #53: a skill whose result failed after its background scoring started left
+    # that scoring's judge usage out of the report header.
+    placeholder(Dimension.CONFIG_CLEANLINESS, OWN_JUDGE)
+    real = evaluate.run_tasks
+
+    def failing_for_a(skill, *args, **kwargs):
+        if skill.name == "a":
+            raise RuntimeError("the runner broke")
+        return real(skill, *args, **kwargs)
+
+    monkeypatch.setattr(evaluate, "run_tasks", failing_for_a)
+    result = rank_skills([make_skill(tmp_path, "a"), make_skill(tmp_path, "b")],
+                         config_path=harness.config, output_path=tmp_path / "out",
+                         tasks_path=harness.tasks)
+    assert any("could not be evaluated" in w for w in result["warnings"])
+    meta = report(result).meta
+    assert meta.judge_model == "openai/rubric-model"
+    assert meta.judge_usage == {"input_tokens": 1000, "output_tokens": 100, "calls": 2}
+
+
+def test_an_interrupt_stops_the_background_scoring_at_its_next_dimension(tmp_path, harness,
+                                                                         monkeypatch):
+    # Ctrl-C left the background thread scoring the skill's remaining dimensions, with
+    # their model calls, after the call had ended.
+    import threading
+    started, release, done, scored = threading.Event(), threading.Event(), threading.Event(), []
+    real_score, real_static = evaluate._score, evaluate._static_scores
+
+    def slow_first(dimension, *args):
+        scored.append(dimension)
+        if len(scored) == 1:
+            started.set()
+            release.wait(10)
+        return real_score(dimension, *args)
+
+    def static(*args):
+        try:
+            return real_static(*args)
+        finally:
+            done.set()
+
+    def interrupted(*args, **kwargs):
+        started.wait(10)  # the background scoring is under way
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(evaluate, "_score", slow_first)
+    monkeypatch.setattr(evaluate, "_static_scores", static)
+    monkeypatch.setattr(evaluate, "run_tasks", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                       output_path=tmp_path / "out", tasks_path=harness.tasks)
+    release.set()
+    assert done.wait(10)
+    assert len(scored) == 1  # the dimension under way ended; no later one started
+
+
+def test_an_agent_a_stopped_call_cancelled_is_resumed_before_its_check(tmp_path, harness,
+                                                                       monkeypatch):
+    class Cancelled(CheckedAgent):
+        cancelled = True
+
+        def resume(self):
+            self.cancelled = False
+
+        def check(self, workspace):
+            if self.cancelled:  # as HermesAgent: a cancelled agent kills the check's process
+                raise HermesAgentUnavailable("the check was stopped")
+            return super().check(workspace)
+
+    agent = Cancelled(cheap_with_skill)
+    result = evaluate_skill(make_skill(tmp_path, "s"), config_path=harness.config,
+                            output_path=tmp_path / "out", tasks_path=harness.tasks, agent=agent)
+    assert result.get("status") != "error" and agent.checks == 1
