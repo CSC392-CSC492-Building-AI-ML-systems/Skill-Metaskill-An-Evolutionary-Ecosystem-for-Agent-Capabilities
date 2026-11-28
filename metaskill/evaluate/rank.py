@@ -392,7 +392,14 @@ def markdown(meta: ReportMeta, ranking: Ranking) -> str:
         "", table(ranking),
     ]
     if meta.plan_id:
-        lines.insert(3, f"- Plan: {_md(meta.plan_id)}")
+        with_yours = " (run with your settings: --override)" if meta.settings_override else ""
+        lines.insert(3, f"- Plan: {_md(meta.plan_id)}{with_yours}")
+    if meta.settings:
+        changed = ", ".join(f"{name} {_md(str(entry.get('value')))} ({_md(str(entry.get('source')))})"
+                            for name, entry in meta.settings.items())
+        after = next(i for i, line in enumerate(lines)
+                     if line.startswith("- Overall formula version")) + 1
+        lines.insert(after, f"- Settings not at their default: {changed}")
     for entry in ranking.entries:
         lines += _details(entry, meta.runs_per_task)
     return "\n".join(lines) + "\n"

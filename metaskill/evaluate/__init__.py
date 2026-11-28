@@ -55,7 +55,7 @@ from .models import (
 # Under another name: `rank` here would hide the rank module.
 from .rank import Ranking, make_scores, markdown, table
 from .rank import rank as rank_results
-from . import cancel, host
+from . import cancel, host, settings
 from .backoff import BackedOffLlm, Backoff
 from .runner import MEASURE, RunnerResult, report_dir, run_tasks, timestamp
 from .tasks import TaskError, load_tasks
@@ -93,28 +93,34 @@ PROVIDER_FAILED = "failed: the judge model's provider did not answer"
 def evaluate_skill(skill_path: str | Path, *, config_path: str | Path | None = None,
                    output_path: str | Path | None = None, tasks_path: str | Path | None = None,
                    ctx: Any = None, agent: Any = None, sandbox: Any = None,
-                   judges: Any = None, plan_id: str = "") -> dict[str, Any]:
+                   judges: Any = None, plan_id: str = "",
+                   settings_mode: str = "user") -> dict[str, Any]:
     """Score one skill, a folder or its SKILL.md, and write its report. With tasks_path,
-    its tasks run first (real model calls). plan_id is recorded in the report (plans.py)."""
+    its tasks run first (real model calls). plan_id is recorded in the report (plans.py).
+    settings_mode says which settings apply (settings.py): "user", the saved settings and
+    then config_path's; "plan", config_path's only (a plan's config.json); "override", the
+    user's for a plan (--override)."""
     return _evaluate([skill_path], config_path, output_path, tasks_path, ctx, agent, sandbox,
-                     judges, plan_id)
+                     judges, plan_id, settings_mode)
 
 
 def rank_skills(skill_paths: list[str | Path], *, config_path: str | Path | None = None,
                 output_path: str | Path | None = None, tasks_path: str | Path | None = None,
                 ctx: Any = None, agent: Any = None, sandbox: Any = None,
-                judges: Any = None, plan_id: str = "") -> dict[str, Any]:
+                judges: Any = None, plan_id: str = "",
+                settings_mode: str = "user") -> dict[str, Any]:
     """Score skills in one run, rank them and write their report. With tasks_path, every
     skill runs the same tasks. A skill that cannot be loaded is listed in `warnings`; the
-    others go on."""
+    others go on. settings_mode as for evaluate_skill."""
     return _evaluate(skill_paths, config_path, output_path, tasks_path, ctx, agent, sandbox,
-                     judges, plan_id)
+                     judges, plan_id, settings_mode)
 
 
 def _evaluate(paths: list[str | Path], config_path: str | Path | None,
               output_path: str | Path | None, tasks_path: str | Path | None,
               ctx: Any, agent: Any = None, sandbox: Any = None,
-              judges: Any = None, plan_id: str = "") -> dict[str, Any]:
+              judges: Any = None, plan_id: str = "",
+              settings_mode: str = "user") -> dict[str, Any]:
     """_evaluate_once, then the agent's close(): Hermes children started ahead of sessions
     (HermesAgent.prewarm) and not used are stopped however the call ends."""
     used: list[Any] = []
@@ -124,7 +130,7 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
         with cancel.running() as run:
             try:
                 return _evaluate_once(paths, config_path, output_path, tasks_path, ctx, agent,
-                                      sandbox, judges, plan_id, used)
+                                      sandbox, judges, plan_id, settings_mode, used)
             except BaseException as e:
                 # Ctrl-C (where it reaches the process) or a failure of ours ends the call:
                 # the background scoring, which sees this run's stop at its next dimension
@@ -151,11 +157,14 @@ def _evaluate(paths: list[str | Path], config_path: str | Path | None,
 def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
                    output_path: str | Path | None, tasks_path: str | Path | None,
                    ctx: Any, agent: Any, sandbox: Any, judges: Any, plan_id: str,
-                   used: list[Any]) -> dict[str, Any]:
+                   settings_mode: str, used: list[Any]) -> dict[str, Any]:
     from . import safety
 
     try:
-        config = _config(config_path, output_path, tasks_path)
+        config, sources, settings_warnings = _config(config_path, output_path, tasks_path,
+                                                     settings_mode)
+    except settings.SettingsError as e:  # the saved settings: names their file, not values
+        return {"status": "error", "error": str(e)}
     except (OSError, ValueError, TypeError, AttributeError):
         # Not the exception's message: it may echo the file (tools.py).
         return {"status": "error", "error": "config_path is not a valid evaluation config"}
@@ -225,7 +234,7 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
     if judge is not None:
         judge.backoff = scoring  # its own ctx.llm calls: the same pause and retries
     results: list[SkillResult] = []
-    warnings: list[str] = []
+    warnings: list[str] = list(settings_warnings)
     sessions = run_errors = 0
     judge_models: set[str] = set()
     judge_usage = TokenUsage()
@@ -318,6 +327,8 @@ def _evaluate_once(paths: list[str | Path], config_path: str | Path | None,
     versions["clarity_rubric_version"] = _clarity_rubric_version()
     meta = config.to_meta(started, [str(r.name) for r in results], **versions)
     meta.plan_id = plan_id
+    meta.settings = settings.differences(config, sources)
+    meta.settings_override = settings_mode == "override"
     # to_meta gives the model asked for; this field says which models actually judged
     # (models.md): the judge of the task runs' LLM checks, of any dimension that built its
     # own judge (the deep safety tier, through DimensionScore.judge_*), and the run's shared
@@ -385,16 +396,24 @@ def _log_folder(name: str, taken: set[str]) -> str:
 
 
 def _config(config_path: str | Path | None, output_path: str | Path | None,
-            tasks_path: str | Path | None = None) -> EvaluationConfig:
-    config = EvaluationConfig()
-    if config_path:
-        data = json.loads(Path(config_path).read_text(encoding="utf-8-sig"))
-        config = EvaluationConfig.from_dict(data)
+            tasks_path: str | Path | None = None, settings_mode: str = "user",
+            ) -> tuple[EvaluationConfig, dict[str, str], list[str]]:
+    """The call's settings, where each came from, and warnings (settings.py): the defaults,
+    the user's saved settings (not for a plan's own settings), then config_path's, setting
+    by setting, then the command's options. Raises SettingsError for unusable saved
+    settings, and OSError or ValueError for an unusable config file."""
+    if settings_mode not in ("user", "plan", "override"):
+        raise ValueError(f"settings_mode must be user, plan or override, not {settings_mode!r}")
+    data = json.loads(Path(config_path).read_text(encoding="utf-8-sig")) if config_path else None
+    merged, sources, warnings = settings.effective(
+        data, use_saved=settings_mode != "plan",
+        file_source="plan" if settings_mode == "plan" else "--config")
+    config = EvaluationConfig.from_dict(merged)
     if output_path:
         config.output_dir = Path(output_path)
     if tasks_path:
         config.tasks_path = Path(tasks_path)
-    return config
+    return config, sources, warnings
 
 
 def _error_kind(error: str) -> str:

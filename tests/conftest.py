@@ -39,3 +39,13 @@ def _no_host_memory_reading(monkeypatch):
     on the machine running them. tests/test_host.py sets its own readings."""
     from metaskill.evaluate import host
     monkeypatch.setattr(host, "available_memory", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _own_saved_settings(monkeypatch, tmp_path_factory):
+    """Each test gets its own, empty saved settings (/metaskill settings), never the
+    settings of whoever runs the tests. tests/test_settings.py writes to it."""
+    from metaskill.evaluate import settings
+    path = tmp_path_factory.mktemp("settings") / "evaluate.json"
+    monkeypatch.setattr(settings, "settings_file", lambda: path)
+    return path

@@ -36,6 +36,7 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later, and enough memory for 
 /metaskill rank <skill>, <skill>
 /metaskill skills [text]
 /metaskill stop
+/metaskill settings
 /metaskill configure <skill>, <skill>
 /metaskill approve <plan>
 /metaskill plans
@@ -43,6 +44,8 @@ Running tasks also needs Python 3.12.11, 3.13.4 or later, and enough memory for 
 ```
 
 `/metaskill stop` stops a running `evaluate` or `rank`: Ctrl-C does not, because Hermes runs the command in its gateway, which goes on after the CLI lets go. Run it from any session of the same profile on that gateway; the stopped command then returns with no report. In the TUI that can be the same session. The classic CLI waits for the command, so press Ctrl-C first to stop waiting, then send `/metaskill stop` there or from another session. Without a gateway, the classic CLI runs the command in its own process, where no other session can reach it; there, Ctrl-C stops it.
+
+`/metaskill settings` sets what `evaluate` and `rank` use (runs per task, parallel sessions, the safety tier, the agent's model and limits) from a menu, or with `settings set <setting> <value>`, and saves them for your profile, so you do not write a config file. A `--config <file>` still works and overrides the settings it holds ([docs/evaluate/settings.md](docs/evaluate/settings.md)).
 
 **Evaluation plans** save writing a task file by hand. `configure` has a model draft tasks for the skills, checks them in the sandbox and shows every check command; after you review the files, `approve` them, then `rank <plan>` (or `evaluate <plan>` for one skill) runs the same tasks every time ([docs/evaluate/plans.md](docs/evaluate/plans.md)).
 

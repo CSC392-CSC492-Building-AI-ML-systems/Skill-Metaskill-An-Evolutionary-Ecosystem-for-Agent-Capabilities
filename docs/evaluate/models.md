@@ -51,7 +51,7 @@ A skill loaded from disk. Every scoring module takes one.
 
 ### `EvaluationConfig`
 
-Settings for one `evaluate` or `rank` call.
+Settings for one `evaluate` or `rank` call. A call starts from the user's saved settings ([settings.md](settings.md)), then a `--config` file's, setting by setting.
 
 | Field | Default | Description |
 |---|---|---|
@@ -200,6 +200,9 @@ The settings a run used, so a reader can tell what produced the scores. It is a 
 | `agent_model` | The model(s) the task sessions ran on, as Hermes resolved them; empty if no task ran |
 | `judge_usage` | Tokens and calls the judge(s) used (`input_tokens`, `output_tokens`, `calls`): the task runs' LLM checks, the run's shared judge (Clarity), and any dimension that built its own (`DimensionScore.judge_usage`, the deep safety tier); empty if no model judged |
 | `clarity_rubric_version` | `clarity.RUBRIC_VERSION` for the run; empty in reports written before it was recorded |
+| `plan_id` | The evaluation plan the run used ([plans.md](plans.md)); left out without one |
+| `settings` | Each setting that was not its default, `{name: {value, source}}`, the source being `saved`, `--config` or `plan` ([settings.md](settings.md) 6); left out when empty |
+| `settings_override` | `true` for a plan run with the user's settings (`--override`); left out otherwise |
 | `overall_version` | `models.OVERALL_VERSION`, the version of the `overall` formula: `1` the plain weighted mean, `2` with Robustness scaled by the with-skill pass rate (MET-60). `config` hashes the weights, not the formula, so the same config hash with different versions gives different `overall` for the same runs. Empty in reports written before it was recorded |
 
 ### `Report`

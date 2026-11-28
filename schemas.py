@@ -4,7 +4,8 @@ Keep descriptions short: this schema is sent to the model on every turn.
 Step-by-step guidance lives in the bundled skill (skills/guide/SKILL.md).
 """
 
-OPERATIONS = ("generalize", "personalize", "evaluate", "rank")
+# settings only reads evaluate's saved settings: the user changes them with /metaskill settings.
+OPERATIONS = ("generalize", "personalize", "evaluate", "rank", "settings")
 
 METASKILL = {
     "name": "metaskill",
@@ -33,6 +34,6 @@ METASKILL = {
             "output_path": {"type": "string"},
             "tasks_path": {"type": "string"},
         },
-        "required": ["operation", "skill_path"],
+        "required": ["operation"],
     },
 }

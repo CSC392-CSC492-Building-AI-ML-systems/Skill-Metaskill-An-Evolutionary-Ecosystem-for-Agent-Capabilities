@@ -451,10 +451,18 @@ class ReportMeta:
     overall_version: str = ""
     # The evaluation plan the run used (plans.py); empty, and left out of to_dict(), without one.
     plan_id: str = ""
+    # Each setting that was not its default: {name: {"value", "source"}}, the source being
+    # saved, --config or plan (settings.py). Left out of to_dict() when empty.
+    settings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # A plan run with the user's settings instead of its own (--override).
+    settings_override: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **({"plan_id": self.plan_id} if self.plan_id else {}),
+            **({"settings_override": True} if self.settings_override else {}),
+            **({"settings": {k: dict(v) for k, v in self.settings.items()}}
+               if self.settings else {}),
             "timestamp": self.timestamp,
             "skills": self.skills,
             "config": self.config,
@@ -486,6 +494,9 @@ class ReportMeta:
             clarity_rubric_version=data.get("clarity_rubric_version", ""),
             overall_version=data.get("overall_version", ""),
             plan_id=data.get("plan_id", ""),
+            settings={str(k): dict(v) for k, v in (data.get("settings") or {}).items()
+                      if isinstance(v, dict)},
+            settings_override=data.get("settings_override") is True,
         )
 
 

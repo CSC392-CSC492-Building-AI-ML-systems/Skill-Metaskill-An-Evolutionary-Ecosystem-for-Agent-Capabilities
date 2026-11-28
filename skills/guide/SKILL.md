@@ -38,7 +38,10 @@ Check that the directory or file is there before calling the tool. If the tool r
 - **evaluate**: the user wants one skill scored. **rank**: the user wants several compared;
   pass `skill_path` as a comma separated list. If no skills were named, ask: all installed
   skills, or a set they list. Output defaults to `./evaluation-reports/`. `config_path` is
-  optional evaluation settings for these two.
+  optional evaluation settings for these two; without it, the user's saved settings apply.
+- **settings**: the user asks what evaluate or rank will use (runs, parallel sessions,
+  safety tier, models). It only reads them, with no `skill_path`. To change one, tell the
+  user to type `/metaskill settings`; never write a config file to change them.
 - **Task runs (evaluate and rank only).** `tasks_path` is a task file of test prompts with
   checks. With it, every skill runs those tasks in a sandbox with and without the skill,
   and quality, robustness and efficiency can be scored. Each task runs several times per

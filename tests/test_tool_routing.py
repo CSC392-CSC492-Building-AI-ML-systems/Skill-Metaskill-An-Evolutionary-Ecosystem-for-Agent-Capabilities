@@ -41,11 +41,13 @@ def fake_pipelines(monkeypatch):
     return calls
 
 
-def test_schema_requires_operation_and_skill_path():
+def test_schema_requires_the_operation():
+    # Only the operation: settings takes no skill, and run() still refuses the others
+    # without one (test_missing_skill_path_rejected).
     params = schemas.METASKILL["parameters"]
-    assert params["required"] == ["operation", "skill_path"]
+    assert params["required"] == ["operation"]
     assert params["properties"]["operation"]["enum"] == [
-        "generalize", "personalize", "evaluate", "rank"]
+        "generalize", "personalize", "evaluate", "rank", "settings"]
 
 
 def test_schema_stays_small():

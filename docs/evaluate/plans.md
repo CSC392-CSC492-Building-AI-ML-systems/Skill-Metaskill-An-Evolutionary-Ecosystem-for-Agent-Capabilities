@@ -80,8 +80,9 @@ right or fair: that is what the review is for.
 | A skill changed after approval (hidden files, `__pycache__` and `node_modules` do not count) | runs the same tasks, with a warning |
 | A skill is gone | refused |
 | Options such as `--tasks` or `--config` with a plan | refused: the plan brings its own |
+| `--override` (with `--config <file>` if wanted) | runs with the user's settings instead of the plan's `config.json`; the run and the report say so ([settings.md](settings.md) 5) |
 
-The report records the plan ID. Tasks are never regenerated; run `configure` again for new ones.
+A plan runs with its own `config.json`, not the user's saved settings (`/metaskill settings`), so it runs as it was approved. The report records the plan ID. Tasks are never regenerated; run `configure` again for new ones.
 
 ## 5. Limits
 

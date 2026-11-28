@@ -28,7 +28,8 @@ USAGE = (
     "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
     "generalize <skill> | "
     "personalize <skill> --config <file> | skills [text] | quality-pilot | "
-    "stop (stops running evaluations; Ctrl-C does not)\n"
+    "stop (stops running evaluations; Ctrl-C does not) | "
+    "settings [show | set <setting> <value> | reset [<setting>]] (evaluate's settings)\n"
     "Plans: configure <skill>, <skill> [--name <name>] [--note <text>] | approve <plan> | plans | "
     f"evaluate <plan> | rank <plan> (a plan is its name or ID)\n{SKILL_HELP}"
 )
@@ -220,7 +221,7 @@ def _list_skills(text, cwd):
 
 
 def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tasks_path=None,
-        plan_id=None):
+        plan_id=None, settings_mode=None):
     """Validate arguments, route to the pipeline, and return a response dict."""
     if operation not in _ENTRY_POINTS:
         return _error(operation, f"unknown operation; expected one of {', '.join(_ENTRY_POINTS)}")
@@ -265,6 +266,8 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tas
                   "tasks_path": tasks_path, "ctx": ctx}
         if plan_id:
             kwargs["plan_id"] = plan_id
+        if settings_mode:  # metaskill/evaluate/settings.py: user, plan or override
+            kwargs["settings_mode"] = settings_mode
     else:
         # From the resolved path: skill_path can be a list, which has no name to take.
         default = os.path.join(cwd, default_output_path(operation, target))
@@ -297,6 +300,15 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tas
 def metaskill(args, ctx=None, **kwargs):
     try:
         args = args if isinstance(args, dict) else {}
+        if args.get("operation") == "settings":  # read only: the user changes them by command
+            settings = _settings_module()
+            try:
+                shown = settings.show()
+            except settings.SettingsError as e:
+                return json.dumps({"success": False, "status": "error", "error": str(e)})
+            return json.dumps({"success": True, "status": "ok", "operation": "settings",
+                               "settings": shown,
+                               "note": "Only the user can change these: /metaskill settings"})
         result = run(
             args.get("operation"),
             args.get("skill_path"),
@@ -372,6 +384,44 @@ _PLAN_OPTION = re.compile(
     r"\s+--(name|note)\s+(\"[^\"]*\"|'[^']*'|(?:(?!\s+--(?:name|note)\s).)+?)\s*$", re.DOTALL)
 _CONFIGURE_USAGE = ("Usage: /metaskill configure <skill>, <skill> [--name <name>] "
                     "[--note \"<what the tasks should test>\"]")
+
+
+def _settings_module():
+    module = "metaskill.evaluate.settings"
+    if __package__:
+        module = f"{__package__}.{module}"
+    return importlib.import_module(module)
+
+
+def _settings(rest, ctx):
+    """`/metaskill settings [show | set <setting> <value> | reset [<setting>]]`: evaluate's
+    saved settings. With nothing after it, the menu, where Hermes can ask (ctx.ask_choice);
+    elsewhere the settings and the usage."""
+    settings = _settings_module()
+    words = rest.split(None, 2)
+    action = words[0].lower() if words else ""
+    try:
+        if not action:
+            ask = getattr(ctx, "ask_choice", None)
+            shown = settings.menu(ask) if callable(ask) else None
+            return shown if shown is not None else f"{settings.show()}\n\n{settings.USAGE}"
+        if action == "show" and len(words) == 1:
+            return settings.show()
+        if action == "set" and len(words) == 3:
+            old, new = settings.set_value(words[1], words[2])
+            return (f"{words[1]}: {old} \u2192 {new}. Saved in {settings.settings_file()}"
+                    if old != new else f"{words[1]} is already {new}.")
+        if action == "reset" and len(words) <= 2:
+            name = words[1] if len(words) == 2 else None
+            done = settings.reset(name)
+            if name is None:
+                return ("Every setting is back to its default." if done
+                        else "Nothing was saved: every setting is already its default.")
+            return (f"{name} is back to its default." if done
+                    else f"{name} was not saved: it is already its default.")
+    except settings.SettingsError as e:
+        return f"metaskill settings: {e}"
+    return settings.USAGE
 
 
 def _plans_module():
@@ -463,20 +513,44 @@ def _run_plan(operation, reference, plan_id, extra, ctx, cwd):
         hint = "" if reference == plan_id else f" For the plan, use its ID: {plan_id}."
         return (f"{reference} is both a skill and a plan, so nothing was run.{hint} For the "
                 f"skill, give a path such as ./{reference}.")
-    if extra:
+    override, user_config = _plan_options(extra)
+    if override is None:
         return (f"A plan brings its own tasks and settings: /metaskill {operation} {reference} "
-                "takes nothing else.")
+                "takes nothing else, but --override to run it with your settings "
+                "(/metaskill settings), with --config <file> if you like.")
     plans = _plans_module()
     try:
         plan, warnings = plans.ready(plan_id, operation)
     except plans.PlanError as e:
         return f"metaskill {operation} failed: {e}"
     paths = plan.skill_paths
+    # Its own config.json by default, so an approved plan runs as it was approved.
     result = run(operation, paths if operation == "rank" else paths[0],
-                 config_path=str(plan.folder / "config.json"), ctx=ctx,
-                 tasks_path=str(plan.folder / "tasks.json"), plan_id=plan.id)
+                 config_path=user_config if override else str(plan.folder / "config.json"),
+                 ctx=ctx, tasks_path=str(plan.folder / "tasks.json"), plan_id=plan.id,
+                 settings_mode="override" if override else "plan")
     result["warnings"] = [*warnings, *result.get("warnings", [])]
-    return f"Plan {plan.id}\n{_summary(result, paths)}"
+    heading = (f"Plan {plan.id}, with your settings instead of the plan's (--override)"
+               if override else f"Plan {plan.id}")
+    return f"{heading}\n{_summary(result, paths)}"
+
+
+_PLAN_CONFIG = re.compile(r"--config\s+(\"[^\"]*\"|'[^']*'|\S+)")
+
+
+def _plan_options(extra):
+    """(override, config file) from what follows a plan: nothing, `--override`, or
+    `--override --config FILE` in either order. (None, None) for anything else."""
+    rest = extra.strip()
+    if not rest:
+        return False, None
+    config = None
+    if (found := _PLAN_CONFIG.search(rest)) is not None:
+        config = found[1].strip("\"'")
+        rest = (rest[:found.start()] + rest[found.end():]).strip()
+    if rest != "--override":
+        return None, None
+    return True, config
 
 
 _CELL = re.compile(r"(?<!\\)\|")  # a column border, not an escaped | in a name
@@ -635,6 +709,8 @@ def make_command_handler(ctx):
             if not request:
                 return f"{USAGE}\n{where}"
             command, _, rest = request.partition(" ")
+            if command == "settings":
+                return _settings(rest, ctx)
             if command == "stop":
                 if rest.strip():
                     return "Usage: /metaskill stop (stops this profile's running evaluations)"
