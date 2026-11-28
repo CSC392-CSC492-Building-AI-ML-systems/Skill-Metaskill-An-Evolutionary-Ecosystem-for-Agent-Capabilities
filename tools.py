@@ -27,8 +27,10 @@ SKILL_HELP = (
 USAGE = (
     "usage: /metaskill evaluate <skill> [--tasks <file>] [--quality-pilot] | rank <skill>, <skill> [--tasks <file>] | "
     "generalize <skill> | "
-    f"personalize <skill> --config <file> | skills [text] | quality-pilot | "
-    f"stop (stops running evaluations; Ctrl-C does not)\n{SKILL_HELP}"
+    "personalize <skill> --config <file> | skills [text] | quality-pilot | "
+    "stop (stops running evaluations; Ctrl-C does not)\n"
+    "Plans: configure <skill>, <skill> [--name <name>] [--note <text>] | approve <plan> | plans | "
+    f"evaluate <plan> | rank <plan> (a plan is its name or ID)\n{SKILL_HELP}"
 )
 
 # operation -> (module, entry point)
@@ -217,7 +219,8 @@ def _list_skills(text, cwd):
     return "\n".join(lines)
 
 
-def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tasks_path=None):
+def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tasks_path=None,
+        plan_id=None):
     """Validate arguments, route to the pipeline, and return a response dict."""
     if operation not in _ENTRY_POINTS:
         return _error(operation, f"unknown operation; expected one of {', '.join(_ENTRY_POINTS)}")
@@ -260,6 +263,8 @@ def run(operation, skill_path, config_path=None, output_path=None, ctx=None, tas
         # output_path stays None by default: the config says where reports go.
         kwargs = {"config_path": config_path, "output_path": output_path,
                   "tasks_path": tasks_path, "ctx": ctx}
+        if plan_id:
+            kwargs["plan_id"] = plan_id
     else:
         # From the resolved path: skill_path can be a list, which has no name to take.
         default = os.path.join(cwd, default_output_path(operation, target))
@@ -359,6 +364,120 @@ def _parse_evaluate_command(request):
          args.tasks.strip("\"'") if args.tasks else None),
         args.quality_pilot,
     )
+
+# A plan ID (metaskill/evaluate/plans.py PLAN_ID).
+_PLAN_ID = re.compile(r"plan-[0-9a-f]{6}")
+# A trailing `--name LABEL` or `--note TEXT`; quoted, or up to the other option.
+_PLAN_OPTION = re.compile(
+    r"\s+--(name|note)\s+(\"[^\"]*\"|'[^']*'|(?:(?!\s+--(?:name|note)\s).)+?)\s*$", re.DOTALL)
+_CONFIGURE_USAGE = ("Usage: /metaskill configure <skill>, <skill> [--name <name>] "
+                    "[--note \"<what the tasks should test>\"]")
+
+
+def _plans_module():
+    module = "metaskill.evaluate.plans"
+    if __package__:
+        module = f"{__package__}.{module}"
+    return importlib.import_module(module)
+
+
+def _configure(request, ctx, cwd, where):
+    """`/metaskill configure <skills> [--name <name>] [--note <text>]`: draft a plan and
+    show it."""
+    options = {}
+    while (option := _PLAN_OPTION.search(request)) is not None:
+        if option[1] in options:
+            return f"{_CONFIGURE_USAGE}\n{where}"
+        options[option[1]] = option[2].strip().strip("\"'")
+        request = request[:option.start()]
+    skills = request.strip().strip("\"'")
+    if not skills or re.search(r"(?:^|\s)--", skills):  # an option left over
+        return f"{_CONFIGURE_USAGE}\n{where}"
+    paths, problems = _find_skills("rank", skills, cwd)
+    if problems or not paths:
+        return "\n".join([*problems, SKILL_HELP, where])
+    plans = _plans_module()
+    try:
+        plan = plans.configure(paths, ctx=ctx, label=options.get("name", ""),
+                               note=options.get("note", ""))
+        shown = plans.summary(plan)
+    except plans.PlanError as e:
+        return f"metaskill configure failed: {e}"
+    return (f"{_scanned(paths)}\nDrafted by a model and not approved yet: check every task and "
+            f"command.\n\n{shown}\nThen: /metaskill approve {_called(plan)}")
+
+
+def _called(plan):
+    """What to type for a plan: its name if it has one that commands accept, else its ID."""
+    plans = _plans_module()
+    name = plan.data.get("label", "")
+    return name if isinstance(name, str) and plans.PLAN_NAME.fullmatch(name) else plan.id
+
+
+def _approve(request):
+    plans = _plans_module()
+    reference = request.strip()
+    try:
+        plan_id = plans.resolve(reference)
+        if plan_id is None:
+            return (f"metaskill approve failed: there is no plan {reference}; "
+                    "/metaskill plans lists them")
+        plan = plans.approve(plan_id)
+    except plans.PlanError as e:
+        return f"metaskill approve failed: {e}"
+    operation = "rank" if len(plan.data["skills"]) > 1 else "evaluate"
+    return (f"Approved {plan.id}. Run it with: /metaskill {operation} {_called(plan)}")
+
+
+def _list_plans():
+    plans = _plans_module()
+    found = plans.all_plans()
+    if not found:
+        return ("No evaluation plans. Make one with: /metaskill configure <skill>, <skill>\n"
+                f"Folder: {plans.plans_root()}")
+    lines = [f"Evaluation plans in {plans.plans_root()}:"]
+    for plan in found:
+        label = f" \"{plan.data['label']}\"" if plan.data.get("label") else ""
+        lines.append(f"  {plan.id}{label}  {plan.status}  {plan.data.get('created', '')}  "
+                     f"{', '.join(s['name'] for s in plan.data['skills'])}")
+    return "\n".join(lines)
+
+
+def _plan_request(rest, cwd):
+    """(reference, plan ID, what follows) when evaluate or rank is given a plan, by ID or by
+    name, else None. A list of skills, or a word no plan is named, is not a plan."""
+    words = rest.split(None, 1)
+    if not words or (len(words) > 1 and not words[1].startswith("--")
+                     and not _PLAN_ID.fullmatch(words[0])):
+        return None
+    reference, extra = words[0], words[1] if len(words) > 1 else ""
+    plans = _plans_module()
+    plan_id = plans.resolve(reference)
+    return None if plan_id is None else (reference, plan_id, extra)
+
+
+def _run_plan(operation, reference, plan_id, extra, ctx, cwd):
+    """`/metaskill evaluate|rank <plan>`: run an approved plan."""
+    if os.path.exists(os.path.join(cwd, reference)) or any(
+            reference.casefold() in names for _, _, names in _installed_skills()):
+        hint = "" if reference == plan_id else f" For the plan, use its ID: {plan_id}."
+        return (f"{reference} is both a skill and a plan, so nothing was run.{hint} For the "
+                f"skill, give a path such as ./{reference}.")
+    if extra:
+        return (f"A plan brings its own tasks and settings: /metaskill {operation} {reference} "
+                "takes nothing else.")
+    plans = _plans_module()
+    try:
+        plan, warnings = plans.ready(plan_id, operation)
+    except plans.PlanError as e:
+        return f"metaskill {operation} failed: {e}"
+    paths = plan.skill_paths
+    result = run(operation, paths if operation == "rank" else paths[0],
+                 config_path=str(plan.folder / "config.json"), ctx=ctx,
+                 tasks_path=str(plan.folder / "tasks.json"), plan_id=plan.id)
+    result["warnings"] = [*warnings, *result.get("warnings", [])]
+    return f"Plan {plan.id}\n{_summary(result, paths)}"
+
 
 _CELL = re.compile(r"(?<!\\)\|")  # a column border, not an escaped | in a name
 _ESCAPED = re.compile(r"\\([\\`\[\]<>|])")  # what rank.py escapes for Markdown
@@ -474,14 +593,33 @@ def _stop_evaluations():
             "each one returns once it has stopped, with no report.")
 
 
+def _one_word(word, where):
+    """What to say to a single word that is no operation: for a plan, how to use it, else
+    the usage. The agent cannot run a plan and would only ask what the word means."""
+    plans = _plans_module()
+    try:
+        plan_id = plans.resolve(word.strip("\"'"))
+        if plan_id is not None:
+            plan = plans.load(plan_id)
+            if plan.status != plans.APPROVED:
+                return (f"{_called(plan)} is a plan that is not approved yet. Check its files "
+                        f"in {plan.folder}, then run: /metaskill approve {_called(plan)}")
+            operation = "rank" if len(plan.data["skills"]) > 1 else "evaluate"
+            return f"{_called(plan)} is a plan. Run it with: /metaskill {operation} {_called(plan)}"
+    except plans.PlanError as e:
+        return f"metaskill: {e}"
+    return f"metaskill: unknown command {word}\n{USAGE}\n{where}"
+
+
 def make_command_handler(ctx):
     """Build the /metaskill handler.
 
     An operation runs here and prints its result, or says how to name the skill.
-    `skills` lists the skills it can find. Anything else goes to the agent as a user
-    message. Hermes only allows that for a plugin with allow_gateway_injection, and a
-    classic CLI session does not show the agent's reply. Every path returns text: Hermes
-    prints nothing for a handler that returns None.
+    `skills` lists the skills it can find. Any other single word is answered here.
+    Anything else goes to the agent as a user message. Hermes only allows that for a
+    plugin with allow_gateway_injection, and a classic CLI session does not show the
+    agent's reply. Every path returns text: Hermes prints nothing for a handler that
+    returns None.
     """
 
     def handle_command(raw_args):
@@ -513,6 +651,23 @@ def make_command_handler(ctx):
                 result = {"status": "ok", **pilot.run_quality_pilot(ctx),
                           "operation": "quality-pilot"}
                 return "Text-only Quality pilot (no agent tools).\n" + _summary(result)
+            if command == "configure":
+                return _configure(f" {rest}", ctx, cwd, where)
+            if command == "approve":
+                if not rest.strip():
+                    return "Usage: /metaskill approve <plan> (/metaskill plans lists them)"
+                return _approve(rest)
+            if command == "plans":
+                if rest.strip():
+                    return "Usage: /metaskill plans"
+                return _list_plans()
+            if command in EVALUATION:
+                try:
+                    planned = _plan_request(rest.strip(), cwd)
+                except _plans_module().PlanError as e:
+                    return f"metaskill {command} failed: {e}"
+                if planned:
+                    return _run_plan(command, *planned, ctx, cwd)
             if request in _ENTRY_POINTS:
                 return f"metaskill {request}: which skill?\n{SKILL_HELP}\n{where}"
             quality_pilot = False
@@ -542,6 +697,8 @@ def make_command_handler(ctx):
                 result = run(operation, target, config_path=config_path, ctx=ctx,
                              tasks_path=tasks_path)
                 return _summary(result, paths)
+            if len(request.split()) == 1:
+                return _one_word(request, where)
             if not ctx.inject_message(f"Use the metaskill tool to: {request}"):
                 return ("metaskill: could not send the request to the agent. Set "
                         "plugins.entries.metaskill.allow_gateway_injection: true in "

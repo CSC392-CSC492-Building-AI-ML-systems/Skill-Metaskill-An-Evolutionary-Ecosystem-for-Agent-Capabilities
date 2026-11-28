@@ -449,9 +449,12 @@ class ReportMeta:
     # OVERALL_VERSION; empty in reports written before it was recorded. overall from
     # different versions does not compare, even with the same config hash.
     overall_version: str = ""
+    # The evaluation plan the run used (plans.py); empty, and left out of to_dict(), without one.
+    plan_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            **({"plan_id": self.plan_id} if self.plan_id else {}),
             "timestamp": self.timestamp,
             "skills": self.skills,
             "config": self.config,
@@ -482,6 +485,7 @@ class ReportMeta:
             judge_usage=dict(data.get("judge_usage") or {}),
             clarity_rubric_version=data.get("clarity_rubric_version", ""),
             overall_version=data.get("overall_version", ""),
+            plan_id=data.get("plan_id", ""),
         )
 
 
