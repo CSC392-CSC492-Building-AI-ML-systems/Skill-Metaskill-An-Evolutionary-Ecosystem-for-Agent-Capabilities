@@ -23,10 +23,11 @@ from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "5"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
+CHECKS_VERSION = "9"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
                       # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
                       # and bounded clearing, so a hostile skill cannot stall the scan
-                      # (MET-42)
+                      # (MET-42). 9: fewer print-secret and echo-secret false positives
+                      # (MET-69); 6 to 8 are other changes in review
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -928,7 +929,10 @@ _SECRET_PARTS = {"KEY", "APIKEY", "TOKEN", "SECRET", "SECRETS", "PASSWORD", "PAS
 # A name ending in one of these is about a secret, not the secret: TOKEN_PATH, auth_url.
 _NOT_SECRET_ENDINGS = {"PATH", "FILE", "FILENAME", "DIR", "URL", "URI", "NAME", "METHOD", "TYPE",
                        "ENV", "VAR", "HEADER", "FIELD", "PREFIX", "LENGTH", "LEN", "COUNT", "ID",
-                       "EXPIRY", "EXPIRES", "SCOPE", "SCOPES", "STATUS"}
+                       "EXPIRY", "EXPIRES", "SCOPE", "SCOPES", "STATUS",
+                       # pass_rate, token_idx, token_start, token_endpoint, key_averages
+                       "RATE", "IDX", "INDEX", "POS", "START", "END", "ENDPOINT", "EP",
+                       "ENABLED", "AVERAGES"}
 
 
 def is_secret_name(name: str) -> bool:
@@ -937,6 +941,8 @@ def is_secret_name(name: str) -> bool:
     parts = [p for p in re.split(r"[^A-Z0-9]+", words) if p]
     if not parts or parts[-1] in _NOT_SECRET_ENDINGS:
         return False
+    if parts[-2:-1] == ["PER"] and not _SECRET_PARTS.intersection(parts[:-2]):
+        return False  # a rate, e.g. chars_per_token; not api_key_per_user
     return any(part in _SECRET_PARTS for part in parts)
 
 
@@ -961,14 +967,139 @@ _BRACES = re.compile(r"\{([^{}]*)\}")  # f-strings and template literals
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 
 
+# In a print call, these written alone are everyday variables: `for key, value in ...`, a
+# count of passed tests. KEY, PASS, DB_PASS and api_key are still secret names, as is
+# `$pass` in a shell script, where it is likely a password.
+_EVERYDAY_NAMES = {"key", "pass"}
+
+
+def _is_secret_variable(m: re.Match[str]) -> bool:
+    """is_secret_name for a name found among a print call's arguments (not an environment
+    variable's). An everyday name counts when it is an attribute: `config.key`."""
+    name = m.group(0)
+    if name in _EVERYDAY_NAMES and m.string[max(0, m.start() - 1):m.start()] != ".":
+        return False
+    return is_secret_name(name)
+
+
+# What _blank_templates looks at.
+_TEMPLATE_MARKS = re.compile(r"""\$\{|[`'"{}\\/]""")
+_QUOTES = re.compile(r"""['"`]""")
+# A JavaScript pattern, /.../, and what a `/` must follow to open one rather than divide.
+_PATTERN = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\[])+/")
+_BEFORE_PATTERN = re.compile(
+    r"(?:\A|[(,=:\[!&|?{};*%<>~^]|(?<!\+)\+|(?<!-)-|\b(?:return|typeof|case))\s*\Z")
+# What can follow a pattern: its flags, then an operator or the end. After a `)` it also
+# has to be used at once, as in `if (x) /'/.test(s)`, or it is a division.
+_AFTER_PATTERN = re.compile(r"[dgimsuvy]{0,8}\s*(?:[.,;:)\]}?|&=!+\-*%<>^]|\Z)")
+_USED_PATTERN = re.compile(r"[dgimsuvy]{0,8}\.(?:test|exec)\b")
+
+
+def _quotes_in(text: str, start: int, stop: int) -> list[int]:
+    return [m.start() for m in _QUOTES.finditer(text, start, stop)]
+
+
+def _blank_templates(text: str) -> tuple[str, list[tuple[int, int]]]:
+    """text with the words of its template literals (backtick strings) turned into spaces,
+    so only what their ${...} compute is read, and the quotes of comments and patterns
+    too; also where the literals, comments and patterns are. A literal that does not close
+    on the line is left as it is. One pass, so it stays linear (MET-42)."""
+    spans: list[tuple[int, int]] = []
+    blank: list[tuple[int, int]] = []
+    # One entry per open literal, [start, start of its current words, words so far], and
+    # per open ${...}, [None, depth of braces inside it].
+    stack: list[list] = []
+    unmatched: set[str] = set()  # quotes, comments and patterns with no end further on
+    idle: list[int] = []  # quotes in comments and patterns, which open no string either
+    end, skip = len(text), 0
+    tried = 0  # no pattern is looked for inside the last candidate (MET-42)
+    # Only these characters matter, so the rest is skipped at the regex engine's speed.
+    for mark in _TEMPLATE_MARKS.finditer(text):
+        i, c = mark.start(), mark.group(0)
+        if i < skip:  # escaped, or inside a quoted string
+            continue
+        top = stack[-1] if stack else None
+        if top is not None and top[0] is not None:  # inside a literal's words
+            if c == "\\":
+                skip = i + 2
+            elif c == "${":
+                top[2].append((top[1], i))
+                stack.append([None, 0])
+            elif c == "`":
+                blank += [*top[2], (top[1], i + 1)]
+                spans.append((top[0], i + 1))
+                stack.pop()
+        elif c == "\\":
+            skip = i + 2  # `\\`` opens no literal
+        elif c == "`":
+            stack.append([i, i, []])
+        # A backtick in a comment or a pattern opens no literal. Read as one, it would
+        # take the code after it for the literal's words.
+        elif c == "/":
+            if text.startswith("//", i):
+                spans.append((i, end))
+                break  # the rest is read as it stands
+            if text.startswith("/*", i):
+                if "/*" not in unmatched:
+                    close = text.find("*/", i + 2)
+                    if close < 0:
+                        unmatched.add("/*")
+                    else:
+                        skip = close + 2
+                        spans.append((i, skip))
+                        idle += _quotes_in(text, i, skip)
+            elif "/" not in unmatched and i >= tried:
+                before = _BEFORE_PATTERN.search(text, max(0, i - 20), i)
+                if before or text[max(0, i - 20):i].rstrip().endswith(")"):
+                    pattern = _PATTERN.match(text, i)
+                    if not pattern:
+                        unmatched.add("/")
+                    else:
+                        tried = pattern.end() - 1  # its closing slash may open the next
+                        follows = _AFTER_PATTERN if before else _USED_PATTERN
+                        if follows.match(text, pattern.end()):
+                            skip = pattern.end()
+                            spans.append((i, skip))
+                            idle += _quotes_in(text, i, skip)
+        elif c in ("'", '"') and c not in unmatched:
+            quoted = _STRING.match(text, i)
+            if quoted:
+                skip = quoted.end()
+            else:
+                unmatched.add(c)
+        elif top is not None and c in ("{", "${"):
+            top[1] += 1
+        elif top is not None and c == "}":
+            if top[1]:
+                top[1] -= 1
+            else:
+                stack.pop()
+                stack[-1][1] = i + 1  # the literal's words go on
+    # One left open counts as running to the end: a call inside it is read on its own.
+    spans += [(entry[0], end) for entry in stack if entry[0] is not None]
+    outermost: list[tuple[int, int]] = []  # a nested literal is inside one already listed
+    for start, stop in sorted(spans):
+        if not outermost or start >= outermost[-1][1]:
+            outermost.append((start, stop))
+    if not blank and not idle:
+        return text, outermost
+    chars = list(text)
+    for i in idle:
+        chars[i] = " "
+    for start, stop in blank:
+        chars[start:stop] = " " * (stop - start)
+    return "".join(chars), outermost
+
+
 def _names_secret(args: str) -> bool:
     """Whether the arguments of a print call name a secret: an environment read, a name
     inside {...}, or a name outside string literals."""
-    names = [a or b for a, b in _ENV_NAMES.findall(args)]
-    for inner in _BRACES.findall(args):
-        names += _IDENTIFIER.findall(inner)
-    names += _IDENTIFIER.findall(_STRING.sub(" ", args))
-    return any(is_secret_name(n) for n in names)
+    if any(is_secret_name(a or b) for a, b in _ENV_NAMES.findall(args)):
+        return True
+    code = _blank_templates(args)[0]
+    return any(_is_secret_variable(n)
+               for part in [*_BRACES.findall(code), _STRING.sub(" ", code)]
+               for n in _IDENTIFIER.finditer(part))
 
 
 class _SecretView:
@@ -987,19 +1118,23 @@ class _SecretView:
 
     def __init__(self, text: str, start: int):
         secret_at = [-1]
-        strings = [(m.start(), m.end()) for m in _STRING.finditer(text, start)]
         envs = list(_ENV_NAMES.finditer(text, start))
+        blanked, literals = _blank_templates(text[start:])
+        text = text[:start] + blanked  # the same length, so positions do not move
+        strings = [(m.start(), m.end()) for m in _STRING.finditer(text, start)]
         braces = list(_BRACES.finditer(text, start))
         self.spans = [strings, [(m.start(), m.end()) for m in envs],
-                      [(m.start(), m.end()) for m in braces]]
+                      [(m.start(), m.end()) for m in braces],
+                      [(s + start, e + start) for s, e in literals]]
         secret_at += [m.start() for m in envs if is_secret_name(m.group(1) or m.group(2))]
         secret_at += [m.start() for m in braces
-                      if any(is_secret_name(n) for n in _IDENTIFIER.findall(m.group(1)))]
+                      if any(_is_secret_variable(n)
+                             for n in _IDENTIFIER.finditer(m.group(1)))]
         # Names outside string literals, as _STRING.sub(" ", ...) leaves them.
         at = start
         for s, e in strings + [(len(text), len(text))]:
             secret_at += [n.start() for n in _IDENTIFIER.finditer(text, at, s)
-                          if is_secret_name(n.group(0))]
+                          if _is_secret_variable(n)]
             at = e
         self.last_secret = max(secret_at)
         self.starts = [[s for s, _ in spans] for spans in self.spans]

@@ -19,13 +19,7 @@
    "SKILL.md:235"
   ]
  ],
- "anthropics/skill-creator": [
-  [
-   "print-secret",
-   "HIGH",
-   "scripts/aggregate_benchmark.py:397"
-  ]
- ],
+ "anthropics/skill-creator": [],
  "anthropics/web-artifacts-builder": [
   [
    "recursive-delete",

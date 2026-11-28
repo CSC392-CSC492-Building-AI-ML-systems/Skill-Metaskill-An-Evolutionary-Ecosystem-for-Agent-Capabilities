@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "5"
+CHECKS_VERSION = "9"
 
 class ChecksBackend:
     name = "own-checks"
