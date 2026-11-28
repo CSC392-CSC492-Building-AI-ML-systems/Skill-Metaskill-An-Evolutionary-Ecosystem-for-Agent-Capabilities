@@ -23,11 +23,13 @@ from ..models import Dimension, Finding, SafetyTier, Severity, Skill
 from .findings import SEVERITY_RANK, BackendResult, BackendStatus
 
 # Bumped whenever a rule is added or changed; recorded as checks_version.
-CHECKS_VERSION = "9"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
-                      # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
-                      # and bounded clearing, so a hostile skill cannot stall the scan
-                      # (MET-42). 9: fewer print-secret and echo-secret false positives
-                      # (MET-69); 6 to 8 are other changes in review
+CHECKS_VERSION = "10"  # 2: hidden characters. 3: frontmatter aliases. 4: personal folders
+                       # CRITICAL; stricter warning and confirmation checks. 5: scan-limit
+                       # and bounded clearing, so a hostile skill cannot stall the scan
+                       # (MET-42). 9: fewer print-secret and echo-secret false positives
+                       # (MET-69). 10: nothing the agent sees is skipped: undecodable bytes,
+                       # SKILL.md's frontmatter, `---` blocks and oversized files (MET-62).
+                       # 6 to 8 were never released
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SCRIPT_SUFFIXES = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".ps1", ".psm1",
@@ -57,6 +59,7 @@ MAX_COMMANDS_PER_LINE = 200
 # may read per skill. Real skills read a few hundred; past this, the rest is not parsed
 # and the skill gets a CRITICAL scan-limit finding.
 MAX_PARSED_CHARS = 1_000_000
+MAX_KEY_CHARS = 200  # how far into a frontmatter line its key's colon is looked for
 
 DESTRUCTIVE = "destructive-unconfirmed"
 CREDENTIALS = "credential-logging"
@@ -88,6 +91,8 @@ MESSAGES = {
                            "aliases. That stalls scanners, so Cisco's scanner was not run on it",
     "scan-limit": "Too many commands packed together to check in reasonable time, so part of "
                   "the skill was not checked; it is treated as the worst case",
+    "scan-limit-file": "A file is too large or could not be read, so part of the skill was not "
+                       "checked; it is treated as the worst case",
 }
 
 # How many values the frontmatter may hold once its YAML aliases are expanded. Real skills
@@ -235,6 +240,9 @@ class _Unit:
     kind: str  # "code", "prose" or "script"
     lines: list[tuple[int, str]]
     warning_block: bool = False
+    # From SKILL.md's frontmatter: a confirmation or warning there is its own key's, and
+    # the paragraph before does not reach into or out of it.
+    frontmatter: bool = False
     # Computed once per unit and reused for every match in it (MET-42): see _text.
     cache: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -395,9 +403,9 @@ def _limit_lines(files: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], l
     return out, findings
 
 
-def _scan_limit(path: str, lineno: int, quote: str) -> Finding:
+def _scan_limit(path: str, lineno: int, quote: str, message: str = "scan-limit") -> Finding:
     return Finding(Dimension.SAFETY, EXCESS_SCOPE, Severity.CRITICAL, ChecksBackend.name,
-                   "scan-limit", quote, f"{path}:{lineno}", MESSAGES["scan-limit"])
+                   "scan-limit", quote, f"{path}:{lineno}", MESSAGES[message])
 
 
 def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
@@ -414,9 +422,12 @@ def _run(skill: Skill) -> tuple[list[Finding], list[DeleteTarget], list[str], li
 
 def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarget], list[str], list[SkippedWarning]]:
     notes: list[str] = []
-    raw_files = _read_files(skill, notes)
+    raw_files, unchecked = _read_files(skill, notes)
     files, limited = _limit_lines(raw_files)
     units = [u for path, text in files for u in _units(path, text)]
+    value_units, value_limited = _frontmatter_value_units(skill, files)
+    units += value_units
+    limited += value_limited
 
     ctx = _Context()
     for path, text in files:
@@ -443,7 +454,10 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
             found[key] = finding
 
     for u_index, unit in enumerate(units):
-        previous = units[u_index - 1] if u_index and units[u_index - 1].path == unit.path else None
+        previous = units[u_index - 1] if u_index else None
+        if previous is not None and (previous.path != unit.path or unit.frontmatter
+                                     or previous.frontmatter):
+            previous = None
         considered = 0  # prose matches in this unit weighed for clearing (MET-42)
         unbounded = False
         for l_index, (lineno, text) in enumerate(unit.lines):
@@ -493,7 +507,7 @@ def _scan(skill: Skill, budget: _Budget) -> tuple[list[Finding], list[DeleteTarg
         for f in _hidden_characters(path, text):
             found.setdefault((path, int(f.location.rsplit(":", 1)[1]), f.rule), f)
 
-    for f in limited:
+    for f in [*limited, *unchecked]:
         found[(f.location.rsplit(":", 1)[0], int(f.location.rsplit(":", 1)[1]), f.rule)] = f
     if budget.ran_out_at is not None:
         path, lineno = budget.ran_out_at
@@ -563,25 +577,197 @@ def _hidden_characters(path: str, text: str) -> list[Finding]:
     return findings
 
 
-def _read_files(skill: Skill, notes: list[str]) -> list[tuple[str, str]]:
-    """(relative path, text) for SKILL.md and every markdown or script file.
+def _read_files(skill: Skill, notes: list[str]) -> tuple[list[tuple[str, str]], list[Finding]]:
+    """(relative path, text) for SKILL.md, every markdown or script file and every other
+    file that starts with `#!`, and a CRITICAL scan-limit finding for each one that could
+    only be checked in part, or not at all.
 
     Files that are symlinks are not read, so a link cannot make the check read
     something outside the skill.
     """
-    files = [("SKILL.md", skill.body)]
+    files, unchecked = [("SKILL.md", skill.body.replace("\x00", ""))], []
     for rel in skill.files:
         rel = Path(rel)
-        if rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES:
+        name, path = rel.as_posix(), Path(skill.path) / rel
+        if (rel.suffix.lower() not in MARKDOWN_SUFFIXES | SCRIPT_SUFFIXES
+                and not _has_shebang(path)):
             continue
-        path = Path(skill.path) / rel
         try:
-            if path.is_symlink() or path.stat().st_size > MAX_FILE_BYTES:
+            if path.is_symlink():
                 continue
-            files.append((rel.as_posix(), path.read_text(encoding="utf-8")))
-        except (OSError, UnicodeDecodeError) as e:
-            notes.append(f"could not read {rel.as_posix()}: {type(e).__name__}")
-    return files
+            with path.open("rb") as stream:
+                raw = stream.read(MAX_FILE_BYTES + 1)
+        except FileNotFoundError:  # nothing there for the agent to read either
+            notes.append(f"could not read {name}: FileNotFoundError")
+            continue
+        except OSError as e:
+            notes.append(f"could not read {name}: {type(e).__name__}")
+            unchecked.append(_scan_limit(name, 1, "the file could not be read",
+                                         "scan-limit-file"))
+            continue
+        if len(raw) > MAX_FILE_BYTES:
+            raw = _whole_characters(raw[:MAX_FILE_BYTES])
+            notes.append(f"{name}: only the first {MAX_FILE_BYTES} bytes were checked")
+            unchecked.append(_scan_limit(name, 1, f"more than {MAX_FILE_BYTES} bytes",
+                                         "scan-limit-file"))
+        files.append((name, _decode(name, raw, notes)))
+    return files, unchecked
+
+
+# A `#!` line, also after a byte-order mark or blank space: the system then ignores it,
+# but bash still runs such a file as a shell script.
+_SHEBANG = re.compile(r"\ufeff?\s*#!")
+_SHEBANG_BYTES = 256  # how far into a file it is looked for
+
+
+def _has_shebang(path: Path) -> bool:
+    """Whether a file with another suffix, or none, is a script all the same: it starts
+    with `#!`, so it can be run by its name. Links are not read."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        with path.open("rb") as stream:
+            start = stream.read(_SHEBANG_BYTES).decode("utf-8", errors="replace")
+            return _SHEBANG.match(start) is not None
+    except OSError:
+        return False
+
+
+def _whole_characters(raw: bytes) -> bytes:
+    """raw without a UTF-8 character that was cut off at its end, so that cutting a file
+    to size does not make it look like it is not UTF-8."""
+    for back in range(1, min(4, len(raw)) + 1):
+        byte = raw[-back]
+        if byte & 0xC0 != 0x80:  # the first byte of the last character
+            length = 1 if byte < 0xC0 else 2 if byte < 0xE0 else 3 if byte < 0xF0 else 4
+            return raw[:-back] if length > back else raw
+    return raw
+
+
+def _decode(name: str, raw: bytes, notes: list[str]) -> str:
+    """The file's text, whatever its bytes. A shell or an interpreter runs a script with a
+    byte that is not UTF-8, so such bytes are replaced and the rest is scanned. NUL bytes
+    are dropped: bash ignores them, and in UTF-16 text they sit between the letters of
+    every command. Line endings are read as Path.read_text reads them."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+        notes.append(f"{name}: not valid UTF-8; scanned with the bad bytes replaced")
+    return text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+# The frontmatter as Skill.load reads it (models.py): only SKILL.md has one.
+_FRONTMATTER = re.compile(r"---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", re.DOTALL)
+_YAML_KEY = re.compile(r"^(?:[^\s#][^:]*:(?:\s|$)|\s*-\s)")
+# A line that holds one `key: value` pair or one list item, and what it holds.
+_PAIR = re.compile(r"(?:-[ \t]+)?([^\s:#\[{\-][^:]*):[ \t]+(.*)")
+_ITEM = re.compile(r"\s*-[ \t]+(.*)")
+
+
+def _frontmatter_units(path: str, lines: list[str]) -> list[_Unit]:
+    """The frontmatter as prose, one unit for each key or list item with the lines that
+    continue it, so that a warning in one value cannot clear a command in another."""
+    units: list[_Unit] = []
+    block: list[tuple[int, str]] = []
+    for lineno, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if block and (not stripped or stripped == "---" or _YAML_KEY.match(line)):
+            units.append(_Unit(path, "prose", block, frontmatter=True))
+            block = []
+        if stripped and stripped != "---":
+            block.append((lineno, line))
+    if block:
+        units.append(_Unit(path, "prose", block, frontmatter=True))
+    return units
+
+
+def _is_all_of(line: str, value: str) -> bool:
+    """Whether a frontmatter line already reads as value does: value is its key, its whole
+    value or its whole list item, perhaps quoted. Not one entry of a [...] or {...} on the
+    line, where another entry's warning or confirmation would apply to it; and not with a
+    comment or an escape, as the line then says more, or something else."""
+    if "#" in line or "\\" in line:
+        return False
+    line = line.rstrip()
+    held: list[str] = []
+    if pair := _PAIR.match(line):
+        held += pair.groups()
+    if item := _ITEM.match(line):
+        held.append(item[1])
+    return any(h in (value, f'"{value}"', f"'{value}'") for h in held)
+
+
+def _key_lines(block: str) -> dict[str, int]:
+    """{what stands before a colon at the start of a line: the first such line}, read once,
+    so that finding each key's line does not take a search of the block per key."""
+    found: dict[str, int] = {}
+    for lineno, line in enumerate(block.split("\n"), 1):
+        at = line.find(":", 0, MAX_KEY_CHARS)
+        while at != -1:
+            key = line[:at].rstrip(" \t")
+            if len(key) > 1 and key[0] == key[-1] and key[0] in "\"'":
+                key = key[1:-1]  # a quoted key, as it is parsed
+            found.setdefault(key, lineno)
+            at = line.find(":", at + 1, MAX_KEY_CHARS)
+    return found
+
+
+def _frontmatter_value_units(skill: Skill, files: list[tuple[str, str]]
+                             ) -> tuple[list[_Unit], list[Finding]]:
+    """Every text in the parsed frontmatter, keys included, as prose reported at its
+    top-level key's line: the agent is shown it parsed, so escapes and folded lines are
+    undone. Each text is held to the same limit on commands per line as a file; the
+    findings for the lines over it come with the units."""
+    text = dict(files).get("SKILL.md", "")
+    match = _FRONTMATTER.match(text.removeprefix("\ufeff"))
+    if match is None or frontmatter_too_large(skill.frontmatter):
+        return [], []  # too large has a finding of its own, and is not walked
+    block = text[:match.end()]
+    # The one-line `key: value` units, by line: such a value is already scanned as it is.
+    one_line = {unit.lines[0][0]: unit.lines[0][1]
+                for unit in _frontmatter_units("SKILL.md", block.splitlines())
+                if len(unit.lines) == 1}
+    units: list[_Unit] = []
+    limited: list[Finding] = []
+    containers: set[int] = set()
+    done: set[str] = set()  # aliases repeat a string; scan it once
+
+    def scan(value: str, lineno: int) -> None:
+        if not value.strip() or value in done:
+            return
+        if _is_all_of(one_line.get(lineno, ""), value.strip()):
+            return
+        done.add(value)
+        lines = [line for line in value.replace("\x00", "").splitlines() if line.strip()]
+        [(_, kept)], over = _limit_lines([("SKILL.md", "\n".join(lines))])
+        limited.extend(_scan_limit("SKILL.md", lineno, f.quote) for f in over[:1])
+        kept_lines = [line for line in kept.splitlines() if line.strip()]
+        if kept_lines:
+            units.append(_Unit("SKILL.md", "prose", [(lineno, line) for line in kept_lines],
+                               frontmatter=True))
+
+    def walk(value: Any, lineno: int) -> None:
+        if isinstance(value, bytes):  # !!binary
+            value = value.decode("utf-8", errors="replace")
+        if isinstance(value, str):
+            scan(value, lineno)
+        elif isinstance(value, (dict, list, tuple, set)) and id(value) not in containers:
+            containers.add(id(value))
+            children = ([*value.keys(), *value.values()] if isinstance(value, dict)
+                        else list(value))
+            for child in children:
+                walk(child, lineno)
+
+    key_lines = _key_lines(block)
+    for key, value in skill.frontmatter.items():
+        try:
+            lineno = key_lines.get(str(key), 1)
+        except ValueError:  # an integer too long for Python to write out, from 0x...
+            lineno = 1
+        walk(key, lineno)
+        walk(value, lineno)
+    return units, limited
 
 
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
@@ -592,14 +778,18 @@ _WARNING_BLOCK = re.compile(
 
 
 def _units(path: str, text: str) -> list[_Unit]:
-    if Path(path).suffix.lower() in SCRIPT_SUFFIXES:
+    suffix = Path(path).suffix.lower()
+    if suffix in SCRIPT_SUFFIXES or (suffix not in MARKDOWN_SUFFIXES and _SHEBANG.match(text)):
         return [_Unit(path, "script", list(enumerate(text.splitlines(), 1)))]
 
     units: list[_Unit] = []
     lines = text.splitlines()
     start = 0
-    if lines and lines[0].strip() == "---":  # skip YAML frontmatter
-        start = next((i + 1 for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
+    # Only SKILL.md has frontmatter. In any other file `---` is a horizontal rule, and
+    # what follows it is ordinary text.
+    if path == "SKILL.md" and (match := _FRONTMATTER.match(text.removeprefix("\ufeff"))):
+        start = len(match.group(0).splitlines())
+        units += _frontmatter_units(path, lines[:start])
 
     prose: list[tuple[int, str]] = []
     code: list[tuple[int, str]] = []

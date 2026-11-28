@@ -11,7 +11,7 @@ Fully deterministic: no model, no network. The same skill always gives the same 
 ## Interface
 
 ```python
-CHECKS_VERSION = "9"
+CHECKS_VERSION = "10"
 
 class ChecksBackend:
     name = "own-checks"
@@ -37,9 +37,24 @@ Decided: everything is scanned, so a dangerous command is not missed because of 
 | Fenced code blocks in `SKILL.md` and other `.md` files | Yes | No |
 | Script files (`.sh`, `.bash`, `.zsh`, `.py`, `.js`, `.ts`, `.ps1`, `.psm1`, `.bat`, `.cmd`) | Yes, every line | No |
 | Prose in markdown, including inline code (`` `rm -rf` ``) | Yes | Yes |
-| Binary or very large files | No | — |
+| `SKILL.md` frontmatter | Yes, every line, and each text value as parsed | Yes |
+| Other files that start with `#!` | Yes, every line | No |
+| Other file types, such as binaries | No | — |
 
 **Prose** is the ordinary sentences of a markdown file: explanations, warnings, steps written in words. Skills often warn about dangerous commands there, as in "never run `rm -rf` on the project root". Flagging those would make careful skills, which warn about risks, score lower than careless ones that do not. So matches in prose go through a warning check first.
+
+### Nothing the agent sees is skipped
+
+Added in `CHECKS_VERSION` 10. Each of these once left a command unscanned, with Safety 1.0:
+
+- **Bytes that are not UTF-8** are replaced and the file is scanned (a shell runs such a script), with a note in `detail`. NUL bytes are dropped, from `SKILL.md` too: bash ignores them, and in UTF-16 text they separate the letters of every command.
+- **Frontmatter** is only `SKILL.md`'s, matched as `Skill.load` matches it. In any other file `---` is a horizontal rule and what follows is ordinary text. `SKILL.md`'s frontmatter is scanned as prose, one key or list item at a time, so a warning or confirmation in one value cannot clear a command in another, or in the text below. Every key and text value is also scanned as parsed, which undoes YAML escapes and folded lines, at its top-level key's line. A key, value or list item that is all there is on its one line is not scanned twice; an entry of a `[...]` or `{...}` is always scanned on its own. A parsed text is held to the same limit on commands per line as a file.
+- **A file with another suffix, or none,** that starts with `#!` is scanned as a script, also when a byte-order mark or blank space stands before the `#!`: bash runs such a file.
+- **A `SKILL.md` in a subfolder** is a bundled file like any other and is scanned as markdown. Only the skill's own `SKILL.md` has frontmatter.
+
+Still not scanned: a file with neither a script or markdown suffix nor `#!`, such as a `Makefile` (which `make` runs), and hidden files and `node_modules`, which `Skill.load` leaves out.
+- **A file over `MAX_FILE_BYTES`** (1,000,000 bytes) is scanned up to that size and gets a CRITICAL `scan-limit` finding, as the rest is unknown ([Scan limits](#scan-limits)).
+- **A file that cannot be read** gets the same finding. One that is listed but no longer there is only noted.
 
 ### Warning check
 
