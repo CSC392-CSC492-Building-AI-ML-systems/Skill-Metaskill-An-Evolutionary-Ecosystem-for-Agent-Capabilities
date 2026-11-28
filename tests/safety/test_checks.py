@@ -15,7 +15,8 @@ CRITICAL, HIGH, MEDIUM, LOW = Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM,
 def load(path):
     """Like Skill.load(), without needing Hermes' YAML loader for the frontmatter."""
     path = Path(path)
-    files = sorted(p.relative_to(path) for p in path.rglob("*") if p.is_file() and p.name != "SKILL.md")
+    files = sorted(p.relative_to(path) for p in path.rglob("*")
+                   if p.is_file() and p != path / "SKILL.md")
     return Skill(path=path, name=path.name, body=(path / "SKILL.md").read_text(), files=files)
 
 
@@ -1209,3 +1210,25 @@ def test_a_huge_integer_key_does_not_stop_the_scan(tmp_path):
     skill.frontmatter = {key: "rm -rf ~"}
     result = scan(skill)
     assert result.status is BackendStatus.OK and "recursive-delete" in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("name", ["references/SKILL.md", "a/b/SKILL.md"])
+def test_a_skill_md_in_a_subfolder_is_scanned(tmp_path, name):
+    make(tmp_path, {name: "```bash\nrm -rf ~/Documents\n```\n"})
+    skill = Skill.load(tmp_path)  # the real loader, which lists the bundled files
+    assert Path("SKILL.md") not in skill.files
+    assert [(f.rule, f.location) for f in scan(skill).findings] == [
+        ("recursive-delete", f"{name}:2")]
+
+
+@pytest.mark.parametrize("start", ["\ufeff", " ", "\n", "\ufeff \t"])
+def test_a_shebang_after_a_mark_or_blank_space_is_a_script(tmp_path, start):
+    skill = make(tmp_path, {"clean": f"{start}#!/bin/bash\nrm -rf ~/Documents\n"})
+    assert [f.rule for f in scan(skill).findings] == ["recursive-delete"]
+
+
+@pytest.mark.parametrize("key", ['"description"', "'description'", '"description" '])
+def test_a_quoted_frontmatter_key_gives_one_finding_at_its_line(tmp_path, key):
+    skill = make(tmp_path, {"SKILL.md": f'---\nname: x\n{key}: "rm -rf ~/Documents"\n---\n'})
+    skill.frontmatter = {"name": "x", "description": "rm -rf ~/Documents"}
+    assert [f.location for f in scan(skill).findings] == ["SKILL.md:3"]
